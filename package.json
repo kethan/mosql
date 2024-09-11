@@ -1,7 +1,7 @@
 {
-	"name": "mosql",
+	"name": "umosql",
 	"description": "Mongo like query for sqlite, mysql and pg",
-	"version": "0.0.1",
+	"version": "0.0.2",
 	"type": "module",
 	"source": "./src/index.js",
 	"main": "./dist/index.js",
