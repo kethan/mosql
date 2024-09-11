@@ -1,0 +1,45 @@
+{
+	"name": "mosql",
+	"description": "Mongo like query for sqlite, mysql and pg",
+	"version": "0.0.1",
+	"type": "module",
+	"source": "./src/index.js",
+	"main": "./dist/index.js",
+	"module": "./dist/index.js",
+	"unpkg": "./dist/index.min.js",
+	"umd:main": "./dist/index.umd.js",
+	"exports": {
+		"browser": "./dist/index.es.js",
+		"umd": "./dist/index.umd.js",
+		"require": "./dist/index.js",
+		"import": "./dist/index.es.js",
+		"default": "./dist/index.es.js"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/kethan/mosql.git"
+	},
+	"scripts": {
+		"build": "rollup --config rollup.config.js",
+		"test": "node test.js",
+		"prepare": "husky"
+	},
+	"devDependencies": {
+		"@rollup/plugin-terser": "^0.4.4",
+		"rollup-plugin-bundle-size": "^1.0.3",
+		"husky": "^9.1.4",
+		"rollup": "^4.20.0"
+	},
+	"keywords": [
+		"mosql",
+		"libraries",
+		"module",
+		"library"
+	],
+	"author": "Kethan Surana",
+	"license": "ISC",
+	"bugs": {
+		"url": "https://github.com/kethan/mosql/issues"
+	},
+	"homepage": "https://github.com/kethan/mosql#readme"
+}
