@@ -160,18 +160,27 @@ const aggregate = (pipeline) => (from, db) => {
         const [operator, args] = Object.entries(stage)[0];
         switch (operator) {
             case '$project':
-                const allFields = '*';
-                const excludedFields = Object.entries(args).filter(([, v]) => v === 0).map(([k]) => k);
-                const selectedFields = allFields === '*'
-                    ? Object.entries(args).map(([key, value]) => {
-                        if (value === 0) return '';
-                        return is$(value) ? `${jsonPath(value.slice(1), db)} AS ${key}`
-                            : isObject(value) ? `${expression(value, db)} AS ${key}`
-                                : value === 1 ? key : '';
-                    }).filter(Boolean).join(', ') || '*'
-                    : allFields.filter(f => !excludedFields.includes(f)).join(', ');
+                sql = `SELECT ${Object.entries(args).map(([key, value]) => {
+                    if (is$(value)) {
+                        return `${jsonPath(value.slice(1), db)} AS ${key}`;
+                    } else if (isObject(value)) {
+                        return `${expression(value, db)} AS ${key}`;
+                    } else if (value === 1) {
+                        return key;
+                    }
+                }).join(', ')} FROM (${sql})`;
+                // const allFields = '*';
+                // const excludedFields = Object.entries(args).filter(([, v]) => v === 0).map(([k]) => k);
+                // const selectedFields = allFields === '*'
+                //     ? Object.entries(args).map(([key, value]) => {
+                //         if (value === 0) return '';
+                //         return is$(value) ? `${jsonPath(value.slice(1), db)} AS ${key}`
+                //             : isObject(value) ? `${expression(value, db)} AS ${key}`
+                //                 : value === 1 ? key : '';
+                //     }).filter(Boolean).join(', ') || '*'
+                //     : allFields.filter(f => !excludedFields.includes(f)).join(', ');
 
-                sql = `SELECT ${selectedFields} FROM (${sql})`;
+                // sql = `SELECT ${selectedFields} FROM (${sql})`;
                 break;
             case '$match':
                 if (groupBy) {
