@@ -1,7 +1,7 @@
 {
 	"name": "umosql",
 	"description": "Mongo like query for sqlite, mysql and pg",
-	"version": "0.0.3",
+	"version": "0.1.0",
 	"type": "module",
 	"source": "./src/index.js",
 	"main": "./dist/index.js",
@@ -9,29 +9,53 @@
 	"unpkg": "./dist/index.min.js",
 	"umd:main": "./dist/index.umd.js",
 	"exports": {
-		"browser": "./dist/index.es.js",
-		"umd": "./dist/index.umd.js",
-		"require": "./dist/index.js",
-		"import": "./dist/index.es.js",
-		"default": "./dist/index.es.js"
+		".": {
+			"browser": "./dist/index.es.js",
+			"umd": "./dist/index.umd.js",
+			"import": "./dist/index.es.js",
+			"default": "./dist/index.es.js",
+			"require": "./dist/index.js"
+		},
+		"./lite": {
+			"browser": "./lite/dist/index.es.js",
+			"umd": "./lite/dist/index.umd.js",
+			"import": "./lite/dist/index.es.js",
+			"default": "./lite/dist/index.es.js",
+			"require": "./lite/dist/index.js"
+		},
+		"./tiny": {
+			"browser": "./tiny/dist/index.es.js",
+			"umd": "./tiny/dist/index.umd.js",
+			"import": "./tiny/dist/index.es.js",
+			"default": "./tiny/dist/index.es.js",
+			"require": "./tiny/dist/index.js"
+		},
+		"./package.json": "./package.json"
 	},
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/kethan/mosql.git"
 	},
 	"files": [
-		"dist"
+		"dist",
+		"lite",
+		"tiny"
 	],
 	"scripts": {
 		"build": "rollup --config rollup.config.js",
-		"test": "node test.js",
+		"test": "node test.js && node ./sqlite/test.js",
+		"test:db": "node ./mysql/test.js && node ./pg/test.js",
 		"prepare": "husky"
 	},
 	"devDependencies": {
 		"@rollup/plugin-terser": "^0.4.4",
-		"rollup-plugin-bundle-size": "^1.0.3",
+		"better-sqlite3": "^12.4.1",
+		"dotenv": "^17.2.3",
 		"husky": "^9.1.4",
-		"rollup": "^4.20.0"
+		"mysql2": "^3.15.3",
+		"pg": "^8.16.3",
+		"rollup": "^4.20.0",
+		"rollup-plugin-bundle-size": "^1.0.3"
 	},
 	"keywords": [
 		"mosql",

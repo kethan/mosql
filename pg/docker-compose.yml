@@ -1,0 +1,18 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16           # Use the latest stable PostgreSQL version
+    container_name: postgres_db  # Optional: name your container
+    restart: always
+    environment:
+      POSTGRES_USER: myuser       # default user
+      POSTGRES_PASSWORD: mypass   # password for that user
+      POSTGRES_DB: mydb           # database created at startup
+    ports:
+      - "5432:5432"               # expose PostgreSQL port to host
+    volumes:
+      - pg_data:/var/lib/postgresql/data  # persist database data
+
+volumes:
+  pg_data:

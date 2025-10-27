@@ -36,4 +36,6 @@ const resolve = (pkg, input = "src/index", output = "dist/index") => ({
 
 export default [
 	resolve("umosql"),
+	resolve("umosql", "lite/index", "lite/dist/index"),
+	resolve("umosql", "tiny/index", "tiny/dist/index")
 ]

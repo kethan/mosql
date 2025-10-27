@@ -1,19 +1,15 @@
 // ============================================
-// MONGODB-TO-SQL FULL PRODUCTION VERSION
+// MONGODB-TO-SQL TINY VERSION
+// Features: Basic CRUD only, No JSON, No Aggregation
 // ============================================
 
 const isObject = (obj) => typeof obj === 'object' && obj !== null && !Array.isArray(obj);
 const is$ = (str) => typeof str === 'string' && str.startsWith('$');
 
 const PATTERNS = {
-    COLUMN: /^[\w.]+$/,
+    COLUMN: /^[\w]+$/,
     NON_WORD: /[^\w]/g,
-    NUMERIC_INDEX: /\.(\d+)/g,
 };
-
-// ============================================
-// VALIDATORS
-// ============================================
 
 const validate = {
     column: (name) => {
@@ -22,14 +18,11 @@ const validate = {
         }
         return name;
     },
-
     alias: (str) => str.replace(PATTERNS.NON_WORD, '_'),
-
     array: (val, op) => {
         if (!Array.isArray(val)) throw new Error(`${op} requires an array`);
         return val;
     },
-
     int: (val, op) => {
         const num = Number(val);
         if (!Number.isInteger(num) || num < 0) {
@@ -39,10 +32,6 @@ const validate = {
     },
 };
 
-// ============================================
-// VALUE ESCAPING
-// ============================================
-
 const escape = (value, db = 'sqlite') => {
     if (value === null) return 'NULL';
     if (value === undefined) throw new Error('Cannot escape undefined value');
@@ -50,149 +39,14 @@ const escape = (value, db = 'sqlite') => {
     const type = typeof value;
 
     if (type === 'number' || type === 'bigint') return String(value);
-
-    if (type === 'boolean') {
-        return db === 'pg' ? (value ? 'TRUE' : 'FALSE') : (value ? '1' : '0');
-    }
+    if (type === 'boolean') return db === 'pg' ? (value ? 'TRUE' : 'FALSE') : (value ? '1' : '0');
 
     if (isObject(value) || Array.isArray(value)) {
-        const json = JSON.stringify(value).replace(/'/g, "''");
-        return db === 'pg' ? `'${json}'::jsonb` : `'${json}'`;
+        return `'${JSON.stringify(value).replace(/'/g, "''")}'`;
     }
 
     return `'${String(value).replace(/'/g, "''")}'`;
 };
-
-// ============================================
-// JSON PATH HANDLING
-// ============================================
-
-const jsonPath = (path, db = 'sqlite', castTo = 'text') => {
-    if (!path) return '';
-
-    const [column, ...rest] = path.split('.');
-    if (!rest.length) return validate.column(column);
-
-    const col = validate.column(column);
-
-    if (db === 'pg') {
-        const extracted = `(${col}::jsonb #>> '{${rest.join(',')}}')`;
-        if (castTo === 'numeric') return `(${extracted})::numeric`;
-        if (castTo === 'int') return `(${extracted})::int`;
-        return extracted;
-    }
-
-    const dollarPath = `$.${rest.join('.').replace(PATTERNS.NUMERIC_INDEX, '[$1]')}`;
-    return `json_extract(${col}, '${dollarPath}')`;
-};
-
-const jsonUpdate = (path, value, db, op = 'set') => {
-    const [column, ...rest] = path.split('.');
-    if (!rest.length) return null;
-
-    const col = validate.column(column);
-    const pathArray = rest.join(',');
-    const dollarPath = `$.${rest.join('.')}`;
-
-    const buildValue = (val) => {
-        if (typeof val === 'object') {
-            const json = JSON.stringify(val);
-            return db === 'pg' ? `'${json}'::jsonb` :
-                db === 'mysql' ? `CAST('${json}' AS JSON)` :
-                    `'${json}'`;
-        }
-        return db === 'pg' ? `to_jsonb(${escape(val, db)})` : escape(val, db);
-    };
-
-    const extract = {
-        pg: `COALESCE((${col}::jsonb #>> '{${pathArray}}')::numeric, ${op === 'mul' ? 1 : 0})`,
-        mysql: `COALESCE(JSON_EXTRACT(${col}, '${dollarPath}'), ${op === 'mul' ? 1 : 0})`,
-        sqlite: `COALESCE(json_extract(${col}, '${dollarPath}'), ${op === 'mul' ? 1 : 0})`,
-    };
-
-    switch (op) {
-        case 'remove':
-            return db === 'pg' ? `${col} = ${col} #- '{${pathArray}}'` :
-                db === 'mysql' ? `${col} = JSON_REMOVE(${col}, '${dollarPath}')` :
-                    `${col} = json_remove(${col}, '${dollarPath}')`;
-
-        case 'inc':
-        case 'mul': {
-            const operator = op === 'inc' ? '+' : '*';
-            const expr = `${extract[db] || extract.sqlite} ${operator} ${escape(value, db)}`;
-
-            return db === 'pg' ? `${col} = jsonb_set(${col}::jsonb, '{${pathArray}}', to_jsonb(${expr}), true)` :
-                db === 'mysql' ? `${col} = JSON_SET(${col}, '${dollarPath}', ${expr})` :
-                    `${col} = json_set(${col}, '${dollarPath}', ${expr})`;
-        }
-
-        default: { // 'set'
-            const jsonValue = buildValue(value);
-
-            return db === 'pg' ? `${col} = jsonb_set(COALESCE(${col}, '{}'::jsonb), '{${pathArray}}', ${jsonValue}, true)` :
-                db === 'mysql' ? `${col} = JSON_SET(COALESCE(${col}, '{}'), '${dollarPath}', ${jsonValue})` :
-                    `${col} = json_set(COALESCE(${col}, '{}'), '${dollarPath}', ${jsonValue})`;
-        }
-    }
-};
-
-const batchJsonUpdate = (fields, db) => {
-    const byColumn = {};
-    const regular = {};
-
-    Object.entries(fields).forEach(([path, value]) => {
-        if (path.includes('.')) {
-            const [col] = path.split('.');
-            if (!byColumn[col]) byColumn[col] = {};
-            byColumn[col][path] = value;
-        } else {
-            regular[path] = value;
-        }
-    });
-
-    const updates = [];
-
-    // Regular fields
-    Object.entries(regular).forEach(([key, val]) => {
-        updates.push(`${validate.column(key)} = ${escape(val, db)}`);
-    });
-
-    // JSON fields
-    Object.entries(byColumn).forEach(([col, paths]) => {
-        const entries = Object.entries(paths);
-
-        if (entries.length === 1) {
-            updates.push(jsonUpdate(entries[0][0], entries[0][1], db, 'set'));
-        } else if (db === 'sqlite' || db === 'mysql') {
-            const func = db === 'mysql' ? 'JSON_SET' : 'json_set';
-            const pairs = entries.map(([path, val]) => {
-                const jsonPath = `$.${path.split('.').slice(1).join('.')}`;
-                const value = typeof val === 'object'
-                    ? (db === 'mysql' ? `CAST('${JSON.stringify(val)}' AS JSON)` : `'${JSON.stringify(val)}'`)
-                    : escape(val, db);
-                return `'${jsonPath}', ${value}`;
-            }).join(', ');
-
-            updates.push(`${validate.column(col)} = ${func}(COALESCE(${validate.column(col)}, '{}'), ${pairs})`);
-        } else {
-            let expr = `COALESCE(${validate.column(col)}, '{}'::jsonb)`;
-            entries.forEach(([path, val]) => {
-                const jsonPath = path.split('.').slice(1).join(',');
-                const value = typeof val === 'object'
-                    ? `'${JSON.stringify(val)}'::jsonb`
-                    : `to_jsonb(${escape(val, db)})`;
-                expr = `jsonb_set(${expr}, '{${jsonPath}}', ${value}, true)`;
-            });
-            updates.push(`${validate.column(col)} = ${expr}`);
-        }
-    });
-
-    return updates;
-};
-
-// ============================================
-// FILTER OPERATORS
-// ============================================
 
 const filterOps = {
     $eq: (v, db) => `= ${escape(v, db)}`,
@@ -225,19 +79,13 @@ const filterOps = {
     $exists: (v) => v ? 'IS NOT NULL' : 'IS NULL',
 };
 
-// ============================================
-// EXPRESSION OPERATORS
-// ============================================
-
 const exprOps = {
-    // Arithmetic
     $add: (args, ctx) => args.map(a => ctx.expr(a)).join(' + '),
     $subtract: (args, ctx) => args.map(a => ctx.expr(a)).join(' - '),
     $multiply: (args, ctx) => args.map(a => ctx.expr(a)).join(' * '),
     $divide: (args, ctx) => args.map(a => ctx.expr(a)).join(' / '),
     $mod: (args, ctx) => `${ctx.expr(args[0])} % ${ctx.expr(args[1])}`,
 
-    // String
     $concat: (args, ctx) => {
         const exprs = args.map(a => ctx.expr(a));
         return ctx.db === 'pg' || ctx.db === 'mysql' ? `CONCAT(${exprs.join(', ')})` : exprs.join(' || ');
@@ -246,14 +94,11 @@ const exprOps = {
     $lower: (args, ctx) => `LOWER(${ctx.expr(args[0])})`,
     $substr: (args, ctx) => `SUBSTRING(${ctx.expr(args[0])}, ${ctx.expr(args[1])}, ${ctx.expr(args[2])})`,
 
-    // Aggregates
-    $min: (args, ctx) => args.length === 1 ? `MIN(${ctx.expr(args[0])})` : `LEAST(${args.map(a => ctx.expr(a)).join(', ')})`,
-    $max: (args, ctx) => args.length === 1 ? `MAX(${ctx.expr(args[0])})` : `GREATEST(${args.map(a => ctx.expr(a)).join(', ')})`,
-    $avg: (args, ctx) => `AVG(${ctx.expr(args[0], false, 'numeric')})`,
-    $sum: (args, ctx) => `SUM(${ctx.expr(args[0], false, 'numeric')})`,
-    $count: () => `COUNT(*)`,
+    $min: (args, ctx) => `LEAST(${args.map(a => ctx.expr(a)).join(', ')})`,
+    $max: (args, ctx) => `GREATEST(${args.map(a => ctx.expr(a)).join(', ')})`,
+    $avg: (args, ctx) => `AVG(${ctx.expr(args[0], false)})`,
+    $sum: (args, ctx) => `SUM(${ctx.expr(args[0], false)})`,
 
-    // Comparison
     $eq: (args, ctx) => `${ctx.expr(args[0])} = ${ctx.expr(args[1])}`,
     $ne: (args, ctx) => `${ctx.expr(args[0])} <> ${ctx.expr(args[1])}`,
     $gt: (args, ctx) => `${ctx.expr(args[0])} > ${ctx.expr(args[1])}`,
@@ -275,12 +120,10 @@ const exprOps = {
         return `${ctx.expr(args[0])} NOT IN (${args[1].map(a => ctx.expr(a)).join(', ')})`;
     },
 
-    // Logical
     $and: (args, ctx) => args.map(a => `(${ctx.expr(a)})`).join(' AND '),
     $or: (args, ctx) => args.map(a => `(${ctx.expr(a)})`).join(' OR '),
     $not: (args, ctx) => `NOT (${ctx.expr(args[0])})`,
 
-    // Conditional
     $cond: (args, ctx) => {
         if (args.length !== 3) throw new Error('$cond requires [condition, then, else]');
         return `CASE WHEN ${ctx.expr(args[0])} THEN ${ctx.expr(args[1])} ELSE ${ctx.expr(args[2])} END`;
@@ -317,42 +160,38 @@ const exprOps = {
     },
 };
 
-// ============================================
-// UPDATE OPERATORS
-// ============================================
-
 const updateOps = {
-    $set: (fields, db) => batchJsonUpdate(fields, db),
+    $set: (fields, db) => Object.entries(fields).map(([key, val]) =>
+        `${validate.column(key)} = ${escape(val, db)}`
+    ),
 
     $inc: (fields, db) => Object.entries(fields).map(([key, val]) =>
-        key.includes('.') ? jsonUpdate(key, val, db, 'inc') : `${validate.column(key)} = ${validate.column(key)} + ${escape(val, db)}`
+        `${validate.column(key)} = ${validate.column(key)} + ${escape(val, db)}`
     ),
 
     $mul: (fields, db) => Object.entries(fields).map(([key, val]) =>
-        key.includes('.') ? jsonUpdate(key, val, db, 'mul') : `${validate.column(key)} = ${validate.column(key)} * ${escape(val, db)}`
+        `${validate.column(key)} = ${validate.column(key)} * ${escape(val, db)}`
     ),
 
     $min: (fields, db) => Object.entries(fields).map(([key, val]) => {
-        const field = key.includes('.') ? jsonPath(key, db, 'numeric') : validate.column(key);
+        const field = validate.column(key);
         const func = db === 'sqlite' ? 'MIN' : 'LEAST';
         return `${field} = ${func}(${field}, ${escape(val, db)})`;
     }),
 
     $max: (fields, db) => Object.entries(fields).map(([key, val]) => {
-        const field = key.includes('.') ? jsonPath(key, db, 'numeric') : validate.column(key);
+        const field = validate.column(key);
         const func = db === 'sqlite' ? 'MAX' : 'GREATEST';
         return `${field} = ${func}(${field}, ${escape(val, db)})`;
     }),
 
     $unset: (fields, db) => Object.keys(fields).map(key =>
-        key.includes('.') ? jsonUpdate(key, null, db, 'remove') : `${validate.column(key)} = NULL`
+        `${validate.column(key)} = NULL`
     ),
 
     $currentDate: (fields, db) => {
         const now = db === 'pg' ? 'CURRENT_TIMESTAMP' : db === 'mysql' ? 'NOW()' : "datetime('now')";
-        return Object.entries(fields).map(([key]) =>
-            key.includes('.') ? jsonUpdate(key, now, db, 'set') : `${validate.column(key)} = ${now}`
-        );
+        return Object.keys(fields).map(key => `${validate.column(key)} = ${now}`);
     },
 
     $rename: (fields, db) => {
@@ -366,10 +205,6 @@ const updateOps = {
         });
     },
 };
-
-// ============================================
-// CORE BUILDERS
-// ============================================
 
 const filter = (query, db = 'sqlite') => {
     if (!isObject(query)) return query;
@@ -386,7 +221,7 @@ const filter = (query, db = 'sqlite') => {
             throw new Error(`Unknown filter operator: ${key}`);
         }
 
-        const field = key.includes('.') ? jsonPath(key, db) : validate.column(key);
+        const field = validate.column(key);
 
         if (isObject(value)) {
             const [op, val] = Object.entries(value)[0];
@@ -398,30 +233,24 @@ const filter = (query, db = 'sqlite') => {
     }).join(' AND ');
 };
 
-const expression = (expr, db = 'sqlite', asIdentifier = false, castTo = 'text') => {
+const expression = (expr, db = 'sqlite', asIdentifier = false) => {
     if (is$(expr)) {
-        const val = expr.slice(1);
-        return val.includes('.') ? jsonPath(val, db, castTo) : validate.column(val);
+        return validate.column(expr.slice(1));
     }
 
     if (isObject(expr)) {
         const [op, args] = Object.entries(expr)[0];
         if (!exprOps[op]) throw new Error(`Unknown expression operator: ${op}`);
-        const ctx = { db, expr: (e, id, cast) => expression(e, db, id, cast) };
+        const ctx = { db, expr: (e, id) => expression(e, db, id) };
         return `(${exprOps[op](Array.isArray(args) ? args : [args], ctx)})`;
     }
 
     if (typeof expr === 'string') {
-        return expr.includes('.') ? jsonPath(expr, db, castTo) :
-            asIdentifier ? validate.column(expr) : escape(expr, db);
+        return asIdentifier ? validate.column(expr) : escape(expr, db);
     }
 
     return escape(expr, db);
 };
-
-// ============================================
-// CRUD OPERATIONS
-// ============================================
 
 const insertMany = (table, docs, db = 'sqlite', options = {}) => {
     validate.array(docs, 'insertMany');
@@ -492,119 +321,6 @@ const deleteMany = (table, query, db = 'sqlite', options = {}) => {
     return sql;
 };
 
-// ============================================
-// AGGREGATE PIPELINE
-// ============================================
-
-const aggregate = (pipeline) => (table, db = 'sqlite') => {
-    validate.array(pipeline, 'aggregate');
-
-    let state = {
-        sql: `SELECT * FROM ${validate.column(table)}`,
-        where: [],
-        having: [],
-        groupBy: null,
-        aggExprs: {},
-        order: '',
-        limit: '',
-        offset: '',
-        counter: 0,
-    };
-
-    const wrap = (sql) => `(${sql}) AS t${++state.counter}`;
-
-    const applyWhere = () => {
-        if (state.where.length) {
-            state.sql += ` WHERE ${state.where.join(' AND ')}`;
-            state.where = [];
-        }
-    };
-
-    const replaceAliases = (str) => {
-        let result = str;
-        Object.entries(state.aggExprs).forEach(([alias, expr]) => {
-            result = result.replace(new RegExp(`\\b${alias}\\b`, 'g'), expr);
-        });
-        return result;
-    };
-
-    const handlers = {
-        $match: (args) => {
-            const frag = filter(args, db);
-            state.groupBy ? state.having.push(replaceAliases(frag)) : state.where.push(frag);
-        },
-
-        $project: (args) => {
-            const cols = Object.entries(args).map(([key, val]) => {
-                const expr = is$(val) ? jsonPath(val.slice(1), db) :
-                    isObject(val) ? expression(val, db) :
-                        val === 1 ? expression(key, db, true) :
-                            escape(val, db);
-                return `${expr} AS ${validate.alias(key)}`;
-            });
-            state.sql = `SELECT ${cols.join(', ')} FROM ${wrap(state.sql)}`;
-        },
-
-        $group: (args) => {
-            applyWhere();
-            const idExpr = args._id === null ? null : expression(args._id, db);
-
-            state.aggExprs = {};
-            const aggs = Object.entries(args)
-                .filter(([k]) => k !== '_id')
-                .map(([k, v]) => {
-                    const expr = expression(v, db);
-                    state.aggExprs[validate.alias(k)] = expr;
-                    return `${expr} AS ${validate.alias(k)}`;
-                });
-
-            const parts = [];
-            if (idExpr) parts.push(`${idExpr} AS _id`);
-            parts.push(...aggs);
-
-            state.sql = `SELECT ${parts.join(', ')} FROM ${wrap(state.sql)}`;
-            state.groupBy = idExpr;
-        },
-
-        $sort: (args) => {
-            const clauses = Object.entries(args).map(([k, order]) => {
-                const expr = state.aggExprs[k] || expression(k, db, true);
-                return `${expr} ${order === 1 ? 'ASC' : 'DESC'}`;
-            }).join(', ');
-            state.order = ` ORDER BY ${clauses}`;
-        },
-
-        $skip: (args) => state.offset = ` OFFSET ${validate.int(args, '$skip')}`,
-        $limit: (args) => state.limit = ` LIMIT ${validate.int(args, '$limit')}`,
-
-        $count: (args) => {
-            applyWhere();
-            state.sql = `SELECT COUNT(*) AS ${validate.alias(args)} FROM ${wrap(state.sql)}`;
-            state.order = state.limit = state.offset = '';
-            state.aggExprs = {};
-        },
-    };
-
-    pipeline.forEach((stage, i) => {
-        if (!isObject(stage)) throw new Error(`Stage ${i} must be an object`);
-        const [op, args] = Object.entries(stage)[0];
-        if (!handlers[op]) throw new Error(`Unknown pipeline operator: ${op}`);
-        handlers[op](args);
-    });
-
-    let sql = state.sql;
-    if (state.where.length) sql += ` WHERE ${state.where.join(' AND ')}`;
-    if (state.groupBy) sql += ` GROUP BY ${state.groupBy}`;
-    if (state.having.length) sql += ` HAVING ${state.having.join(' AND ')}`;
-    sql += `${state.order}${state.limit}${state.offset}`;
-
-    return sql.trim();
-};
-
-// ============================================
-// FIND QUERY BUILDER
-// ============================================
-
 class FindQuery {
     constructor(table, query, projection, db) {
         this.table = table;
@@ -623,10 +339,10 @@ class FindQuery {
         if (isObject(proj)) {
             const inc = Object.entries(proj)
                 .filter(([_, v]) => v === 1 || v === true)
-                .map(([k]) => k.includes('.') ? jsonPath(k, this.db) : validate.column(k));
+                .map(([k]) => validate.column(k));
             this._fields = inc.length > 0 ? inc.join(', ') : null;
         } else if (Array.isArray(proj)) {
-            this._fields = proj.map(f => f.includes('.') ? jsonPath(f, this.db) : validate.column(f)).join(', ');
+            this._fields = proj.map(validate.column).join(', ');
         } else if (typeof proj === 'string') {
             this._fields = proj;
         }
@@ -634,10 +350,9 @@ class FindQuery {
     }
 
     sort(obj) {
-        const clauses = Object.entries(obj).map(([k, order]) => {
-            const field = k.includes('.') ? jsonPath(k, this.db) : validate.column(k);
-            return `${field} ${order === 1 || order === 'asc' ? 'ASC' : 'DESC'}`;
-        }).join(', ');
+        const clauses = Object.entries(obj).map(([k, order]) =>
+            `${validate.column(k)} ${order === 1 || order === 'asc' ? 'ASC' : 'DESC'}`
+        ).join(', ');
         this._sort = ` ORDER BY ${clauses}`;
         return this;
     }
@@ -680,10 +395,6 @@ class FindQuery {
     }
 }
 
-// ============================================
-// COLLECTION API
-// ============================================
-
 const collection = (name, db = 'sqlite') => {
     const table = validate.column(name);
 
@@ -720,21 +431,15 @@ const collection = (name, db = 'sqlite') => {
         },
 
         distinct: (field, query = {}) => {
-            const f = field.includes('.') ? jsonPath(field, db) : validate.column(field);
+            const f = validate.column(field);
             let sql = `SELECT DISTINCT ${f} FROM ${table}`;
             if (query && Object.keys(query).length > 0) {
                 sql += ` WHERE ${filter(query, db)}`;
             }
             return sql;
         },
-
-        aggregate: (pipeline) => aggregate(pipeline)(table, db),
     };
 };
-
-// ============================================
-// OPERATOR EXTENSION
-// ============================================
 
 const extend = {
     filter: (ops) => Object.assign(filterOps, ops),
@@ -749,33 +454,18 @@ const db = (collectionName, database = 'sqlite') => {
     return collection(collectionName, database);
 };
 
-// ============================================
-// EXPORTS
-// ============================================
-
 export {
-    // Core
     filter,
     expression,
-    aggregate,
-
-    // CRUD
     insertMany,
     updateMany,
     deleteMany,
-
-    // Collection API
     collection,
     FindQuery,
-
-    // Extension
     extend,
-
-    // Utils
-    db,
     escape,
-    jsonPath,
     validate,
+    db,
 };
 
 export default collection;

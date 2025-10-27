@@ -1,4 +1,4 @@
-import { add, aggregate, expression, filter, jsonPath } from './src/index.js';
+import { aggregate, escape, expression, extend, filter, jsonPath } from './src/index.js';
 
 const eq = (a, b, keys, ctor) => a === b || (
     a && b && (ctor = a.constructor) === b.constructor
@@ -27,7 +27,7 @@ const runTests = (testCases) => {
         test(testCase.title, () => {
             const passed = eq(output, testCase.expected);
             if (!passed) {
-                throw new Error(`Expected: ${JSON.stringify(testCase.expected, null, 2)}, Actual: ${JSON.stringify(output, null, 2)}`);
+                throw new Error(`Expected: ${JSON.stringify(testCase.expected, null, 2)}, \nActual: ${JSON.stringify(output, null, 2)}`);
             }
         });
     });
@@ -155,7 +155,7 @@ describe('Filter Test', () => {
         {
             title: '$ilike',
             input: () => (filter({ name: { $ilike: '%john%' } })),
-            expected: "name LIKE LOWER('%john%')"
+            expected: "name LOWER(name) LIKE LOWER('%john%')"
         },
 
         // Test not like operator
@@ -169,7 +169,7 @@ describe('Filter Test', () => {
         {
             title: '$nilike',
             input: () => (filter({ name: { $nilike: '%john%' } })),
-            expected: "name NOT LIKE LOWER('%john%')"
+            expected: "name LOWER(name) NOT LIKE LOWER('%john%')"
         },
         {
             title: 'nested complex sqlite and mysql operators',
@@ -200,7 +200,7 @@ describe('Filter Test', () => {
                     }
                 ]
             }, "pg"),
-            expected: "((profile::json #> {age}) >= 25 AND ((profile::json #> {name}) LIKE LOWER('%john%') OR (profile::json #> {age}) > 30))"
+            expected: "((profile::jsonb #>> '{age}') >= 25 AND ((profile::jsonb #>> '{name}') ILIKE '%john%' OR (profile::jsonb #>> '{age}') > 30))"
         }
 
         // Test elemMatch operator (SQLite)
@@ -214,7 +214,7 @@ describe('Filter Test', () => {
         // {
         //     title: '$elemMatch (PostgreSQL)',
         //     input: () => (filter({ items: { $elemMatch: { price: { $gt: 20 } } } }, 'pg')),
-        //     expected: '(items::json #> {price}) > 20'
+        //     expected: '(items::json #> '{price}') > 20'
         // },
 
         // Test all operator (SQLite)
@@ -250,27 +250,27 @@ describe('Filter Test', () => {
             {
                 title: '$concat',
                 input: () => expression({ $concat: ['Hello', ' ', 'World'] }),
-                expected: "(CONCAT('Hello', ' ', 'World'))"
+                expected: "('Hello' || ' ' || 'World')"
             },
             {
                 title: '$min',
                 input: () => expression({ $min: [10, 20, 30] }),
-                expected: '(MIN(10, 20, 30))'
+                expected: '(LEAST(10, 20, 30))'
             },
             {
                 title: '$max',
                 input: () => expression({ $max: [10, 20, 30] }),
-                expected: '(MAX(10, 20, 30))'
+                expected: '(GREATEST(10, 20, 30))'
             },
             {
                 title: '$avg',
                 input: () => expression({ $avg: [10, 20, 30] }),
-                expected: '(AVG(10, 20, 30))'
+                expected: '(AVG(10))'
             },
             {
                 title: '$sum',
                 input: () => expression({ $sum: [10, 20, 30] }),
-                expected: '(SUM(10, 20, 30))'
+                expected: '(SUM(10))'
             },
             {
                 title: '$cond 1',
@@ -290,12 +290,12 @@ describe('Filter Test', () => {
             {
                 title: '$min with field',
                 input: () => expression({ $min: ['$age', 18] }),
-                expected: "(MIN(age, 18))"
+                expected: "(LEAST(age, 18))"
             },
             {
                 title: '$concat with fields',
                 input: () => expression({ $concat: ["$firstName", " ", "hello", "$lastName"] }),
-                expected: `(CONCAT(firstName, ' ', 'hello', lastName))`
+                expected: `(firstName || ' ' || 'hello' || lastName)`
             },
             {
                 title: '$add with field',
@@ -310,7 +310,7 @@ describe('Filter Test', () => {
             {
                 title: '$and',
                 input: () => expression({ $and: [{ $multiply: ["$age", 365] }, { $concat: ["$firstName", " ", "$lastName"] }] }),
-                expected: "(((age * 365)) AND ((CONCAT(firstName, ' ', lastName))))"
+                expected: "(((age * 365)) AND ((firstName || ' ' || lastName)))"
             },
             {
                 title: 'mixed with field',
@@ -325,7 +325,7 @@ describe('Filter Test', () => {
             {
                 title: 'mixed 2',
                 input: () => expression({ $concat: ["$field1", "*", "$field2", "=", { $multiply: ["$field1", "$field2"] }] }),
-                expected: "(CONCAT(field1, '*', field2, '=', (field1 * field2)))"
+                expected: "(field1 || '*' || field2 || '=' || (field1 * field2))"
             },
             {
                 title: '$exists 1',
@@ -356,7 +356,7 @@ describe('Filter Test', () => {
             {
                 title: '$eq with nested field pg',
                 input: () => expression({ $eq: ["$address.city", "New York"] }, "pg"),
-                expected: "((address::json #> {city}) = 'New York')"
+                expected: "((address::jsonb #>> '{city}') = 'New York')"
             },
             {
                 title: '$eq with nested field and operator sqlite, mysql',
@@ -366,7 +366,7 @@ describe('Filter Test', () => {
             {
                 title: '$eq with nested field and operator pg',
                 input: () => expression({ $eq: ["$address.city", { $eq: ["$address.state", "NY"] }] }, "pg"),
-                expected: "((address::json #> {city}) = ((address::json #> {state}) = 'NY'))"
+                expected: "((address::jsonb #>> '{city}') = ((address::jsonb #>> '{state}') = 'NY'))"
             },
             {
                 title: '$ne',
@@ -411,7 +411,7 @@ describe('Filter Test', () => {
             {
                 title: '$in nested field',
                 input: () => expression({ $in: ["$address.city", ["New York", "Los Angeles"]] }, "pg"),
-                expected: "((address::json #> {city}) IN ('New York', 'Los Angeles'))"
+                expected: "((address::jsonb #>> '{city}') IN ('New York', 'Los Angeles'))"
             },
             {
                 title: '$in nested field and operator sqlite, mysql',
@@ -421,7 +421,7 @@ describe('Filter Test', () => {
             {
                 title: '$in nested field and operator pg',
                 input: () => expression({ $in: ["$address.city", [{ $eq: ["$address.state", "NY"] }]] }, "pg"),
-                expected: "((address::json #> {city}) IN (((address::json #> {state}) = 'NY')))"
+                expected: "((address::jsonb #>> '{city}') IN (((address::jsonb #>> '{state}') = 'NY')))"
             },
             {
                 title: '$in with field',
@@ -471,12 +471,12 @@ describe('Filter Test', () => {
             {
                 title: '$and with nested field sqlite, mysql',
                 input: () => expression({ $and: [{ $eq: ["$address.city", "New York"] }, { $eq: ["$address.state", "NY"] }] }, "pg"),
-                expected: "((((address::json #> {city}) = 'New York')) AND (((address::json #> {state}) = 'NY')))"
+                expected: "((((address::jsonb #>> '{city}') = 'New York')) AND (((address::jsonb #>> '{state}') = 'NY')))"
             },
             {
                 title: '$and with nested field pg',
                 input: () => expression({ $and: [{ $eq: ["$address.city", "New York"] }, { $eq: ["$address.state", "NY"] }] }, "pg"),
-                expected: "((((address::json #> {city}) = 'New York')) AND (((address::json #> {state}) = 'NY')))"
+                expected: "((((address::jsonb #>> '{city}') = 'New York')) AND (((address::jsonb #>> '{state}') = 'NY')))"
             },
             {
                 title: 'nested complex expression sqlite and mysql',
@@ -486,7 +486,7 @@ describe('Filter Test', () => {
             {
                 title: 'nested complex expression pg',
                 input: () => expression({ $and: [{ $eq: ["$address.city", "New York"] }, { $eq: ["$address.state", "NY"] }] }, "pg"),
-                expected: "((((address::json #> {city}) = 'New York')) AND (((address::json #> {state}) = 'NY')))"
+                expected: "((((address::jsonb #>> '{city}') = 'New York')) AND (((address::jsonb #>> '{state}') = 'NY')))"
             }
         ]);
     });
@@ -500,7 +500,7 @@ describe('Filter Test', () => {
                         { $project: { name: 1, age: 1 } },
                     ],
                 )("users"),
-                expected: "SELECT name, age FROM (SELECT * FROM users)"
+                expected: "SELECT name AS name, age AS age FROM (SELECT * FROM users) AS t1"
             },
             {
                 title: '$project nested field sqlite and mysql',
@@ -509,7 +509,7 @@ describe('Filter Test', () => {
                         { $project: { street: '$address.street', city: '$address.city' } },
                     ],
                 )("users"),
-                expected: "SELECT json_extract(address, '$.street') AS street, json_extract(address, '$.city') AS city FROM (SELECT * FROM users)"
+                expected: "SELECT json_extract(address, '$.street') AS street, json_extract(address, '$.city') AS city FROM (SELECT * FROM users) AS t1"
             },
             {
                 title: '$project nested field pg',
@@ -518,7 +518,7 @@ describe('Filter Test', () => {
                         { $project: { street: '$address.street', city: '$address.city' } },
                     ],
                 )("users", "pg"),
-                expected: "SELECT (address::json #> {street}) AS street, (address::json #> {city}) AS city FROM (SELECT * FROM users)"
+                expected: "SELECT (address::jsonb #>> '{street}') AS street, (address::jsonb #>> '{city}') AS city FROM (SELECT * FROM users) AS t1"
             },
             {
                 title: '$match',
@@ -545,7 +545,7 @@ describe('Filter Test', () => {
                         { $match: { 'profile.age': { $gt: 18 } } },
                     ],
                 )("users", "pg"),
-                expected: "SELECT * FROM users WHERE (profile::json #> {age}) > 18",
+                expected: "SELECT * FROM users WHERE (profile::jsonb #>> '{age}') > 18",
             },
             {
                 title: '$group',
@@ -554,7 +554,7 @@ describe('Filter Test', () => {
                         { $group: { _id: '$age' } },
                     ],
                 )("users"),
-                expected: "SELECT age FROM (SELECT * FROM users) GROUP BY age",
+                expected: "SELECT age AS _id FROM (SELECT * FROM users) AS t1 GROUP BY age",
             },
             {
                 title: '$group nested fields sqlite and mysql',
@@ -563,7 +563,7 @@ describe('Filter Test', () => {
                         { $group: { _id: '$profile.age' } },
                     ],
                 )("users"),
-                expected: "SELECT json_extract(profile, '$.age') FROM (SELECT * FROM users) GROUP BY json_extract(profile, '$.age')",
+                expected: "SELECT json_extract(profile, '$.age') AS _id FROM (SELECT * FROM users) AS t1 GROUP BY json_extract(profile, '$.age')",
             },
             {
                 title: '$group nested field pg',
@@ -572,7 +572,7 @@ describe('Filter Test', () => {
                         { $group: { _id: '$profile.age' } },
                     ],
                 )("users", "pg"),
-                expected: "SELECT (profile::json #> {age}) FROM (SELECT * FROM users) GROUP BY (profile::json #> {age})"
+                expected: "SELECT (profile::jsonb #>> '{age}') AS _id FROM (SELECT * FROM users) AS t1 GROUP BY (profile::jsonb #>> '{age}')"
             },
             {
                 title: '$sort',
@@ -581,7 +581,7 @@ describe('Filter Test', () => {
                         { $sort: { age: -1 } },
                     ],
                 )("users"),
-                expected: "SELECT * FROM users ORDER BY 'age' DESC",
+                expected: "SELECT * FROM users ORDER BY age DESC",
             },
             {
                 title: '$sort nested fields sqlite and mysql',
@@ -599,7 +599,7 @@ describe('Filter Test', () => {
                         { $sort: { 'profile.age': -1 } },
                     ],
                 )("users", "pg"),
-                expected: "SELECT * FROM users ORDER BY (profile::json #> {age}) DESC"
+                expected: "SELECT * FROM users ORDER BY (profile::jsonb #>> '{age}') DESC"
             },
             {
                 title: '$limit',
@@ -627,7 +627,7 @@ describe('Filter Test', () => {
                         { $count: "totalUsers" },
                     ],
                 )("users"),
-                expected: "SELECT COUNT(*) AS totalUsers FROM (SELECT * FROM users)",
+                expected: "SELECT COUNT(*) AS totalUsers FROM (SELECT * FROM users) AS t1",
             }
         ])
     });
@@ -667,27 +667,27 @@ describe('Filter Test', () => {
             {
                 title: 'PostgreSQL database type with simple path',
                 input: () => jsonPath('user.name', 'pg'),
-                expected: "(user::json #> {name})",
+                expected: "(user::jsonb #>> '{name}')",
             },
             {
                 title: 'PostgreSQL database type with nested objects',
                 input: () => jsonPath('user.address.city', 'pg'),
-                expected: "(user::json #> {address,city})",
+                expected: "(user::jsonb #>> '{address,city}')",
             },
             {
                 title: 'PostgreSQL database type with arrays',
                 input: () => jsonPath('user.orders.0.item', 'pg'),
-                expected: "(user::json #> {orders,0,item})",
+                expected: "(user::jsonb #>> '{orders,0,item}')",
             },
             {
                 title: 'PostgreSQL database type with multiple array indexes',
                 input: () => jsonPath('user.orders.0.items.1.name', 'pg'),
-                expected: "(user::json #> {orders,0,items,1,name})",
+                expected: "(user::jsonb #>> '{orders,0,items,1,name}')",
             },
             {
                 title: 'PostgreSQL database type with only array indexes',
                 input: () => jsonPath('user.orders.0.items.1', 'pg'),
-                expected: "(user::json #> {orders,0,items,1})",
+                expected: "(user::jsonb #>> '{orders,0,items,1}')",
             },
             // {
             //     input: () => jsonPath('user..address..city'),
@@ -702,7 +702,7 @@ describe('Filter Test', () => {
             {
                 title: 'PostgreSQL database type with nested objects',
                 input: () => jsonPath('user.address.city', 'pg'),
-                expected: "(user::json #> {address,city})",
+                expected: "(user::jsonb #>> '{address,city}')",
             },
             {
                 title: 'Path with nested objects',
@@ -721,22 +721,330 @@ describe('Filter Test', () => {
             }
         ]);
     });
+});
 
-    describe('JSONPath Test', () => {
-        add('filter', '$mod', (value, db) => `${value} % 2`);
-        add('expression', '$toUpper', (args, db) => `UPPER(${expression(args[0], db)})`);
+describe('Edge Case Tests', () => {
+    runTests([
+        // ✅ 1. String escaping with single quote
+        {
+            title: 'string escaping in filter',
+            input: () => filter({ name: { $eq: "O'Reilly" } }),
+            expected: "name = 'O''Reilly'",
+        },
+        {
+            title: 'string escaping in expression',
+            input: () => expression({ $eq: ["$author", "O'Reilly"] }),
+            expected: "(author = 'O''Reilly')",
+        },
 
-        runTests([
-            {
-                title: '$mod add filter',
-                input: () => filter({ $mod: 10 }),
-                expected: "10 % 2",
+        // ✅ 2. $ilike Postgres handling
+        {
+            title: '$ilike postgres variant',
+            input: () => filter({ title: { $ilike: '%hello%' } }, 'pg'),
+            expected: "title ILIKE '%hello%'",
+        },
+        {
+            title: '$ilike sqlite fallback',
+            input: () => filter({ title: { $ilike: '%hello%' } }, 'sqlite'),
+            expected: "title LOWER(title) LIKE LOWER('%hello%')",
+        },
+
+        // ✅ 3. Alias sanitization in $project
+        {
+            title: '$project alias sanitization',
+            input: () =>
+                aggregate([{ $project: { 'Total Amount($)': { $sum: '$amount' } } }])(
+                    'orders'
+                ),
+            expected:
+                "SELECT (SUM(amount)) AS Total_Amount___ FROM (SELECT * FROM orders) AS t1",
+        },
+
+        // ✅ 4. $group with _id: null (global aggregation)
+        {
+            title: '$group global aggregation no GROUP BY',
+            input: () =>
+                aggregate([{ $group: { _id: null, total: { $sum: '$amount' } } }])(
+                    'orders'
+                ),
+            expected: "SELECT (SUM(amount)) AS total FROM (SELECT * FROM orders) AS t1",
+        },
+
+        // ✅ 5. multiple $match after $group (HAVING)
+        {
+            title: 'multiple $match after $group (HAVING logic)',
+            input: () =>
+                aggregate([
+                    { $group: { _id: '$country', total: { $sum: '$amount' } } },
+                    { $match: { total: { $gt: 100 } } },
+                    { $match: { total: { $lt: 500 } } },
+                ])('orders'),
+            expected:
+                "SELECT country AS _id, (SUM(amount)) AS total FROM (SELECT * FROM orders) AS t1 GROUP BY country HAVING (SUM(amount)) > 100 AND (SUM(amount)) < 500",
+        },
+
+        // ✅ 6. $switch logic
+        {
+            title: '$switch multiple branches',
+            input: () =>
+                expression({
+                    $switch: [
+                        {
+                            branches: [
+                                { case: { $eq: ['$score', 100] }, then: 'perfect' },
+                                { case: { $gt: ['$score', 50] }, then: 'pass' },
+                            ],
+                            default: 'fail',
+                        },
+                    ],
+                }),
+            expected:
+                "(CASE WHEN (score = 100) THEN 'perfect' WHEN (score > 50) THEN 'pass' ELSE 'fail' END)",
+        },
+
+        // ✅ 7. Custom operator (added dynamically)
+        {
+            title: 'add custom $between filter',
+            input: () => {
+                extend.filter({
+                    // Check if field modulo value equals remainder
+                    // Between operator
+                    $between: (value, db, field) => {
+                        if (!Array.isArray(value) || value.length !== 2) {
+                            throw new Error('$between requires [min, max]');
+                        }
+                        return `BETWEEN ${escape(value[0], db)} AND ${escape(value[1], db)}`;
+                    },
+                });
+                return filter({ age: { $between: [18, 30] } });
             },
-            {
-                title: '$toUpper add expression',
-                input: () => expression({ $toUpper: ['ok'] }),
-                expected: "(UPPER('ok'))",
+            expected: 'age BETWEEN 18 AND 30',
+        },
+
+        {
+            title: 'add custom $round expression',
+            input: () => {
+                extend.expression({
+                    // Round operator
+                    $round: (args, ctx) => `ROUND(${ctx.expr(args[0])})`,
+                });
+                return expression({ $round: ['$salary'] });
             },
-        ])
-    });
+            expected: "(ROUND(salary))",
+        },
+
+        // ✅ 8. Escaped string inside complex expression
+        {
+            title: 'escaped string inside nested expression',
+            input: () =>
+                expression({
+                    $concat: ["$author", " says: ", "O'Reilly"],
+                }),
+            expected: "(author || ' says: ' || 'O''Reilly')",
+        },
+
+        // ✅ 9. Complex HAVING with nested JSON
+        {
+            title: 'complex $group + $having with JSON path',
+            input: () =>
+                aggregate([
+                    { $group: { _id: '$profile.country', avgAge: { $avg: '$profile.age' } } },
+                    { $match: { avgAge: { $gte: 30 } } },
+                ])('users', 'sqlite'),
+            expected:
+                "SELECT json_extract(profile, '$.country') AS _id, (AVG(json_extract(profile, '$.age'))) AS avgAge FROM (SELECT * FROM users) AS t1 GROUP BY json_extract(profile, '$.country') HAVING (AVG(json_extract(profile, '$.age'))) >= 30",
+        },
+
+        // ✅ 10. Field name with space or special characters
+        {
+            title: 'field alias sanitization with spaces',
+            input: () =>
+                aggregate([{ $project: { 'User Name': '$profile.name' } }])('users'),
+            expected:
+                "SELECT json_extract(profile, '$.name') AS User_Name FROM (SELECT * FROM users) AS t1",
+        },
+    ]);
+});
+
+describe('Aggregate Extended Tests', () => {
+    runTests([
+        // === 1. Simple project + match ===
+        {
+            title: '$project + $match basic',
+            input: () => aggregate([
+                { $project: { name: 1, age: 1 } },
+                { $match: { age: { $gt: 18 } } }
+            ])('users'),
+            expected:
+                "SELECT name AS name, age AS age FROM (SELECT * FROM users) AS t1 WHERE age > 18",
+        },
+
+        // === 2. $project nested JSON field ===
+        {
+            title: '$project JSON fields (sqlite)',
+            input: () => aggregate([
+                { $project: { country: '$profile.country', city: '$profile.address.city' } },
+            ])('users', 'sqlite'),
+            expected:
+                "SELECT json_extract(profile, '$.country') AS country, json_extract(profile, '$.address.city') AS city FROM (SELECT * FROM users) AS t1",
+        },
+
+        {
+            title: '$project JSON fields (pg)',
+            input: () => aggregate([
+                { $project: { country: '$profile.country', city: '$profile.address.city' } },
+            ])('users', 'pg'),
+            expected:
+                "SELECT (profile::jsonb #>> '{country}') AS country, (profile::jsonb #>> '{address,city}') AS city FROM (SELECT * FROM users) AS t1",
+        },
+
+        // === 3. $group only ===
+        {
+            title: '$group by simple field',
+            input: () => aggregate([
+                { $group: { _id: '$country' } },
+            ])('users'),
+            expected:
+                "SELECT country AS _id FROM (SELECT * FROM users) AS t1 GROUP BY country",
+        },
+
+        {
+            title: '$group by JSON path (sqlite)',
+            input: () => aggregate([
+                { $group: { _id: '$profile.country' } },
+            ])('users', 'sqlite'),
+            expected:
+                "SELECT json_extract(profile, '$.country') AS _id FROM (SELECT * FROM users) AS t1 GROUP BY json_extract(profile, '$.country')",
+        },
+
+        {
+            title: '$group by JSON path (pg)',
+            input: () => aggregate([
+                { $group: { _id: '$profile.country' } },
+            ])('users', 'pg'),
+            expected:
+                "SELECT (profile::jsonb #>> '{country}') AS _id FROM (SELECT * FROM users) AS t1 GROUP BY (profile::jsonb #>> '{country}')",
+        },
+
+        // === 4. $group with aggregate fields ===
+        {
+            title: '$group with $sum and $avg',
+            input: () => aggregate([
+                { $group: { _id: '$country', total: { $sum: '$amount' }, avg: { $avg: '$amount' } } },
+            ])('orders'),
+            expected:
+                "SELECT country AS _id, (SUM(amount)) AS total, (AVG(amount)) AS avg FROM (SELECT * FROM orders) AS t1 GROUP BY country",
+        },
+
+        // === 5. $group by null (global aggregation) ===
+        {
+            title: '$group global aggregation',
+            input: () => aggregate([
+                { $group: { _id: null, total: { $sum: '$amount' } } },
+            ])('orders'),
+            expected:
+                "SELECT (SUM(amount)) AS total FROM (SELECT * FROM orders) AS t1",
+        },
+
+        // === 6. $group + $match (HAVING) ===
+        {
+            title: '$group + $match (HAVING)',
+            input: () => aggregate([
+                { $group: { _id: '$country', total: { $sum: '$amount' } } },
+                { $match: { total: { $gt: 100 } } },
+            ])('orders'),
+            expected:
+                "SELECT country AS _id, (SUM(amount)) AS total FROM (SELECT * FROM orders) AS t1 GROUP BY country HAVING (SUM(amount)) > 100",
+        },
+
+        {
+            title: '$group + multiple $match (HAVING chain)',
+            input: () => aggregate([
+                { $group: { _id: '$country', total: { $sum: '$amount' } } },
+                { $match: { total: { $gt: 100 } } },
+                { $match: { total: { $lt: 500 } } },
+            ])('orders'),
+            expected:
+                "SELECT country AS _id, (SUM(amount)) AS total FROM (SELECT * FROM orders) AS t1 GROUP BY country HAVING (SUM(amount)) > 100 AND (SUM(amount)) < 500",
+        },
+
+        {
+            title: '$group + $match JSON field (sqlite)',
+            input: () => aggregate([
+                { $group: { _id: '$profile.country', avgAge: { $avg: '$profile.age' } } },
+                { $match: { avgAge: { $gte: 30 } } },
+            ])('users', 'sqlite'),
+            expected:
+                "SELECT json_extract(profile, '$.country') AS _id, (AVG(json_extract(profile, '$.age'))) AS avgAge FROM (SELECT * FROM users) AS t1 GROUP BY json_extract(profile, '$.country') HAVING (AVG(json_extract(profile, '$.age'))) >= 30",
+        },
+
+        // === 7. $sort + $limit + $skip ===
+        {
+            title: '$sort + $limit + $skip (sqlite)',
+            input: () => aggregate([
+                { $sort: { 'profile.age': -1 } },
+                { $limit: 5 },
+                { $skip: 2 },
+            ])('users', 'sqlite'),
+            expected:
+                "SELECT * FROM users ORDER BY json_extract(profile, '$.age') DESC LIMIT 5 OFFSET 2",
+        },
+
+        {
+            title: '$sort + $limit + $skip (pg)',
+            input: () => aggregate([
+                { $sort: { 'profile.age': 1 } },
+                { $limit: 10 },
+                { $skip: 5 },
+            ])('users', 'pg'),
+            expected:
+                "SELECT * FROM users ORDER BY (profile::jsonb #>> '{age}') ASC LIMIT 10 OFFSET 5",
+        },
+
+        // === 8. $count ===
+        {
+            title: '$count after match',
+            input: () => aggregate([
+                { $match: { age: { $gte: 18 } } },
+                { $count: 'totalAdults' },
+            ])('users'),
+            expected:
+                "SELECT COUNT(*) AS totalAdults FROM (SELECT * FROM users WHERE age >= 18) AS t1",
+        },
+
+        // === 9. $project + expression ===
+        {
+            title: '$project with expression',
+            input: () => aggregate([
+                {
+                    $project: {
+                        name: 1,
+                        yearly: { $multiply: ['$salary', 12] },
+                    },
+                },
+            ])('employees'),
+            expected:
+                "SELECT name AS name, (salary * 12) AS yearly FROM (SELECT * FROM employees) AS t1",
+        },
+
+        // === 10. Complex pipeline (mix of all) ===
+        {
+            title: 'complex nested pipeline',
+            input: () => aggregate([
+                { $match: { 'profile.active': true } },
+                {
+                    $group: {
+                        _id: '$profile.country',
+                        total: { $sum: '$salary' },
+                        avg: { $avg: '$salary' },
+                    },
+                },
+                { $match: { avg: { $gt: 5000 } } },
+                { $sort: { total: -1 } },
+                { $limit: 10 },
+            ])('employees', 'sqlite'),
+            expected:
+                "SELECT json_extract(profile, '$.country') AS _id, (SUM(salary)) AS total, (AVG(salary)) AS avg FROM (SELECT * FROM employees WHERE json_extract(profile, '$.active') = 1) AS t1 GROUP BY json_extract(profile, '$.country') HAVING (AVG(salary)) > 5000 ORDER BY (SUM(salary)) DESC LIMIT 10",
+        },
+    ]);
 });
