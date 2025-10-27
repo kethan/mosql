@@ -1,15 +1,24 @@
-## MoSQL
+## UMoSQL
 
 # Mongo To SQL Query
 
-[![tests](https://github.com/kethan/mosql/actions/workflows/node.js.yml/badge.svg)](https://github.com/kethan/mosql/actions/workflows/node.js.yml) [![Version](https://img.shields.io/npm/v/umosql.svg?color=success&style=flat-square)](https://www.npmjs.com/package/mosql) [![Badge size](https://deno.bundlejs.com/badge?q=umosql&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql)
+[![tests](https://github.com/kethan/mosql/actions/workflows/node.js.yml/badge.svg)](https://github.com/kethan/mosql/actions/workflows/node.js.yml) [![Version](https://img.shields.io/npm/v/umosql.svg?color=success&style=flat-square)](https://www.npmjs.com/package/umosql) [![Badge size](https://deno.bundlejs.com/badge?q=umosql&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql)
 
-[![Version](https://img.shields.io/npm/v/umosql.svg?color=success&style=flat-square)](https://www.npmjs.com/package/mosql/lite) [![Badge size](https://deno.bundlejs.com/badge?q=umosq/lite&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql/lite)
+[![Version](https://img.shields.io/npm/v/umosql.svg?color=success&style=flat-square)](https://www.npmjs.com/package/umosql) [![Badge size](https://deno.bundlejs.com/badge?q=umosq/lite&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql/lite)
 
-
-[![Version](https://img.shields.io/npm/v/umosql.svg?color=success&style=flat-square)](https://www.npmjs.com/package/mosql/lite) [![Badge size](https://deno.bundlejs.com/badge?q=umosql/timy&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql/tiny)
+[![Version](https://img.shields.io/npm/v/umosql.svg?color=success&style=flat-square)](https://www.npmjs.com/package/umosql) [![Badge size](https://deno.bundlejs.com/badge?q=umosql/timy&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql/tiny)
 
 ---
+
+
+## Install
+
+```
+npm i umosql
+npm i umosql/lite
+npm i umosql/tiny
+
+```
 
 ## 📊 Feature Comparison
 
