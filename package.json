@@ -2,7 +2,7 @@
 	"name": "umosql",
 	"sideEffects": false,
 	"description": "MongoDB-style queries and schemaless adapters for PostgreSQL, MySQL, SQLite, Memory; optional drop-in Mongo adapter",
-	"version": "0.1.2",
+	"version": "0.2.0",
 	"type": "module",
 	"source": "./src/index.js",
 	"main": "./dist/index.js",
