@@ -10,7 +10,24 @@ on:
         branches: ["main"]
 
 jobs:
-    build:
+    unit:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - name: Set up Bun
+              uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: latest
+            - name: Install dependencies
+              run: bun install --silent
+            - name: Build
+              run: bun run build
+            - name: Run unit tests
+              run: bun run test
+
+    db:
+        if: github.event_name == 'push'
+        needs: unit
         runs-on: ubuntu-latest
 
         services:
@@ -23,7 +40,7 @@ jobs:
                 ports:
                     - 5432:5432
                 options: >-
-                    --health-cmd "pg_isready -U test -d testdb" --health-interval 10s --health-timeout 5s --health-retries 10
+                    --health-cmd "pg_isready -U test -d testdb" --health-interval 5s --health-timeout 5s --health-retries 20
             mysql:
                 image: mysql:8.0
                 env:
@@ -34,7 +51,7 @@ jobs:
                 ports:
                     - 3306:3306
                 options: >-
-                    --health-cmd "mysqladmin ping -h 127.0.0.1 -utest -psecret" --health-interval 10s --health-timeout 5s --health-retries 10
+                    --health-cmd "mysqladmin ping -h 127.0.0.1 -utest -psecret" --health-interval 5s --health-timeout 5s --health-retries 20
             mongodb:
                 image: mongo:6.0
                 env:
@@ -44,7 +61,7 @@ jobs:
                 ports:
                     - 27017:27017
                 options: >-
-                    --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 })' --username root --password secret --authenticationDatabase admin" --health-interval 10s --health-timeout 5s --health-retries 10
+                    --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 })' --username root --password secret --authenticationDatabase admin" --health-interval 5s --health-timeout 5s --health-retries 20
 
         env:
             PG_HOST: localhost
@@ -64,35 +81,13 @@ jobs:
 
         steps:
             - uses: actions/checkout@v4
-
-            - name: Set up Node.js
-              uses: actions/setup-node@v4
-              with:
-                  node-version: '18.x'
-                  cache: 'npm'
-
             - name: Set up Bun
               uses: oven-sh/setup-bun@v2
               with:
                   bun-version: latest
-
             - name: Install dependencies
-              run: bun install
-
-            - name: Wait for DB services
-              shell: bash
-              run: |
-                  for i in {1..60}; do
-                    (echo > /dev/tcp/localhost/5432) && (echo > /dev/tcp/localhost/3306) && (echo > /dev/tcp/localhost/27017) && exit 0
-                    sleep 2
-                  done
-                  echo "Services not ready" && exit 1
-
+              run: bun install --silent
             - name: Build
               run: bun run build
-
-            - name: Run unit tests
-              run: bun run test
-
             - name: Run DB integration tests
               run: bun run test:db
