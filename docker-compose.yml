@@ -1,0 +1,46 @@
+version: '3.8'
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: mosql_postgres
+    environment:
+      - POSTGRES_USER=test
+      - POSTGRES_PASSWORD=secret
+      - POSTGRES_DB=testdb
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U test -d testdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  mysql:
+    image: mysql:8.0
+    container_name: mosql_mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=secret
+      - MYSQL_DATABASE=testdb
+      - MYSQL_USER=test
+      - MYSQL_PASSWORD=secret
+    command: ["--default-authentication-plugin=mysql_native_password"]
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "test", "-psecret"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  mongodb:
+    image: mongo:6.0
+    container_name: mosql_mongodb
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=root
+      - MONGO_INITDB_ROOT_PASSWORD=secret
+      - MONGO_INITDB_DATABASE=testdb
+    ports:
+      - "27017:27017"
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.runCommand({ ping: 1 })' --username root --password secret --authenticationDatabase admin"]
+      interval: 5s
+      timeout: 5s
+      retries: 10

@@ -1,0 +1,646 @@
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <title>Code coverage report for mosql/src/schemaless.js</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="../../prettify.css" />
+    <link rel="stylesheet" href="../../base.css" />
+    <link rel="shortcut icon" type="image/x-icon" href="../../favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style type='text/css'>
+        .coverage-summary .sorter {
+            background-image: url(../../sort-arrow-sprite.png);
+        }
+    </style>
+</head>
+    
+<body>
+<div class='wrapper'>
+    <div class='pad1'>
+        <h1><a href="../../index.html">All files</a> / <a href="index.html">mosql/src</a> schemaless.js</h1>
+        <div class='clearfix'>
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">93.54% </span>
+                <span class="quiet">Statements</span>
+                <span class='fraction'>174/186</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">75.81% </span>
+                <span class="quiet">Branches</span>
+                <span class='fraction'>304/401</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">91.3% </span>
+                <span class="quiet">Functions</span>
+                <span class='fraction'>63/69</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">93.54% </span>
+                <span class="quiet">Lines</span>
+                <span class='fraction'>174/186</span>
+            </div>
+        
+            
+        </div>
+        <p class="quiet">
+            Press <em>n</em> or <em>j</em> to go to the next uncovered block, <em>b</em>, <em>p</em> or <em>k</em> for the previous block.
+        </p>
+        <template id="filterTemplate">
+            <div class="quiet">
+                Filter:
+                <input type="search" id="fileSearch">
+            </div>
+        </template>
+    </div>
+    <div class='status-line high'></div>
+    <pre><table class="coverage">
+<tr><td class="line-count quiet"><a name='L1'></a><a href='#L1'>1</a>
+<a name='L2'></a><a href='#L2'>2</a>
+<a name='L3'></a><a href='#L3'>3</a>
+<a name='L4'></a><a href='#L4'>4</a>
+<a name='L5'></a><a href='#L5'>5</a>
+<a name='L6'></a><a href='#L6'>6</a>
+<a name='L7'></a><a href='#L7'>7</a>
+<a name='L8'></a><a href='#L8'>8</a>
+<a name='L9'></a><a href='#L9'>9</a>
+<a name='L10'></a><a href='#L10'>10</a>
+<a name='L11'></a><a href='#L11'>11</a>
+<a name='L12'></a><a href='#L12'>12</a>
+<a name='L13'></a><a href='#L13'>13</a>
+<a name='L14'></a><a href='#L14'>14</a>
+<a name='L15'></a><a href='#L15'>15</a>
+<a name='L16'></a><a href='#L16'>16</a>
+<a name='L17'></a><a href='#L17'>17</a>
+<a name='L18'></a><a href='#L18'>18</a>
+<a name='L19'></a><a href='#L19'>19</a>
+<a name='L20'></a><a href='#L20'>20</a>
+<a name='L21'></a><a href='#L21'>21</a>
+<a name='L22'></a><a href='#L22'>22</a>
+<a name='L23'></a><a href='#L23'>23</a>
+<a name='L24'></a><a href='#L24'>24</a>
+<a name='L25'></a><a href='#L25'>25</a>
+<a name='L26'></a><a href='#L26'>26</a>
+<a name='L27'></a><a href='#L27'>27</a>
+<a name='L28'></a><a href='#L28'>28</a>
+<a name='L29'></a><a href='#L29'>29</a>
+<a name='L30'></a><a href='#L30'>30</a>
+<a name='L31'></a><a href='#L31'>31</a>
+<a name='L32'></a><a href='#L32'>32</a>
+<a name='L33'></a><a href='#L33'>33</a>
+<a name='L34'></a><a href='#L34'>34</a>
+<a name='L35'></a><a href='#L35'>35</a>
+<a name='L36'></a><a href='#L36'>36</a>
+<a name='L37'></a><a href='#L37'>37</a>
+<a name='L38'></a><a href='#L38'>38</a>
+<a name='L39'></a><a href='#L39'>39</a>
+<a name='L40'></a><a href='#L40'>40</a>
+<a name='L41'></a><a href='#L41'>41</a>
+<a name='L42'></a><a href='#L42'>42</a>
+<a name='L43'></a><a href='#L43'>43</a>
+<a name='L44'></a><a href='#L44'>44</a>
+<a name='L45'></a><a href='#L45'>45</a>
+<a name='L46'></a><a href='#L46'>46</a>
+<a name='L47'></a><a href='#L47'>47</a>
+<a name='L48'></a><a href='#L48'>48</a>
+<a name='L49'></a><a href='#L49'>49</a>
+<a name='L50'></a><a href='#L50'>50</a>
+<a name='L51'></a><a href='#L51'>51</a>
+<a name='L52'></a><a href='#L52'>52</a>
+<a name='L53'></a><a href='#L53'>53</a>
+<a name='L54'></a><a href='#L54'>54</a>
+<a name='L55'></a><a href='#L55'>55</a>
+<a name='L56'></a><a href='#L56'>56</a>
+<a name='L57'></a><a href='#L57'>57</a>
+<a name='L58'></a><a href='#L58'>58</a>
+<a name='L59'></a><a href='#L59'>59</a>
+<a name='L60'></a><a href='#L60'>60</a>
+<a name='L61'></a><a href='#L61'>61</a>
+<a name='L62'></a><a href='#L62'>62</a>
+<a name='L63'></a><a href='#L63'>63</a>
+<a name='L64'></a><a href='#L64'>64</a>
+<a name='L65'></a><a href='#L65'>65</a>
+<a name='L66'></a><a href='#L66'>66</a>
+<a name='L67'></a><a href='#L67'>67</a>
+<a name='L68'></a><a href='#L68'>68</a>
+<a name='L69'></a><a href='#L69'>69</a>
+<a name='L70'></a><a href='#L70'>70</a>
+<a name='L71'></a><a href='#L71'>71</a>
+<a name='L72'></a><a href='#L72'>72</a>
+<a name='L73'></a><a href='#L73'>73</a>
+<a name='L74'></a><a href='#L74'>74</a>
+<a name='L75'></a><a href='#L75'>75</a>
+<a name='L76'></a><a href='#L76'>76</a>
+<a name='L77'></a><a href='#L77'>77</a>
+<a name='L78'></a><a href='#L78'>78</a>
+<a name='L79'></a><a href='#L79'>79</a>
+<a name='L80'></a><a href='#L80'>80</a>
+<a name='L81'></a><a href='#L81'>81</a>
+<a name='L82'></a><a href='#L82'>82</a>
+<a name='L83'></a><a href='#L83'>83</a>
+<a name='L84'></a><a href='#L84'>84</a>
+<a name='L85'></a><a href='#L85'>85</a>
+<a name='L86'></a><a href='#L86'>86</a>
+<a name='L87'></a><a href='#L87'>87</a>
+<a name='L88'></a><a href='#L88'>88</a>
+<a name='L89'></a><a href='#L89'>89</a>
+<a name='L90'></a><a href='#L90'>90</a>
+<a name='L91'></a><a href='#L91'>91</a>
+<a name='L92'></a><a href='#L92'>92</a>
+<a name='L93'></a><a href='#L93'>93</a>
+<a name='L94'></a><a href='#L94'>94</a>
+<a name='L95'></a><a href='#L95'>95</a>
+<a name='L96'></a><a href='#L96'>96</a>
+<a name='L97'></a><a href='#L97'>97</a>
+<a name='L98'></a><a href='#L98'>98</a>
+<a name='L99'></a><a href='#L99'>99</a>
+<a name='L100'></a><a href='#L100'>100</a>
+<a name='L101'></a><a href='#L101'>101</a>
+<a name='L102'></a><a href='#L102'>102</a>
+<a name='L103'></a><a href='#L103'>103</a>
+<a name='L104'></a><a href='#L104'>104</a>
+<a name='L105'></a><a href='#L105'>105</a>
+<a name='L106'></a><a href='#L106'>106</a>
+<a name='L107'></a><a href='#L107'>107</a>
+<a name='L108'></a><a href='#L108'>108</a>
+<a name='L109'></a><a href='#L109'>109</a>
+<a name='L110'></a><a href='#L110'>110</a>
+<a name='L111'></a><a href='#L111'>111</a>
+<a name='L112'></a><a href='#L112'>112</a>
+<a name='L113'></a><a href='#L113'>113</a>
+<a name='L114'></a><a href='#L114'>114</a>
+<a name='L115'></a><a href='#L115'>115</a>
+<a name='L116'></a><a href='#L116'>116</a>
+<a name='L117'></a><a href='#L117'>117</a>
+<a name='L118'></a><a href='#L118'>118</a>
+<a name='L119'></a><a href='#L119'>119</a>
+<a name='L120'></a><a href='#L120'>120</a>
+<a name='L121'></a><a href='#L121'>121</a>
+<a name='L122'></a><a href='#L122'>122</a>
+<a name='L123'></a><a href='#L123'>123</a>
+<a name='L124'></a><a href='#L124'>124</a>
+<a name='L125'></a><a href='#L125'>125</a>
+<a name='L126'></a><a href='#L126'>126</a>
+<a name='L127'></a><a href='#L127'>127</a>
+<a name='L128'></a><a href='#L128'>128</a>
+<a name='L129'></a><a href='#L129'>129</a>
+<a name='L130'></a><a href='#L130'>130</a>
+<a name='L131'></a><a href='#L131'>131</a>
+<a name='L132'></a><a href='#L132'>132</a>
+<a name='L133'></a><a href='#L133'>133</a>
+<a name='L134'></a><a href='#L134'>134</a>
+<a name='L135'></a><a href='#L135'>135</a>
+<a name='L136'></a><a href='#L136'>136</a>
+<a name='L137'></a><a href='#L137'>137</a>
+<a name='L138'></a><a href='#L138'>138</a>
+<a name='L139'></a><a href='#L139'>139</a>
+<a name='L140'></a><a href='#L140'>140</a>
+<a name='L141'></a><a href='#L141'>141</a>
+<a name='L142'></a><a href='#L142'>142</a>
+<a name='L143'></a><a href='#L143'>143</a>
+<a name='L144'></a><a href='#L144'>144</a>
+<a name='L145'></a><a href='#L145'>145</a>
+<a name='L146'></a><a href='#L146'>146</a>
+<a name='L147'></a><a href='#L147'>147</a>
+<a name='L148'></a><a href='#L148'>148</a>
+<a name='L149'></a><a href='#L149'>149</a>
+<a name='L150'></a><a href='#L150'>150</a>
+<a name='L151'></a><a href='#L151'>151</a>
+<a name='L152'></a><a href='#L152'>152</a>
+<a name='L153'></a><a href='#L153'>153</a>
+<a name='L154'></a><a href='#L154'>154</a>
+<a name='L155'></a><a href='#L155'>155</a>
+<a name='L156'></a><a href='#L156'>156</a>
+<a name='L157'></a><a href='#L157'>157</a>
+<a name='L158'></a><a href='#L158'>158</a>
+<a name='L159'></a><a href='#L159'>159</a>
+<a name='L160'></a><a href='#L160'>160</a>
+<a name='L161'></a><a href='#L161'>161</a>
+<a name='L162'></a><a href='#L162'>162</a>
+<a name='L163'></a><a href='#L163'>163</a>
+<a name='L164'></a><a href='#L164'>164</a>
+<a name='L165'></a><a href='#L165'>165</a>
+<a name='L166'></a><a href='#L166'>166</a>
+<a name='L167'></a><a href='#L167'>167</a>
+<a name='L168'></a><a href='#L168'>168</a>
+<a name='L169'></a><a href='#L169'>169</a>
+<a name='L170'></a><a href='#L170'>170</a>
+<a name='L171'></a><a href='#L171'>171</a>
+<a name='L172'></a><a href='#L172'>172</a>
+<a name='L173'></a><a href='#L173'>173</a>
+<a name='L174'></a><a href='#L174'>174</a>
+<a name='L175'></a><a href='#L175'>175</a>
+<a name='L176'></a><a href='#L176'>176</a>
+<a name='L177'></a><a href='#L177'>177</a>
+<a name='L178'></a><a href='#L178'>178</a>
+<a name='L179'></a><a href='#L179'>179</a>
+<a name='L180'></a><a href='#L180'>180</a>
+<a name='L181'></a><a href='#L181'>181</a>
+<a name='L182'></a><a href='#L182'>182</a>
+<a name='L183'></a><a href='#L183'>183</a>
+<a name='L184'></a><a href='#L184'>184</a>
+<a name='L185'></a><a href='#L185'>185</a>
+<a name='L186'></a><a href='#L186'>186</a>
+<a name='L187'></a><a href='#L187'>187</a>
+<a name='L188'></a><a href='#L188'>188</a></td><td class="line-coverage quiet"><span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">108x</span>
+<span class="cline-any cline-yes">108x</span>
+<span class="cline-any cline-yes">108x</span>
+<span class="cline-any cline-yes">108x</span>
+<span class="cline-any cline-yes">108x</span>
+<span class="cline-any cline-yes">108x</span>
+<span class="cline-any cline-yes">108x</span>
+<span class="cline-any cline-yes">108x</span>
+<span class="cline-any cline-yes">108x</span>
+<span class="cline-any cline-yes">95x</span>
+<span class="cline-any cline-yes">108x</span>
+<span class="cline-any cline-yes">108x</span>
+<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">108x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">96x</span>
+<span class="cline-any cline-yes">96x</span>
+<span class="cline-any cline-yes">96x</span>
+<span class="cline-any cline-yes">96x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">12x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">359x</span>
+<span class="cline-any cline-yes">114x</span>
+<span class="cline-any cline-yes">114x</span>
+<span class="cline-any cline-yes">53x</span>
+<span class="cline-any cline-yes">53x</span>
+<span class="cline-any cline-yes">61x</span>
+<span class="cline-any cline-yes">61x</span>
+<span class="cline-any cline-yes">359x</span>
+<span class="cline-any cline-yes">101x</span>
+<span class="cline-any cline-yes">101x</span>
+<span class="cline-any cline-yes">359x</span>
+<span class="cline-any cline-yes">62x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">30x</span>
+<span class="cline-any cline-yes">30x</span>
+<span class="cline-any cline-yes">30x</span>
+<span class="cline-any cline-yes">30x</span>
+<span class="cline-any cline-yes">30x</span>
+<span class="cline-any cline-yes">30x</span>
+<span class="cline-any cline-yes">30x</span>
+<span class="cline-any cline-yes">30x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">46x</span>
+<span class="cline-any cline-yes">46x</span>
+<span class="cline-any cline-yes">46x</span>
+<span class="cline-any cline-yes">46x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">45x</span>
+<span class="cline-any cline-yes">45x</span>
+<span class="cline-any cline-yes">45x</span>
+<span class="cline-any cline-yes">45x</span>
+<span class="cline-any cline-yes">45x</span>
+<span class="cline-any cline-yes">45x</span>
+<span class="cline-any cline-yes">45x</span>
+<span class="cline-any cline-yes">45x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">9x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">145x</span>
+<span class="cline-any cline-yes">145x</span>
+<span class="cline-any cline-yes">62x</span>
+<span class="cline-any cline-yes">62x</span>
+<span class="cline-any cline-yes">6x</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">101x</span>
+<span class="cline-any cline-yes">101x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">117x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">8x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">// ============================================
+// SCHEMA-LESS SQL ADAPTER
+// ============================================
+&nbsp;
+/* Copied from v2/src/new.js (renamed) */
+/* Contents identical to ensure API continuity */
+&nbsp;
+// ============================================
+// TYPE INFERENCE
+// ============================================
+&nbsp;
+const inferSQLType = (value, database) =&gt; {
+    const types = {
+        pg: { string: (v) =&gt; v.length &gt; 255 <span class="branch-0 cbranch-no" title="branch not covered" >? 'TEXT' </span>: 'VARCHAR(255)', number: (v) =&gt; Number.isInteger(v) ? 'INTEGER' <span class="branch-0 cbranch-no" title="branch not covered" >: 'DECIMAL(20,6)',</span> boolean: 'BOOLEAN', date: 'TIMESTAMP', json: 'JSONB' },
+        mysql: { string: 'VARCHAR(255)', number: (v) =&gt; Number.isInteger(v) ? 'INT' <span class="branch-0 cbranch-no" title="branch not covered" >: 'DECIMAL(20,6)',</span> boolean: 'TINYINT(1)', date: 'DATETIME', json: 'JSON' },
+        sqlite: { string: 'TEXT', number: (v) =&gt; Number.isInteger(v) ? 'INTEGER' <span class="branch-0 cbranch-no" title="branch not covered" >: 'REAL',</span> boolean: 'INTEGER', date: 'TEXT', json: 'TEXT' },
+    };
+    const t = types[database];
+    if (value instanceof Date) <span class="branch-0 cbranch-no" title="branch not covered" >return t.date;</span>
+    if (Array.isArray(value)) return t.json;
+    if (typeof value === 'object' &amp;&amp; value !== null) return t.json;
+    const type = typeof value;
+    if (type === 'string') return typeof t.string === 'function' ? t.string(value) : t.string;
+    if (type === 'number') return typeof t.number === 'function' ? t.number(value) <span class="branch-0 cbranch-no" title="branch not covered" >: t.number;</span>
+    if (type === 'boolean') return t.boolean;
+<span class="branch-0 cbranch-no" title="branch not covered" >    return typeof t.string === 'function' ? t.string('') <span class="branch-0 cbranch-no" title="branch not covered" ></span>: t.string;</span>
+};
+&nbsp;
+const widenType = (current, next) =&gt; {
+    const rank = { INTEGER: 1, INT: 1, TINYINT: 1, BIGINT: 2, DECIMAL: 3, REAL: 3, VARCHAR: 4, TEXT: 5 };
+    const c = current.replace(/\(.*\)/, '').toUpperCase();
+    const n = next.replace(/\(.*\)/, '').toUpperCase();
+    return (rank[c] || 0) &gt; (rank[n] || 0) ? current : next;
+};
+&nbsp;
+const escapeValue = (value, database) =&gt; {
+    if (value === null) <span class="branch-0 cbranch-no" title="branch not covered" >return 'NULL';</span>
+    if (typeof value === 'number') <span class="branch-0 cbranch-no" title="branch not covered" >return String(value);</span>
+    if (typeof value === 'boolean') return database === 'pg' ? (value ? 'TRUE' <span class="branch-0 cbranch-no" title="branch not covered" >: 'FALSE')</span> : (value ? '1' <span class="branch-0 cbranch-no" title="branch not covered" >: '0')</span>;
+    if (value instanceof Date) <span class="branch-0 cbranch-no" title="branch not covered" >{</span>
+<span class="cstat-no" title="statement not covered" >        const pad = <span class="fstat-no" title="function not covered" >(n) =&gt; String(n).padStart(2, '0');</span></span>
+<span class="cstat-no" title="statement not covered" >        const yyyy = value.getUTCFullYear();</span>
+<span class="cstat-no" title="statement not covered" >        const mm = pad(value.getUTCMonth() + 1);</span>
+<span class="cstat-no" title="statement not covered" >        const dd = pad(value.getUTCDate());</span>
+<span class="cstat-no" title="statement not covered" >        const hh = pad(value.getUTCHours());</span>
+<span class="cstat-no" title="statement not covered" >        const mi = pad(value.getUTCMinutes());</span>
+<span class="cstat-no" title="statement not covered" >        const ss = pad(value.getUTCSeconds());</span>
+<span class="cstat-no" title="statement not covered" >        const ts = `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;</span>
+<span class="cstat-no" title="statement not covered" >        return `'${ts}'`;</span>
+<span class="cstat-no" title="statement not covered" >    }</span>
+    if (typeof value === 'object') return `'${JSON.stringify(value).replace(/'/g, "''")}'`;
+    return `'${String(value).replace(/'/g, "''")}'`;
+};
+&nbsp;
+const normalizeResult = (result, database) =&gt; {
+    if (database === 'mysql' &amp;&amp; Array.isArray(result) &amp;&amp; result.length === 2) {
+        const payload = result[0];
+        if (payload &amp;&amp; typeof payload === 'object' &amp;&amp; !Array.isArray(payload)) {
+            return { rows: Array.isArray(payload) <span class="branch-0 cbranch-no" title="branch not covered" >? payload </span>: [], fields: result[1], affectedRows: payload.affectedRows, insertId: payload.insertId };
+        }
+        return { rows: payload, fields: result[1] };
+    }
+    if (result &amp;&amp; result.rows) {
+        return { rows: result.rows, rowCount: result.rowCount, affectedRows: result.rowCount };
+    }
+    if (Array.isArray(result)) { return { rows: result }; }
+    return result;
+};
+&nbsp;
+class SQLCollection {
+    constructor(name, adapter, config = {}) {
+        this.name = name;
+        this.adapter = adapter;
+        this.database = adapter.database;
+        this.schema = config.schema || {};
+        this.tableSchema = null;
+        this.isInitialized = false;
+        this.options = { migrateOnUpdate: config.migrateOnUpdate !== undefined <span class="branch-0 cbranch-no" title="branch not covered" >? !!config.migrateOnUpdate </span>: true, idStrategy: config.idStrategy || 'auto', idColumn: config.idColumn || '_id', idGenerator: typeof config.idGenerator === 'function' ? config.idGenerator : null };
+    }
+    async initialize() { if (this.isInitialized) return; const exists = await this.adapter.tableExists(this.name); if (!exists &amp;&amp; this.schema &amp;&amp; Object.keys(this.schema).length) <span class="branch-0 cbranch-no" title="branch not covered" >{ await this.createTable({}); } </span>this.tableSchema = await this.adapter.getTableSchema(this.name) <span class="branch-0 cbranch-no" title="branch not covered" >|| { columns: {} };</span> this.isInitialized = true; }
+    async createTable(document) {
+        const columns = []; const keys = Array.from(new Set([ ...Object.keys(this.schema <span class="branch-0 cbranch-no" title="branch not covered" >|| {})</span>, ...Object.keys(document <span class="branch-0 cbranch-no" title="branch not covered" >|| {})</span> ]));
+        keys.forEach((key) =&gt; { if (key === '_id') return; const schemaDef = this.schema[key]; const value = document[key]; const type = (typeof schemaDef === 'string' <span class="branch-0 cbranch-no" title="branch not covered" >? schemaDef </span>: schemaDef?.type) || inferSQLType(value, this.database); const nullable = schemaDef?.required ? ' NOT NULL' : ''; const unique = schemaDef?.unique <span class="branch-0 cbranch-no" title="branch not covered" >? ' UNIQUE' </span>: ''; const defaultValue = schemaDef?.default !== undefined ? ` DEFAULT ${typeof schemaDef.default === 'function' <span class="branch-0 cbranch-no" title="branch not covered" >? escapeValue(schemaDef.default(), this.database) </span>: escapeValue(schemaDef.default, this.database)}` : ''; columns.push(`${key} ${type}${nullable}${unique}${defaultValue}`); });
+        const idCol = this.options.idColumn; let idColumn; if (this.options.idStrategy === 'auto') { idColumn = this.database === 'pg' ? `${idCol} SERIAL PRIMARY KEY` : this.database === 'mysql' ? `${idCol} INT AUTO_INCREMENT PRIMARY KEY` : `${idCol} INTEGER PRIMARY KEY AUTOINCREMENT`; } else { const idType = this.database === 'pg' ? 'TEXT' : this.database === 'mysql' ? 'VARCHAR(24)' : 'TEXT'; idColumn = `${idCol} ${idType} PRIMARY KEY`; }
+        const timestamps = this.database === 'pg' ? 'created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP' : this.database === 'mysql' ? 'created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP' : "created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now'))";
+        const baseColumns = [idColumn, timestamps].join(', ');
+        await this.adapter.execute(`CREATE TABLE IF NOT EXISTS ${this.name} (${baseColumns})`);
+        for (const col of columns) { const addKw = this.database === 'mysql' ? 'ADD' : 'ADD COLUMN'; try { await this.adapter.execute(`ALTER TABLE ${this.name} ${addKw} ${col}`); } catch (e) {} }
+    }
+    async migrate(document) {
+        const migrations = []; const currentSchema = await this.adapter.getTableSchema(this.name);
+        Object.entries(document).forEach(([key, value]) =&gt; { if (key === '_id') return; const schemaDef = this.schema[key]; if (!currentSchema.columns[key]) { const type = (typeof schemaDef === 'string' <span class="branch-0 cbranch-no" title="branch not covered" >? schemaDef </span>: schemaDef<span class="branch-0 cbranch-no" title="branch not covered" >?.type)</span> || inferSQLType(value, this.database); const nullable = schemaDef<span class="branch-0 cbranch-no" title="branch not covered" >?.required <span class="branch-0 cbranch-no" title="branch not covered" ></span>? ' NOT NULL' </span>: ''; const unique = schemaDef<span class="branch-0 cbranch-no" title="branch not covered" >?.unique <span class="branch-0 cbranch-no" title="branch not covered" ></span>? ' UNIQUE' </span>: ''; const defaultValue = schemaDef<span class="branch-0 cbranch-no" title="branch not covered" >?.default </span>!== undefined <span class="branch-0 cbranch-no" title="branch not covered" >? ` DEFAULT ${typeof schemaDef.default === 'function' ? escapeValue(schemaDef.default(), this.database) : escapeValue(schemaDef.default, this.database)}` </span>: ''; const addKw = this.database === 'mysql' ? 'ADD' <span class="branch-0 cbranch-no" title="branch not covered" >: 'ADD COLUMN';</span> migrations.push(`ALTER TABLE ${this.name} ${addKw} ${key} ${type}${nullable}${unique}${defaultValue}`); this.tableSchema.columns[key] = type; } else { const currentType = currentSchema.columns[key]; const newType = (typeof schemaDef === 'string' <span class="branch-0 cbranch-no" title="branch not covered" >? schemaDef </span>: schemaDef<span class="branch-0 cbranch-no" title="branch not covered" >?.type)</span> || inferSQLType(value, this.database); const widened = widenType(currentType, newType); if (widened !== currentType &amp;&amp; this.database !== 'sqlite') { const alterSQL = this.database === 'pg' ? `ALTER TABLE ${this.name} ALTER COLUMN ${key} TYPE ${widened}` : `ALTER TABLE ${this.name} MODIFY COLUMN ${key} ${widened}`; migrations.push(alterSQL); this.tableSchema.columns[key] = widened; } } });
+        for (const sql of migrations) { try { await this.adapter.execute(sql); } <span class="branch-0 cbranch-no" title="branch not covered" >catch (e) { const msg = String(e?.message || e).toLowerCase(); if (!(msg.includes('already exists') || msg.includes('duplicate') || msg.includes('exists'))) throw e; } </span>} this.tableSchema = currentSchema;
+    }
+    classifyError(e) { const code = e?.code; const errno = e?.errno; const msg = String(e?.message <span class="branch-0 cbranch-no" title="branch not covered" >|| '')</span>.toLowerCase(); const missingTable = code === '42P01' || errno === 1146 || msg.includes('no such table') || msg.includes('does not exist') || msg.includes('unknown table'); const missingColumn = code === '42703' || errno === 1054 || msg.includes('no such column') || msg.includes('unknown column'); return { missingTable, missingColumn }; }
+    async execWithDDLRetry(sql, opts = {}) { try { return await this.adapter.execute(sql); } catch (e) { const { missingTable, missingColumn } = this.classifyError(e); if (missingTable) { await this.createTable(opts.docForCreate <span class="branch-0 cbranch-no" title="branch not covered" >|| {})</span>; return await this.adapter.execute(sql); } if (missingColumn &amp;&amp; opts.allowColumnMigrate) { await this.migrate(opts.docForMigrate <span class="branch-0 cbranch-no" title="branch not covered" >|| {})</span>; return await this.adapter.execute(sql); }<span class="branch-0 cbranch-no" title="branch not covered" > throw e; } </span>}
+    applyDefaults(document) { const result = { ...document }; Object.entries(this.schema).forEach(([key, def]) =&gt; { if (result[key] === undefined &amp;&amp; def.default !== undefined) { result[key] = typeof def.default === 'function' ? def.default() : def.default; } }); return result; }
+    filterHidden(document) { if (!document) <span class="branch-0 cbranch-no" title="branch not covered" >return document; </span>const result = { ...document }; Object.entries(this.schema).forEach(([key, def]) =&gt; { if (def.hidden) delete result[key]; }); return result; }
+    generateId() { if (this.options.idGenerator) return this.options.idGenerator(); if (this.options.idStrategy === 'mongo') { const ts = Math.floor(Date.now() / 1000).toString(16).padStart(8, '0'); const rand = Array.from({ length: 16 }, () =&gt; Math.floor(Math.random() * 16).toString(16)).join(''); return (ts + rand).slice(0, 24); }<span class="branch-0 cbranch-no" title="branch not covered" > return null; }</span>
+    async insertOne(document) { await this.initialize(); const doc = this.applyDefaults(document); const idCol = this.options.idColumn; const nonAuto = this.options.idStrategy !== 'auto'; if (nonAuto) { if (!doc[idCol]) doc[idCol] = this.generateId(); }
+        if (Object.keys(this.tableSchema.columns).length === 0) { await this.createTable(doc); this.tableSchema = await this.adapter.getTableSchema(this.name); }
+        await this.migrate(doc);
+        const insert = { ...doc };
+        const sql = this.adapter.buildInsert(this.name, [insert], this.database === 'pg' ? { returning: [idCol] } : {});
+        const result = await this.execWithDDLRetry(sql, { docForCreate: doc, docForMigrate: doc, allowColumnMigrate: true });
+        const insertedId = nonAuto ? insert[idCol] : (result.insertId || result.rows?.[0]?.[idCol] || result.lastInsertRowid);
+        return { insertedId, acknowledged: true };
+    }
+    async insertMany(documents) { const ids = []; for (const doc of documents) { const result = await this.insertOne(doc); ids.push(result.insertedId); } return { insertedIds: ids, acknowledged: true }; }
+    async find(query = {}, projection = null, options = {}) { const state = { query, projection: projection ?? options?.select ?? null, sort: options?.sort || options?.order, skip: options?.skip ?? options?.offset, limit: options?.limit, distinct: options?.distinct, }; const self = this; const cursor = { <span class="fstat-no" title="function not covered" >sort(obj) { state.sort = obj; return this; },</span> <span class="fstat-no" title="function not covered" >skip(n) { state.skip = n; return this; },</span> <span class="fstat-no" title="function not covered" >limit(n) { state.limit = n; return this; },</span> <span class="fstat-no" title="function not covered" >distinct() { state.distinct = true; return this; },</span> async toArray() { await self.initialize(); const hasOpts = !!(state.sort || state.distinct || state.limit != null || state.skip != null); const sql = hasOpts ? self.adapter.buildFindWithOptions(self.name, state.query, state.projection, { sort: state.sort, limit: state.limit, skip: state.skip, distinct: state.distinct }) : self.adapter.buildFind(self.name, state.query, state.projection); const result = await self.execWithDDLRetry(sql, { docForCreate: {}, allowColumnMigrate: false }); const rows = (result.rows <span class="branch-0 cbranch-no" title="branch not covered" >|| result)</span>.map(row =&gt; self.filterHidden(row)); return rows; }, <span class="fstat-no" title="function not covered" >async count() { const arr = await this.toArray(); return arr.length; } </span>}; return cursor; }
+    async findOne(query = {}, projection = null) { await this.initialize(); const sql = this.adapter.buildFind(this.name, query, projection); const result = await this.execWithDDLRetry(sql, { docForCreate: {}, allowColumnMigrate: false }); const rows = result.rows <span class="branch-0 cbranch-no" title="branch not covered" >|| result;</span> return rows[0] ? this.filterHidden(rows[0]) <span class="branch-0 cbranch-no" title="branch not covered" >: null;</span> }
+    async updateOne(query, update) { await this.initialize(); const preCountSQL = this.adapter.buildCount(this.name, query); const preCountRes = await this.execWithDDLRetry(preCountSQL, { docForCreate: {}, allowColumnMigrate: false }); const preRow = preCountRes.rows?.[0] <span class="branch-0 cbranch-no" title="branch not covered" >|| preCountRes[0];</span> const matchedCount = Math.min(1, parseInt(preRow?.count || 0)); const sql = this.adapter.buildUpdateOne(this.name, query, update); const updDoc = {}; Object.assign(updDoc, update?.$set || {}); if (update?.$currentDate <span class="branch-0 cbranch-no" title="branch not covered" >&amp;&amp; typeof update.$currentDate === 'object')</span> <span class="branch-0 cbranch-no" title="branch not covered" >{ for (const k of Object.keys(update.$currentDate)) { updDoc[k] = new Date(); } } </span>for (const [key, val] of Object.entries(update <span class="branch-0 cbranch-no" title="branch not covered" >|| {})</span>) { if (key &amp;&amp; !key.startsWith('$')) <span class="branch-0 cbranch-no" title="branch not covered" >{ updDoc[key] = val; } </span>} const result = await this.execWithDDLRetry(sql, { docForCreate: {}, docForMigrate: updDoc, allowColumnMigrate: this.options.migrateOnUpdate }); return { matchedCount, modifiedCount: result.affectedRows || result.rowCount || result.changes || 0, acknowledged: true }; }
+    async updateMany(query, update) { await this.initialize(); const preCountSQL = this.adapter.buildCount(this.name, query); const preCountRes = await this.execWithDDLRetry(preCountSQL, { docForCreate: {}, allowColumnMigrate: false }); const preRow = preCountRes.rows?.[0] <span class="branch-0 cbranch-no" title="branch not covered" >|| preCountRes[0];</span> const matchedCount = parseInt(preRow?.count <span class="branch-0 cbranch-no" title="branch not covered" >|| 0)</span>; const sql = this.adapter.buildUpdateMany(this.name, query, update); const updDocMany = {}; Object.assign(updDocMany, update?.$set || {}); if (update?.$currentDate <span class="branch-0 cbranch-no" title="branch not covered" >&amp;&amp; typeof update.$currentDate === 'object')</span> <span class="branch-0 cbranch-no" title="branch not covered" >{ for (const k of Object.keys(update.$currentDate)) { updDocMany[k] = new Date(); } } </span>for (const [key, val] of Object.entries(update <span class="branch-0 cbranch-no" title="branch not covered" >|| {})</span>) { if (key &amp;&amp; !key.startsWith('$')) <span class="branch-0 cbranch-no" title="branch not covered" >{ updDocMany[key] = val; } </span>} const result = await this.execWithDDLRetry(sql, { docForCreate: {}, docForMigrate: updDocMany, allowColumnMigrate: this.options.migrateOnUpdate }); return { matchedCount, modifiedCount: result.affectedRows || result.rowCount || result.changes <span class="branch-0 cbranch-no" title="branch not covered" >|| 0,</span> acknowledged: true }; }
+    async upsertOne(query, update, insertDoc = {}) { await this.initialize(); const res = await this.updateOne(query, update); if ((res.modifiedCount || 0) === 0) { const eqs = {}; for (const [k, v] of Object.entries(query <span class="branch-0 cbranch-no" title="branch not covered" >|| {})</span>) { if (v &amp;&amp; typeof v === 'object' <span class="branch-0 cbranch-no" title="branch not covered" >&amp;&amp; '$eq' in v)</span> <span class="branch-0 cbranch-no" title="branch not covered" >eqs[k] = v.$eq; </span>else if (v === null || typeof v !== 'object') eqs[k] = v; } const base = Object.assign({}, eqs, insertDoc, update?.$set <span class="branch-0 cbranch-no" title="branch not covered" >|| {})</span>; const r = await this.insertOne(base); return { upserted: true, insertedId: r.insertedId, acknowledged: true }; }<span class="branch-0 cbranch-no" title="branch not covered" > return { upserted: false, acknowledged: true }; }</span>
+    async deleteOne(query) { await this.initialize(); const sql = this.adapter.buildDeleteOne(this.name, query); const result = await this.execWithDDLRetry(sql, { docForCreate: {}, allowColumnMigrate: false }); return { deletedCount: result.affectedRows || result.rowCount || result.changes <span class="branch-0 cbranch-no" title="branch not covered" >|| 0,</span> acknowledged: true }; }
+    async deleteMany(query = {}) { await this.initialize(); const sql = this.adapter.buildDeleteMany(this.name, query); const result = await this.execWithDDLRetry(sql, { docForCreate: {}, allowColumnMigrate: false }); return { deletedCount: result.affectedRows || result.rowCount || result.changes <span class="branch-0 cbranch-no" title="branch not covered" >|| 0,</span> acknowledged: true }; }
+    async countDocuments(query = {}) { await this.initialize(); const sql = this.adapter.buildCount(this.name, query); const result = await this.execWithDDLRetry(sql, { docForCreate: {}, allowColumnMigrate: false }); const row = result.rows?.[0] <span class="branch-0 cbranch-no" title="branch not covered" >|| result[0];</span> return parseInt(row?.count <span class="branch-0 cbranch-no" title="branch not covered" >|| 0)</span>; }
+    async estimatedDocumentCount() { return this.countDocuments({}); }
+    async distinct(field, query = {}) { await this.initialize(); const sql = this.adapter.buildDistinct(this.name, field, query); const result = await this.execWithDDLRetry(sql, { docForCreate: {}, allowColumnMigrate: false }); const rows = result.rows <span class="branch-0 cbranch-no" title="branch not covered" >|| result;</span> return rows.map(r =&gt; Object.values(r)[0]); }
+    async findMany(opts = {}) { await this.initialize(); const { filter = {}, projection = null, includeTotal } = opts; const sort = opts.sort <span class="branch-0 cbranch-no" title="branch not covered" >|| opts.order;</span> const limit = opts.limit; const offset = opts.offset ?? opts.skip; const page = opts.page ?? opts.pageIndex; const pageSize = opts.pageSize ?? limit; const distinct = opts.distinct; const select = opts.select ?? projection; const finalLimit = pageSize != null ? pageSize : limit; const finalSkip = page != null &amp;&amp; pageSize != null ? Math.max(0, (page - 1) * pageSize) : (offset != null ? offset : undefined); const sql = this.adapter.buildFindWithOptions(this.name, filter, select, { sort, limit: finalLimit, skip: finalSkip, distinct }); const result = await this.execWithDDLRetry(sql, { docForCreate: {}, allowColumnMigrate: false }); const items = (result.rows <span class="branch-0 cbranch-no" title="branch not covered" >|| result)</span>.map(row =&gt; this.filterHidden(row)); let total = undefined; if (includeTotal) { const csql = this.adapter.buildCount(this.name, filter); const cres = await this.execWithDDLRetry(csql, { docForCreate: {}, allowColumnMigrate: false }); const row = cres.rows?.[0] <span class="branch-0 cbranch-no" title="branch not covered" >|| cres[0];</span> total = parseInt(row?.count <span class="branch-0 cbranch-no" title="branch not covered" >|| 0)</span>; } return { items, total, page: page != null ? page : undefined, pageSize: pageSize != null ? pageSize : finalLimit }; }
+    async aggregate(pipeline) { await this.initialize(); const sql = this.adapter.buildAggregate(this.name, pipeline); const result = await this.adapter.execute(sql); return (result.rows <span class="branch-0 cbranch-no" title="branch not covered" >|| result)</span>.map(row =&gt; this.filterHidden(row)); }
+    async createIndex(field, options = {}) { const name = options.name || `idx_${this.name}_${field.replace(/\./g, '_')}`; const unique = options.unique <span class="branch-0 cbranch-no" title="branch not covered" >? 'UNIQUE' </span>: ''; const type = this.database === 'pg' &amp;&amp; options.type <span class="branch-0 cbranch-no" title="branch not covered" >? `USING ${options.type.toUpperCase()}` </span>: ''; if (this.database === 'mysql') { const existing = await this.adapter.execute(`SHOW INDEX FROM ${this.name} WHERE Key_name = '${name}'`); const rows = existing.rows <span class="branch-0 cbranch-no" title="branch not covered" >|| existing;</span> if (!rows || rows.length === 0) { await this.adapter.execute(`CREATE ${unique} INDEX ${name} ON ${this.name} (${field})`.trim()); } } else { await this.adapter.execute(`CREATE ${unique} INDEX IF NOT EXISTS ${name} ON ${this.name} ${type} (${field})`.trim()); } return { acknowledged: true }; }
+    async dropColumn(column) { if (this.database === 'sqlite') throw new Error('SQLite does not support DROP COLUMN'); await this.adapter.execute(`ALTER TABLE ${this.name} DROP COLUMN ${column}`); if (this.tableSchema <span class="branch-0 cbranch-no" title="branch not covered" >&amp;&amp; this.tableSchema.columns)</span> <span class="branch-0 cbranch-no" title="branch not covered" >{ delete this.tableSchema.columns[column]; } </span>return { acknowledged: true }; }
+}
+&nbsp;
+export const createSQLAdapter = (config = {}) =&gt; {
+    const { database = 'sqlite', execute, queryBuilder } = config;
+    if (!execute) <span class="branch-0 cbranch-no" title="branch not covered" >throw new Error('execute function is required');</span>
+    if (!queryBuilder) <span class="branch-0 cbranch-no" title="branch not covered" >throw new Error('queryBuilder is required (pass createQueryBuilder({...}))');</span>
+    const adapter = {
+        database,
+        async execute(sql, params = []) { const result = await execute(sql, params); return normalizeResult(result, database); },
+        async tableExists(tableName) { try { const sql = database === 'pg' ? `SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '${tableName}')` : database === 'mysql' ? `SELECT COUNT(*) as count FROM information_schema.tables WHERE table_name = '${tableName}' AND table_schema = DATABASE()` : `SELECT name FROM sqlite_master WHERE type='table' AND name='${tableName}'`; const result = await this.execute(sql); const row = result.rows?.[0] || result[0]; return !!(row?.exists || row?.count || row?.name); } <span class="branch-0 cbranch-no" title="branch not covered" >catch (e) { return false; } </span>},
+        async getTableSchema(tableName) { const sql = database === 'pg' ? `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '${tableName}'` : database === 'mysql' ? `SELECT COLUMN_NAME, DATA_TYPE FROM information_schema.columns WHERE TABLE_NAME = '${tableName}' AND TABLE_SCHEMA = DATABASE()` : `PRAGMA table_info(${tableName})`; const result = await this.execute(sql); const rows = result.rows <span class="branch-0 cbranch-no" title="branch not covered" >|| result;</span> const schema = { columns: {} }; rows.forEach(row =&gt; { const columnName = row.column_name || row.COLUMN_NAME || row.name; const columnType = row.data_type || row.DATA_TYPE || row.type; if (!columnName || columnName === '_id' || columnName.startsWith('created_') || columnName.startsWith('updated_')) return; schema.columns[columnName] = String(columnType <span class="branch-0 cbranch-no" title="branch not covered" >|| '')</span>.toUpperCase(); }); return schema; },
+        buildInsert(tableName, documents, options = {}) { return queryBuilder.insertMany(tableName, documents, database, options); },
+        buildFind(tableName, query, projection) { return queryBuilder.collection(tableName, database).find(query, projection).toSQL(); },
+        buildFindWithOptions(tableName, query, projection, options = {}) { let q = queryBuilder.collection(tableName, database).find(query, projection); if (options.sort) q = q.sort(options.sort); if (options.limit != null) q = q.limit(options.limit); if (options.skip != null) q = q.skip(options.skip); if (options.distinct) q = q.distinct(); return q.toSQL(); },
+        buildUpdateOne(tableName, query, update) { return queryBuilder.collection(tableName, database).updateOne(query, update); },
+        buildUpdateMany(tableName, query, update) { return queryBuilder.collection(tableName, database).updateMany(query, update); },
+        buildDeleteOne(tableName, query) { return queryBuilder.collection(tableName, database).deleteOne(query); },
+        buildDeleteMany(tableName, query) { return queryBuilder.collection(tableName, database).deleteMany(query, { allowDeleteAll: true }); },
+        buildCount(tableName, query) { return queryBuilder.collection(tableName, database).countDocuments(query); },
+        buildAggregate(tableName, pipeline) { return queryBuilder.aggregate(pipeline)(tableName, database); },
+        buildDistinct(tableName, field, query) { return queryBuilder.collection(tableName, database).distinct(field, query); },
+        collection(name, config) { return new SQLCollection(name, this, config); },
+        async dropCollection(name) { const sql = this.database === 'pg' ? `DROP TABLE IF EXISTS ${name} CASCADE` : `DROP TABLE IF EXISTS ${name}`; await this.execute(sql); return { acknowledged: true }; },
+        async listCollections() { const sql = database === 'pg' ? `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'` : database === 'mysql' ? `SELECT TABLE_NAME FROM information_schema.tables WHERE TABLE_SCHEMA = DATABASE()` : `SELECT name FROM sqlite_master WHERE type='table'`; const result = await this.execute(sql); const rows = result.rows <span class="branch-0 cbranch-no" title="branch not covered" >|| result;</span> return rows.map(row =&gt; row.table_name || row.TABLE_NAME || row.name); },
+        async createTableWithSchema(tableName, schema = {}) { let mapped = schema; if (schema &amp;&amp; schema.properties) { const props = schema.properties; const req = Array.isArray(schema.required) ? new Set(schema.required) <span class="branch-0 cbranch-no" title="branch not covered" >: new Set();</span> const toType = (p) =&gt; { if (p.type === 'string') { if (p.format === 'date-time') return database === 'pg' ? 'TIMESTAMP' : database === 'mysql' ? 'DATETIME' : 'TEXT'; if (p.maxLength <span class="branch-0 cbranch-no" title="branch not covered" >&amp;&amp; database === 'pg')</span> <span class="branch-0 cbranch-no" title="branch not covered" >return `VARCHAR(${p.maxLength})`; </span>if (p.maxLength <span class="branch-0 cbranch-no" title="branch not covered" >&amp;&amp; database === 'mysql')</span> <span class="branch-0 cbranch-no" title="branch not covered" >return `VARCHAR(${p.maxLength})`; </span>return database === 'pg' ? 'TEXT' : database === 'mysql' ? 'VARCHAR(255)' : 'TEXT'; } if (p.type === 'integer') return database === 'pg' ? 'INTEGER' : database === 'mysql' ? 'INT' : 'INTEGER'; if (p.type === 'number') <span class="branch-0 cbranch-no" title="branch not covered" >return database === 'pg' ? 'DECIMAL(20,6)' : database === 'mysql' ? 'DECIMAL(20,6)' : 'REAL'; </span>if (p.type === 'boolean') return database === 'pg' ? 'BOOLEAN' : database === 'mysql' ? 'TINYINT(1)' : 'INTEGER'; if (p.type === 'array' || p.type === 'object') return database === 'pg' ? 'JSONB' : database === 'mysql' ? 'JSON' : 'TEXT';<span class="branch-0 cbranch-no" title="branch not covered" > return database === 'pg' ? 'TEXT' <span class="branch-0 cbranch-no" title="branch not covered" ></span>: database === 'mysql' ? 'VARCHAR(255)' : 'TEXT';</span> }; const m = {}; for (const [k, p] of Object.entries(props)) { m[k] = { type: toType(p), required: req.has(k), default: p.default }; } mapped = m; } const coll = new SQLCollection(tableName, this, { schema: mapped }); await coll.createTable({}); return { acknowledged: true }; },
+        async addColumn(tableName, columnName, type, options = {}) { const nullable = options.required <span class="branch-0 cbranch-no" title="branch not covered" >? ' NOT NULL' </span>: ''; const unique = options.unique <span class="branch-0 cbranch-no" title="branch not covered" >? ' UNIQUE' </span>: ''; const def = options.default !== undefined ? ` DEFAULT ${escapeValue(typeof options.default === 'function' <span class="branch-0 cbranch-no" title="branch not covered" >? options.default() </span>: options.default, database)}` <span class="branch-0 cbranch-no" title="branch not covered" >: '';</span> const addKw = database === 'mysql' ? 'ADD' : 'ADD COLUMN'; const sql = `ALTER TABLE ${tableName} ${addKw} ${columnName} ${type}${nullable}${unique}${def}`; await this.execute(sql); return { acknowledged: true }; },
+        async renameColumn(tableName, oldName, newName) { const sql = `ALTER TABLE ${tableName} RENAME COLUMN ${oldName} TO ${newName}`; await this.execute(sql); return { acknowledged: true }; },
+        async modifyColumn(tableName, columnName, newType, options = {}) { if (database === 'sqlite') throw new Error('SQLite does not support MODIFY COLUMN'); const nullable = options.required ? ' NOT NULL' <span class="branch-0 cbranch-no" title="branch not covered" >: '';</span> const unique = options.unique <span class="branch-0 cbranch-no" title="branch not covered" >? ' UNIQUE' </span>: ''; const def = options.default !== undefined <span class="branch-0 cbranch-no" title="branch not covered" >? ` DEFAULT ${escapeValue(typeof options.default === 'function' ? options.default() : options.default, database)}` </span>: ''; const sql = database === 'pg' ? `ALTER TABLE ${tableName} ALTER COLUMN ${columnName} TYPE ${newType}` : `ALTER TABLE ${tableName} MODIFY COLUMN ${columnName} ${newType}${nullable}${unique}${def}`; await this.execute(sql); return { acknowledged: true }; },
+        async dropIndex(tableName, indexName) { const sql = database === 'pg' ? `DROP INDEX IF EXISTS ${indexName}` : database === 'mysql' ? `DROP INDEX ${indexName} ON ${tableName}` : `DROP INDEX IF EXISTS ${indexName}`; await this.execute(sql); return { acknowledged: true }; },
+        async dropColumn(tableName, columnName) { return this.collection(tableName).dropColumn(columnName); },
+        async createIndex(tableName, field, options = {}) { return this.collection(tableName).createIndex(field, options); },
+    };
+    return adapter;
+};
+&nbsp;
+export const createSchemalessAdapter = (client, database = 'memory', { debug = false } = {}) =&gt; {
+    const qb = createQueryBuilder({ filterOps, exprOps, updateOps, stageHandlers, debug });
+    let execute;
+    if (database === 'memory') {
+        return createMemorySchemaless();
+    } else if (database === 'sqlite') {
+        execute = async (sql, params = []) =&gt; {
+            const up = sql.trim().toUpperCase();
+            if (up.startsWith('SELECT') || up.startsWith('PRAGMA')) return client.prepare(sql).all(...params);
+            const info = client.prepare(sql).run(...params);
+            return { changes: info.changes, lastInsertRowid: info.lastInsertRowid };
+        };
+    } else if (database === 'pg') {
+        execute = async (sql, params = []) =&gt; {
+            const res = await client.query(sql, params);
+            return { rows: res.rows, rowCount: res.rowCount };
+        };
+    } else if (database === 'mysql') {
+        execute = async (sql, params = []) =&gt; {
+            return await client.execute(sql, params);
+        };
+    }<span class="branch-0 cbranch-no" title="branch not covered" > else {</span>
+<span class="cstat-no" title="statement not covered" >        throw new Error('Unsupported database');</span>
+<span class="cstat-no" title="statement not covered" >    }</span>
+    return { adapter: createSQLAdapter({ database, execute, queryBuilder: qb, debug }), client };
+};
+import { createQueryBuilder, filterOps, exprOps, updateOps, stageHandlers } from './index.js';
+import { createMemorySchemaless } from './adapter/memory/adapter.js';
+ 
+&nbsp;</pre></td></tr></table></pre>
+
+                <div class='push'></div><!-- for sticky footer -->
+            </div><!-- /wrapper -->
+            <div class='footer quiet pad2 space-top1 center small'>
+                Code coverage generated by
+                <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
+                at 2025-11-20T17:46:01.488Z
+            </div>
+        <script src="../../prettify.js"></script>
+        <script>
+            window.onload = function () {
+                prettyPrint();
+            };
+        </script>
+        <script src="../../sorter.js"></script>
+        <script src="../../block-navigation.js"></script>
+    </body>
+</html>
+    

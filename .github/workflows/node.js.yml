@@ -13,17 +13,86 @@ jobs:
     build:
         runs-on: ubuntu-latest
 
-        strategy:
-            matrix:
-                node-version: [18.x]
+        services:
+            postgres:
+                image: postgres:15-alpine
+                env:
+                    POSTGRES_USER: test
+                    POSTGRES_PASSWORD: secret
+                    POSTGRES_DB: testdb
+                ports:
+                    - 5432:5432
+                options: >-
+                    --health-cmd "pg_isready -U test -d testdb" --health-interval 10s --health-timeout 5s --health-retries 10
+            mysql:
+                image: mysql:8.0
+                env:
+                    MYSQL_ROOT_PASSWORD: secret
+                    MYSQL_DATABASE: testdb
+                    MYSQL_USER: test
+                    MYSQL_PASSWORD: secret
+                ports:
+                    - 3306:3306
+                options: >-
+                    --health-cmd "mysqladmin ping -h 127.0.0.1 -utest -psecret" --health-interval 10s --health-timeout 5s --health-retries 10
+            mongodb:
+                image: mongo:6.0
+                env:
+                    MONGO_INITDB_ROOT_USERNAME: root
+                    MONGO_INITDB_ROOT_PASSWORD: secret
+                    MONGO_INITDB_DATABASE: testdb
+                ports:
+                    - 27017:27017
+                options: >-
+                    --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 })' --username root --password secret --authenticationDatabase admin" --health-interval 10s --health-timeout 5s --health-retries 10
+
+        env:
+            PG_HOST: localhost
+            PG_PORT: 5432
+            PG_USER: test
+            PG_PASSWORD: secret
+            PG_DB: testdb
+            MYSQL_HOST: localhost
+            MYSQL_USER: test
+            MYSQL_PASS: secret
+            MYSQL_DB: testdb
+            MONGO_HOST: localhost
+            MONGO_PORT: 27017
+            MONGO_USER: root
+            MONGO_PASSWORD: secret
+            MONGO_DB: testdb
 
         steps:
-            - uses: actions/checkout@v3
-            - name: Use Node.js ${{ matrix.node-version }}
-              uses: actions/setup-node@v3
+            - uses: actions/checkout@v4
+
+            - name: Set up Node.js
+              uses: actions/setup-node@v4
               with:
-                  node-version: ${{ matrix.node-version }}
-                  cache: "npm"
-            - run: npm ci
-            - run: npm run build --if-present
-            - run: npm test
+                  node-version: '18.x'
+                  cache: 'npm'
+
+            - name: Set up Bun
+              uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: latest
+
+            - name: Install dependencies
+              run: bun install
+
+            - name: Wait for DB services
+              shell: bash
+              run: |
+                  for i in {1..60}; do
+                    (echo > /dev/tcp/localhost/5432) && (echo > /dev/tcp/localhost/3306) && (echo > /dev/tcp/localhost/27017) && exit 0
+                    sleep 2
+                  done
+                  echo "Services not ready" && exit 1
+
+            - name: Build
+              run: bun run build --if-present
+
+            - name: Run unit tests
+              run: bun run test
+
+            - name: Run DB integration tests
+              run: bun run test:db

@@ -4,9 +4,9 @@
 
 [![tests](https://github.com/kethan/mosql/actions/workflows/node.js.yml/badge.svg)](https://github.com/kethan/mosql/actions/workflows/node.js.yml) [![Version](https://img.shields.io/npm/v/umosql.svg?color=success&style=flat-square)](https://www.npmjs.com/package/umosql) [![Badge size](https://deno.bundlejs.com/badge?q=umosql&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql)
 
-[![Version](https://img.shields.io/npm/v/umosql.svg?color=success&style=flat-square)](https://www.npmjs.com/package/umosql) [![Badge size](https://deno.bundlejs.com/badge?q=umosq/lite&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql/lite)
+[![Version](https://img.shields.io/npm/v/umosql.svg?color=success&style=flat-square)](https://www.npmjs.com/package/umosql) [![Badge size](https://deno.bundlejs.com/badge?q=umosql/lite&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql/lite)
 
-[![Version](https://img.shields.io/npm/v/umosql.svg?color=success&style=flat-square)](https://www.npmjs.com/package/umosql) [![Badge size](https://deno.bundlejs.com/badge?q=umosql/timy&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql/tiny)
+[![Version](https://img.shields.io/npm/v/umosql.svg?color=success&style=flat-square)](https://www.npmjs.com/package/umosql) [![Badge size](https://deno.bundlejs.com/badge?q=umosql/tiny&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql/tiny)
 
 ---
 
@@ -23,17 +23,18 @@ npm i umosql/tiny
 
 | Feature                  | Full               | Lite               | Tiny               |
 | ------------------------ | ------------------ | ------------------ | ------------------ |
-| **Size**                 | ~600 lines         | ~450 lines         | ~300 lines         |
+| **Size (gzip)**          | [![Full](https://deno.bundlejs.com/badge?q=umosql/lite&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql) | [![Lite](https://deno.bundlejs.com/badge?q=umosql/lite&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql/lite) | [![Tiny](https://deno.bundlejs.com/badge?q=umosql/tiny&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql/tiny) |
 | **JSON Paths**           | ✅                 | ✅                 | ❌                 |
-| **JSON Updates**         | ✅                 | ✅                 | ❌                 |
-| **Aggregation**          | ✅                 | ❌                 | ❌                 |
-| **Filter Operators**     | ✅ All             | ✅ All             | ✅ All             |
+| **JSON Updates**         | ✅                 | ✅ Basic           | ❌                 |
+| **Aggregation**          | ✅                 | ✅ Basic           | ✅ Basic           |
+| **Filter Operators**     | ✅ All             | ✅ All             | ✅ Basic           |
 | **Expression Operators** | ✅ All             | ✅ Basic           | ✅ Basic           |
-| **Update Operators**     | ✅ All             | ✅ All             | ✅ All             |
+| **Update Operators**     | ✅ All             | ✅ Basic           | ✅ $set            |
 | **Collection API**       | ✅                 | ✅                 | ✅                 |
 | **FindQuery**            | ✅                 | ✅                 | ✅                 |
 | **Extend/Add**           | ✅                 | ✅                 | ✅                 |
 | **Multi-DB**             | ✅ PG/MySQL/SQLite | ✅ PG/MySQL/SQLite | ✅ PG/MySQL/SQLite |
+
 
 ## 🎯 When to Use Which Version?
 
@@ -70,24 +71,24 @@ Transform MongoDB queries into SQL (PostgreSQL, MySQL, SQLite) with a universal 
 
 ## 🌟 Features
 
-- ✅ **MongoDB-compatible query syntax** - Use what you already know
-- ✅ **SQL generation** - PostgreSQL, MySQL, SQLite support
-- ✅ **JSON field support** - Query nested objects (Full & Lite versions)
-- ✅ **Aggregation pipelines** - $group, $match, $project, etc. (Full version)
-- ✅ **Universal adapters** - SQL, Memory, PouchDB, Firebase
-- ✅ **REST API ready** - Build APIs in minutes
-- ✅ **Serverless friendly** - Works anywhere JavaScript runs
-- ✅ **Three versions** - Choose your feature set and bundle size
+- ✅ **MongoDB-compatible query syntax**
+- ✅ **SQL generation** for PostgreSQL, MySQL, SQLite
+- ✅ **JSON field support** for nested objects (Full & Lite)
+- ✅ **Aggregation pipelines** ($group, $match, $project, etc. in Full)
+- ✅ **Schemaless adapters** for memory, MongoDB, SQLite, PostgreSQL, MySQL
+- ✅ **Auto ID creation strategies** (`auto`, `mongo`, `custom`) with default `_id`
+- ✅ **Serverless friendly** — works anywhere JavaScript runs
+- ✅ **Three versions** — choose your feature set and bundle size
 
 ---
 
 ## 📦 Three Versions
 
-| Version  | Size       | JSON Support | Aggregation | Use Case                        |
-| -------- | ---------- | ------------ | ----------- | ------------------------------- |
-| **Full** | ~600 lines | ✅ Yes       | ✅ Yes      | Complete MongoDB compatibility  |
-| **Lite** | ~450 lines | ✅ Yes       | ❌ No       | JSON fields without aggregation |
-| **Tiny** | ~300 lines | ❌ No        | ❌ No       | Simple CRUD, smallest bundle    |
+| Version  | Size (gzip) | JSON Support | Aggregation | Use Case                        |
+| -------- | ----------- | ------------ | ----------- | ------------------------------- |
+| **Full** | ~6.61 kB    | ✅ Yes       | ✅ Yes      | Complete MongoDB compatibility  |
+| **Lite** | ~5.99 kB    | ✅ Yes       | ❌ No       | JSON without aggregation        |
+| **Tiny** | ~4.95 kB    | ❌ No        | ✅ Basic    | Minimal ops, smallest bundle    |
 
 ---
 
@@ -96,7 +97,7 @@ Transform MongoDB queries into SQL (PostgreSQL, MySQL, SQLite) with a universal 
 ### Installation
 
 ```bash
-pm i umosql
+npm i umosql
 npm i umosql/lite
 npm i umosql/tiny
 ```
@@ -113,8 +114,8 @@ users.find({ age: { $gte: 18 } }).toSQL();
 // SELECT * FROM users WHERE age >= 18
 
 users.updateOne(
-	{ email: "alice@example.com" },
-	{ $set: { status: "active" }, $inc: { loginCount: 1 } }
+    { email: "alice@example.com" },
+    { $set: { status: "active" }, $inc: { loginCount: 1 } }
 );
 // UPDATE users SET status = 'active', loginCount = loginCount + 1
 // WHERE email = 'alice@example.com' LIMIT 1
@@ -125,6 +126,140 @@ users.insertMany([
 ]);
 // INSERT INTO users (name, age) VALUES ('Alice', 25), ('Bob', 30)
 ```
+
+### Small Examples
+
+PostgreSQL (JSON and estimated count):
+
+```javascript
+import pkg from 'pg';
+import { createSchemalessAdapter } from './src/schemaless.js';
+const client = new pkg.Client({ host, user, password, database });
+await client.connect();
+const { adapter } = createSchemalessAdapter(client, 'pg');
+const users = adapter.collection('users');
+await users.insertOne({ name: 'Alice', profile: { score: 85 } });
+await users.updateOne({ name: 'Alice' }, { $inc: { 'profile.score': 5 } });
+console.log(await users.estimatedDocumentCount());
+await client.end();
+```
+
+MySQL (JSON update and count):
+
+```javascript
+import mysql from 'mysql2/promise';
+import { createSchemalessAdapter } from './src/schemaless.js';
+const conn = await mysql.createConnection({ host, user, password, database });
+const { adapter } = createSchemalessAdapter(conn, 'mysql');
+const users = adapter.collection('users');
+await users.insertOne({ name: 'Alice', profile: { score: 85 } });
+await users.updateOne({ name: 'Alice' }, { $set: { 'profile.score': 90 } });
+console.log(await users.estimatedDocumentCount());
+await conn.end();
+```
+
+MongoDB (drop-in behavior):
+
+```javascript
+import { createMongoSchemaless } from './src/adapter/mongodb/adapter.js';
+const { adapter, client } = await createMongoSchemaless({ host, user, password, database });
+const users = adapter.collection('users');
+await users.insertOne({ name: 'Alice', profile: { score: 85 } });
+await users.updateOne({ name: 'Alice' }, { $inc: { 'profile.score': 5 } });
+console.log(await users.estimatedDocumentCount());
+await client.close();
+```
+
+SQLite (in-memory):
+
+```javascript
+import Database from 'better-sqlite3';
+import { createSchemalessAdapter } from './src/schemaless.js';
+const { adapter } = createSchemalessAdapter(new Database(':memory:'), 'sqlite');
+const users = adapter.collection('users');
+await users.insertOne({ name: 'Alice', profile: { score: 85 } });
+await users.updateOne({ name: 'Alice' }, { $inc: { 'profile.score': 5 } });
+console.log(await users.estimatedDocumentCount());
+```
+
+### Non‑Mongo Methods (SQL adapter helpers)
+
+- `findMany({ filter, projection, sort, limit, skip, page, pageSize, includeTotal })`
+  - Returns `{ items, total?, page?, pageSize? }`
+  - Convenience pagination with optional total computation
+- `createTableWithSchema(tableName, jsonSchema)`
+  - Creates a table from JSON Schema properties and `required`
+- `getTableSchema(tableName)`
+  - Reads schema from information_schema / PRAGMA
+- `addColumn(table, name, type, { required, unique, default })`
+- `renameColumn(table, old, new)`
+- `modifyColumn(table, name, newType, { required, unique, default })`
+- `listCollections()`
+- `dropColumn(table, name)`
+- `dropIndex(table, indexName)`
+
+APIs above mirror common SQL DDL. See:
+- PostgreSQL: https://www.postgresql.org/docs/current/sql-commands.html
+- MySQL: https://dev.mysql.com/doc/refman/8.0/en/sql-statements.html
+- SQLite: https://sqlite.org/lang.html
+
+## Serverless Examples
+
+- Neon (Postgres over HTTP): `examples/serverless-neon.js`
+- Turso (SQLite over HTTP): `examples/serverless-turso.js`
+
+Env vars:
+- Neon: `NEON_HTTP_URL`, `NEON_API_KEY`
+- Turso: `TURSO_HTTP_URL`, `TURSO_TOKEN`
+
+Notes:
+- Uses `createSQLAdapter` with a custom `execute(sql, params)` that calls the provider’s HTTP API.
+- Compose queries using the QueryBuilder: `qb.collection('users', 'pg'|'mysql'|'sqlite')`.
+- DDL and JSON operators vary by backend; see vendor docs above.
+
+### Drizzle Serverless
+
+- Neon (drizzle‑orm/neon‑http): `examples/serverless-neon-drizzle.js`
+- Turso (drizzle‑orm/libsql/http): `examples/serverless-turso-drizzle.js`
+
+Examples mirror the provider docs; install drizzle adapters to run them.
+
+## Husky
+
+- Install: add dev dep `husky` and ensure `"prepare": "husky install"` in `package.json` (already set).
+- Initialize: run `npx husky init` or `npx husky install` after install.
+- Add a pre-commit hook:
+  - `npx husky add .husky/pre-commit "npm run test"`
+  - Optionally include lint/typecheck commands.
+- Windows PowerShell: if scripts are blocked, enable with `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` then rerun the Husky commands.
+Tiny/Lite usage:
+
+```javascript
+import tiny from 'umosql/tiny';
+import lite from 'umosql/lite';
+tiny.filter({ age: { $eq: 25 } }, 'sqlite');
+lite.filter({ 'profile.country': 'FR' }, 'pg');
+```
+
+## ⚙️ Custom Builds (Ultra-Minimal)
+
+- You can create your own builder with only the operators you need to reduce bundle size.
+- Example:
+
+```javascript
+import { createQueryBuilder, filterOps, exprOps, updateOps } from './src/index.js';
+
+const custom = createQueryBuilder({
+  filterOps: { $eq: filterOps.$eq, $in: filterOps.$in },
+  exprOps: { $add: exprOps.$add, $upper: exprOps.$upper },
+  updateOps: { $set: updateOps.$set },
+  stageHandlers: {} // no aggregation
+});
+
+export const { collection, filter } = custom;
+```
+
+This approach lets you tailor the library to your use case and keep bundles extremely small.
 
 ---
 
@@ -146,9 +281,9 @@ users.insertMany([
 - [Filter Operators](#filter-operators)
 - [Update Operators](#update-operators)
 - [Expression Operators](#expression-operators)
-- [REST API Examples](#rest-api-examples)
-- [Universal Adapters](#universal-adapters)
 - [Custom Operators](#custom-operators)
+- [Operator Support Matrix](#operator-support-matrix)
+- [Schemaless Adapters](#schemaless-adapters)
 
 ---
 
@@ -1084,29 +1219,6 @@ orders.aggregate([
 ```
 
 ---
-
-## 🌐 REST API Examples
-
-### Complete Express Server
-
-```javascript
-import express from "express";
-import { collection } from "umosql";
-import pg from "pg";
-
-const app = express();
-app.use(express.json());
-
-// Database connection
-const pool = new pg.Pool({
-	host: process.env.DB_HOST || "localhost",
-	database: process.env.DB_NAME || "mydb",
-	user: process.env.DB_USER || "postgres",
-	password: process.env.DB_PASSWORD,
-});
-
-// Middleware to parse MongoDB query
-const parseQuery = (req, res, next) => {
 	try {
 		req.mongoQuery = req.query.q ? JSON.parse(req.query.q) : {};
 		req.queryOptions = {
@@ -1317,192 +1429,6 @@ app.use((err, req, res, next) => {
 		.json({ error: "Internal server error", details: err.message });
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-	console.log(`🚀 API running on http://localhost:${PORT}`);
-	console.log(`\nExamples:`);
-	console.log(`  GET  /messages`);
-	console.log(`  GET  /messages?q={"unread":true}`);
-	console.log(
-		`  GET  /messages?q={"priority":{"$gte":5}}&sort={"createdAt":-1}`
-	);
-	console.log(`  GET  /messages/123`);
-	console.log(`  POST /messages`);
-	console.log(`  PUT  /messages/123`);
-	console.log(`  DELETE /messages/123`);
-});
-```
-
-### API Usage Examples
-
-```bash
-# List all messages
-curl http://localhost:3000/messages
-
-# Filter unread messages
-curl "http://localhost:3000/messages?q={\"unread\":true}"
-
-# Filter with $in
-curl "http://localhost:3000/messages?q={\"status\":{\"\\$in\":[\"pending\",\"active\"]}}"
-
-# Filter with $gte and $lte
-curl "http://localhost:3000/messages?q={\"priority\":{\"\\$gte\":5,\"\\$lte\":10}}"
-
-# Filter with multiple conditions
-curl "http://localhost:3000/messages?q={\"unread\":true,\"priority\":{\"\\$gte\":5}}"
-
-# Filter with $or
-curl "http://localhost:3000/messages?q={\"\\$or\":[{\"priority\":10},{\"urgent\":true}]}"
-
-# With pagination
-curl "http://localhost:3000/messages?limit=10&skip=20"
-
-# With sorting
-curl "http://localhost:3000/messages?sort={\"createdAt\":-1,\"priority\":-1}"
-
-# With field projection
-curl "http://localhost:3000/messages?fields={\"title\":1,\"body\":1,\"createdAt\":1}"
-
-# Combined query
-curl "http://localhost:3000/messages?q={\"unread\":true}&sort={\"priority\":-1}&limit=5&fields={\"title\":1}"
-
-# Count documents
-curl "http://localhost:3000/messages/count"
-curl "http://localhost:3000/messages/count?q={\"unread\":true}"
-
-# Get single message
-curl http://localhost:3000/messages/123
-
-# Create message
-curl -X POST http://localhost:3000/messages \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Hello","body":"World","priority":5,"unread":true}'
-
-# Bulk create
-curl -X POST http://localhost:3000/messages/bulk \
-  -H "Content-Type: application/json" \
-  -d '[
-    {"title":"Message 1","priority":5},
-    {"title":"Message 2","priority":3}
-  ]'
-
-# Update message (partial)
-curl -X PATCH http://localhost:3000/messages/123 \
-  -H "Content-Type: application/json" \
-  -d '{"unread":false,"readAt":"2024-01-01T12:00:00Z"}'
-
-# Replace message
-curl -X PUT http://localhost:3000/messages/123 \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Updated","body":"New content","priority":10}'
-
-# Bulk update
-curl -X PATCH "http://localhost:3000/messages?q={\"unread\":true}" \
-  -H "Content-Type: application/json" \
-  -d '{"unread":false}'
-
-# Delete message
-curl -X DELETE http://localhost:3000/messages/123
-
-# Bulk delete
-curl -X DELETE "http://localhost:3000/messages?q={\"priority\":{\"\\$lt\":3}}"
-```
-
-### Frontend Usage (JavaScript)
-
-```javascript
-// Fetch API wrapper
-class APIClient {
-	constructor(baseURL) {
-		this.baseURL = baseURL;
-	}
-
-	async find(collection, query = {}, options = {}) {
-		const params = new URLSearchParams();
-		if (Object.keys(query).length) params.append("q", JSON.stringify(query));
-		if (options.sort) params.append("sort", JSON.stringify(options.sort));
-		if (options.limit) params.append("limit", options.limit);
-		if (options.skip) params.append("skip", options.skip);
-		if (options.fields) params.append("fields", JSON.stringify(options.fields));
-
-		const response = await fetch(`${this.baseURL}/${collection}?${params}`);
-		return response.json();
-	}
-
-	async findOne(collection, id) {
-		const response = await fetch(`${this.baseURL}/${collection}/${id}`);
-		if (!response.ok) throw new Error("Not found");
-		return response.json();
-	}
-
-	async create(collection, data) {
-		const response = await fetch(`${this.baseURL}/${collection}`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify(data),
-		});
-		return response.json();
-	}
-
-	async update(collection, id, data) {
-		const response = await fetch(`${this.baseURL}/${collection}/${id}`, {
-			method: "PATCH",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify(data),
-		});
-		return response.json();
-	}
-
-	async delete(collection, id) {
-		const response = await fetch(`${this.baseURL}/${collection}/${id}`, {
-			method: "DELETE",
-		});
-		return response.json();
-	}
-
-	async count(collection, query = {}) {
-		const params = new URLSearchParams();
-		if (Object.keys(query).length) params.append("q", JSON.stringify(query));
-
-		const response = await fetch(
-			`${this.baseURL}/${collection}/count?${params}`
-		);
-		return response.json();
-	}
-}
-
-// Usage
-const api = new APIClient("http://localhost:3000");
-
-// Get unread messages with high priority
-const messages = await api.find(
-	"messages",
-	{ unread: true, priority: { $gte: 5 } },
-	{ sort: { createdAt: -1 }, limit: 10 }
-);
-
-// Get messages by status
-const pending = await api.find("messages", {
-	status: { $in: ["pending", "processing"] },
-});
-
-// Create message
-const newMessage = await api.create("messages", {
-	title: "New Message",
-	body: "Content here",
-	priority: 5,
-});
-
-// Update message
-await api.update("messages", "123", {
-	unread: false,
-	readAt: new Date().toISOString(),
-});
-
-// Count unread
-const { count } = await api.count("messages", { unread: true });
-```
-
 ---
 
 ## 🔌 Universal Adapters (TODO)
@@ -1696,6 +1622,341 @@ users.updateOne(
 );
 // UPDATE users SET tags = array_append(tags, 'featured') WHERE id = 1
 ```
+## Operator Support Matrix
+
+### Filter Operators
+
+| Operator | Memory | SQLite | MySQL | PostgreSQL | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `$eq` | ✅ | ✅ | ✅ | ✅ | `=` |
+| `$ne` | ✅ | ✅ | ✅ | ✅ | `!=` / `<>` |
+| `$gt` | ✅ | ✅ | ✅ | ✅ | `>` |
+| `$gte` | ✅ | ✅ | ✅ | ✅ | `>=` |
+| `$lt` | ✅ | ✅ | ✅ | ✅ | `<` |
+| `$lte` | ✅ | ✅ | ✅ | ✅ | `<=` |
+| `$in` | ✅ | ✅ | ✅ | ✅ | Empty array handled: `= 1 AND 1 = 0` |
+| `$nin` | ✅ | ✅ | ✅ | ✅ | Empty array handled: `= 1 OR 1 = 1` |
+| `$like` | ✅ | ✅ | ✅ | ✅ | `%` `_` patterns |
+| `$ilike` | ✅ | ✅ | ✅ | ✅ | PG: `ILIKE`; others: `LOWER(field) LIKE LOWER(value)` |
+| `$nlike` | ✅ | ✅ | ✅ | ✅ | `NOT LIKE` |
+| `$nilike` | ✅ | ✅ | ✅ | ✅ | PG: `NOT ILIKE`; others: `NOT LIKE LOWER(...)` |
+| `$regex` | ✅ | ⚠️ | ✅ | ✅ | PG: `~`; MySQL: `REGEXP`; SQLite: needs `REGEXP` UDF |
+| `$exists` | ✅ | ✅ | ✅ | ✅ | `IS NULL` / `IS NOT NULL` |
+| `$between` | ✅ | ✅ | ✅ | ✅ | `BETWEEN a AND b` |
+| `$mod` | ✅ | ✅ | ✅ | ✅ | `field % m = r` |
+| `$and` | ✅ | ✅ | ✅ | ✅ | Parenthesized conjunctions |
+| `$or` | ✅ | ✅ | ✅ | ✅ | Parenthesized disjunctions |
+| `$not` | ✅ | ✅ | ✅ | ✅ | `NOT ( ... )` |
+| `$nor` | ✅ | ✅ | ✅ | ✅ | `NOT ( ... OR ... )` |
+| `$expr` | ✅ | ✅ | ✅ | ✅ | Embed expression in filter |
+| `$type` | ✅ | — | — | — | Memory-only |
+| `$elemMatch` | ✅ | — | — | — | Memory-only |
+| `$all` | ✅ | — | — | — | Memory-only |
+| `$size` | ✅ | — | — | — | Memory-only |
+
+### Expression Operators
+
+| Operator | Memory | SQLite | MySQL | PostgreSQL | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `$add` | ✅ | ✅ | ✅ | ✅ | `+` |
+| `$subtract` | ✅ | ✅ | ✅ | ✅ | `-` |
+| `$multiply` | ✅ | ✅ | ✅ | ✅ | `*` |
+| `$divide` | ✅ | ✅ | ✅ | ✅ | `/ NULLIF(...,0)` |
+| `$mod` | ✅ | ✅ | ✅ | ✅ | `%` |
+| `$abs` | ✅ | ✅ | ✅ | ✅ | `ABS()` |
+| `$ceil` | ✅ | ✅ | ✅ | ✅ | `CEIL()` |
+| `$floor` | ✅ | ✅ | ✅ | ✅ | `FLOOR()` |
+| `$round` | ✅ | ✅ | ✅ | ✅ | `ROUND(x, p)` |
+| `$pow` | ✅ | ✅ | ✅ | ✅ | `POWER()` |
+| `$sqrt` | ✅ | ✅ | ✅ | ✅ | `SQRT()` |
+| `$concat` | ✅ | ✅ | ✅ | ✅ | PG/MySQL: `CONCAT`, SQLite: `||` |
+| `$upper` | ✅ | ✅ | ✅ | ✅ | `UPPER()` |
+| `$lower` | ✅ | ✅ | ✅ | ✅ | `LOWER()` |
+| `$substr` | ✅ | ✅ | ✅ | ✅ | `SUBSTRING()` |
+| `$trim`/`$ltrim`/`$rtrim` | ✅ | ✅ | ✅ | ✅ | `TRIM` variants |
+| `$strLen` | ✅ | ✅ | ✅ | ✅ | `LENGTH()` |
+| `$replace` | ✅ | ✅ | ✅ | ✅ | `REPLACE()` |
+| `$sum` | ✅ | ✅ | ✅ | ✅ | Aggregates; `$sum: 1` maps to `COUNT(*)` |
+| `$avg` | ✅ | ✅ | ✅ | ✅ | `AVG()` |
+| `$min` | ✅ | ✅ | ✅ | ✅ | Single: `MIN()`; multi: `LEAST()` |
+| `$max` | ✅ | ✅ | ✅ | ✅ | Single: `MAX()`; multi: `GREATEST()` |
+| `$count` | ✅ | ✅ | ✅ | ✅ | `COUNT(*)` |
+| `$stdDevPop`/`$stdDevSamp` | ✅ | ✅ | ✅ | ✅ | `STDDEV_*()` |
+| `$eq`,`$ne`,`$gt`,`$gte`,`$lt`,`$lte` | ✅ | ✅ | ✅ | ✅ | Comparison in expressions |
+| `$cmp` | ✅ | ✅ | ✅ | ✅ | Returns -1/0/1 |
+| `$in`/`$nin` | ✅ | ✅ | ✅ | ✅ | Expression `IN`/`NOT IN` |
+| `$size` (JSON array) | ✅ | ✅ | ✅ | ✅ | PG: `jsonb_array_length`, MySQL: `JSON_LENGTH`, SQLite: `json_array_length` |
+| `$and`/`$or`/`$not` | ✅ | ✅ | ✅ | ✅ | Logical composition |
+| `$cond` | ✅ | ✅ | ✅ | ✅ | `CASE WHEN ... THEN ... ELSE ... END` |
+| `$ifNull` | ✅ | ✅ | ✅ | ✅ | `COALESCE()` |
+| `$switch` | ✅ | ✅ | ✅ | ✅ | `CASE` branches |
+| `$exists` | ✅ | ✅ | ✅ | ✅ | `IS NULL` / `IS NOT NULL` |
+| Date parts `$year`,`$month`,`$dayOfMonth`,`$dayOfWeek`,`$hour`,`$minute`,`$second`,`$week` | ✅ | ✅ | ✅ | ✅ | DB-specific functions (`EXTRACT`, `YEAR`, `strftime`) |
+| Cast `$toString`,`$toInt`,`$toDouble`,`$toBool`,`$toDate` | ✅ | ✅ | ✅ | ✅ | DB-specific `CAST` |
+| `$literal` | ✅ | ✅ | ✅ | ✅ | Escaped literal |
+
+### Update Operators
+
+| Operator | Memory | SQLite | MySQL | PostgreSQL | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `$set` | ✅ | ✅ | ✅ | ✅ | Scalar and JSON path updates |
+| `$inc` | ✅ | ✅ | ✅ | ✅ | Scalar and JSON numeric JSON path |
+| `$mul` | ✅ | ✅ | ✅ | ✅ | Scalar and JSON numeric JSON path |
+| `$min` | ✅ | ✅ | ✅ | ✅ | SQLite uses `MIN`, others `LEAST` |
+| `$max` | ✅ | ✅ | ✅ | ✅ | SQLite uses `MAX`, others `GREATEST` |
+| `$unset` | ✅ | ✅ | ✅ | ✅ | JSON path remove or `NULL` for scalars |
+| `$currentDate` | ✅ | ✅ | ✅ | ✅ | PG: `CURRENT_TIMESTAMP`; MySQL: `NOW()`; SQLite: `datetime('now')` |
+| `$rename` | ✅ | ✅ | ✅ | ✅ | Non-JSON fields; sets new = old, old = NULL |
+| `$push`/`$pull`/`$addToSet` | ✅ | — | — | — | Memory-only array mutations |
+
+### Aggregation Stages
+
+| Stage | Memory | SQLite | MySQL | PostgreSQL | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `$match` | ✅ | ✅ | ✅ | ✅ | WHERE/HAVING integration |
+| `$project` | ✅ | ✅ | ✅ | ✅ | SELECT with expressions |
+| `$addFields` / `$set` | ✅ | ✅ | ✅ | ✅ | Adds computed fields |
+| `$group` | ✅ | ✅ | ✅ | ✅ | GROUP BY with aggregates |
+| `$sort` | ✅ | ✅ | ✅ | ✅ | ORDER BY |
+| `$limit` | ✅ | ✅ | ✅ | ✅ | LIMIT |
+| `$skip` | ✅ | ✅ | ✅ | ✅ | OFFSET |
+| `$count` | ✅ | ✅ | ✅ | ✅ | Aggregates count |
+| `$sample` | ✅ | ✅ | ✅ | ✅ | Random ordering + LIMIT |
+| `$sortByCount` | ✅ | ✅ | ✅ | ✅ | GROUP BY expr, order by count desc |
+| `$bucket` | ✅ | ✅ | ✅ | ✅ | CASE-based bucketing |
+| `$unwind` | ✅ | — | — | — | Memory-only |
+
+#### Code References
+
+- Filter operators: `mosql/src/index.js:196` and `mosql/adapters/memory.js:74`
+- Expression operators: `mosql/src/index.js:253` and `mosql/adapters/memory.js:121`
+- Update operators: `mosql/src/index.js:426` and `mosql/adapters/memory.js:311`
+- Aggregation stages: `mosql/src/index.js:477` and `mosql/adapters/memory.js:419`
+- JSON path extraction: `mosql/src/index.js:80`
+- JSON updates (`$set`, `$inc`, `$mul`): `mosql/src/index.js:98`
+- Aggregate builder and stage assembly: `mosql/src/index.js:717`
+
+### Compatibility & Testing
+
+- PostgreSQL: tested with 16; native `ILIKE` and regex `~` used.
+- MySQL: tested with 8.x; uses `REGEXP`, `LOWER(...) LIKE LOWER(...)` for case-insensitive like.
+- SQLite: tested with `better-sqlite3`; regex requires `REGEXP` extension/UDF.
+- Memory: full operator coverage, including array and pipeline-only stages.
+- Unified suite covers filters, expressions, updates, and aggregation across adapters where applicable.
+
+## Schemaless Adapters
+
+- Adapters infer and evolve table schemas automatically for memory, SQLite, PostgreSQL, and MySQL. MongoDB adapter is optional; for drop-in replacement needs against SQL, use the unified adapter.
+- Chainable cursor API for `find()` supports `sort`, `skip`, `limit`, and `toArray()` consistently.
+
+### Quick Start
+
+- Default backend is memory when omitted.
+
+```javascript
+import { createSchemalessAdapter } from './v2/src/schemaless.js';
+
+// Memory (default)
+const { adapter } = createSchemalessAdapter();
+const users = adapter.collection('users');
+await users.insertOne({ name: 'Alice' });
+console.log(await (await users.find({ name: 'Alice' })).toArray());
+```
+
+### Unified Adapter File
+
+- Use a single factory to target SQL backends without per-backend adapter folders.
+
+```javascript
+import { createSchemalessAdapter } from './v2/src/schemaless.js';
+import Database from 'better-sqlite3';
+
+// SQLite
+const { adapter } = createSchemalessAdapter(new Database(':memory:'), 'sqlite');
+const users = adapter.collection('users');
+await users.insertOne({ name: 'Alice', profile: { score: 85 } });
+
+// PostgreSQL
+import pkg from 'pg';
+const { Client } = pkg;
+const pg = new Client({ host, port: 5432, user, password, database });
+await pg.connect();
+const { adapter: pgAdapter } = createSchemalessAdapter(pg, 'pg');
+
+// MySQL
+import mysql from 'mysql2/promise';
+const conn = await mysql.createConnection({ host, user, password, database });
+const { adapter: myAdapter } = createSchemalessAdapter(conn, 'mysql');
+```
+
+### MongoDB
+
+- Optional backend with the same collection API shape.
+ - Configure via an options object (host, port, user, password, database) according to your environment. No fixed environment variable names are required.
+- Example usage:
+
+```javascript
+import { createMongoSchemaless } from './v2/adapter/mongodb/adapter.js';
+
+const { adapter } = await createMongoSchemaless({ host: 'localhost', port: 27017, database: 'test' });
+const users = adapter.collection('users');
+await users.insertOne({ name: 'Alice' });
+const rows = await (await users.find({ name: 'Alice' })).toArray();
+```
+
+### Serverless Examples (Drizzle)
+
+- Neon: `v2/examples/serverless-neon-drizzle.js` (requires `NEON_HTTP_URL`)
+- Turso: `v2/examples/serverless-turso-drizzle.js` (requires `TURSO_HTTP_URL`, `TURSO_TOKEN`)
+- PlanetScale: planned; example will be guarded by env detection.
+
+### Auto ID Creation
+
+- Strategies
+  - `auto`: numeric autoincrement (SQL default per backend)
+  - `mongo`: 24-character hex string (ObjectId-like)
+  - `custom`: supply `idGenerator()`
+
+- Defaults
+  - Default id column is `_id`
+  - Non-`auto` strategies generate ids when absent on insert
+
+- Configure per database/collection
+
+```javascript
+const client = await createSchemalessClient('pg', { host, port, user, password, database });
+const db = client.db('test_database', { id: '_id', idStrategy: 'mongo' });
+const users = db.collection('users');
+await users.insertOne({ name: 'Alice' });
+```
+
+```javascript
+const client = await createSchemalessClient('sql', {
+  database: 'sqlite',
+  executor: async (sql, params) => {}
+});
+const db = client.db('mydb', { id: '_id', idStrategy: 'custom', idGenerator: () => crypto.randomUUID() });
+const events = db.collection('events');
+await events.insertOne({ type: 'click' });
+```
+
+### Serverless Behavior
+
+- On missing table/column errors, adapters perform idempotent DDL (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN`) and retry once.
+- Updates can optionally introduce new columns via `$set`; toggle with `migrateOnUpdate` in `collection(name, { migrateOnUpdate: false })`.
+## MongoDB-Compatible Methods Support Matrix
+
+| Method | Memory | SQLite | MySQL | PostgreSQL |
+| --- | --- | --- | --- | --- |
+| `insertOne` | ✅ | ✅ | ✅ | ✅ |
+| `insertMany` | ✅ | ✅ | ✅ | ✅ |
+| `find` | ✅ | ✅ | ✅ | ✅ |
+| `findOne` | ✅ | ✅ | ✅ | ✅ |
+| `findMany` (SQL-only helper) | ❌ | ✅ | ✅ | ✅ |
+| `sort/skip/limit` in `find()` | ✅ | ✅ | ✅ | ✅ |
+| `updateOne` | ✅ | ✅ | ✅ | ✅ |
+| `updateMany` | ✅ | ✅ | ✅ | ✅ |
+| `upsertOne` | ✅ | ✅ | ✅ | ✅ |
+| `deleteOne` | ✅ | ✅ | ✅ | ✅ |
+| `deleteMany` | ✅ | ✅ | ✅ | ✅ |
+| `countDocuments` | ✅ | ✅ | ✅ | ✅ |
+| `estimatedDocumentCount` | ✅ | ✅ | ✅ | ✅ |
+| `distinct` | ✅ | ✅ | ✅ | ✅ |
+| `aggregate` | ✅ | ✅ | ✅ | ✅ |
+| `createIndex` | ✅ | ✅ | ✅ | ✅ |
+| `dropIndex` | ✅ | ✅ | ✅ | ✅ |
+| `dropColumn` | ❌ | ❌ | ✅ | ✅ |
+| `listCollections` | ✅ | ✅ | ✅ | ✅ |
+| `dropCollection` | ✅ | ✅ | ✅ | ✅ |
+| `createTableWithSchema` | ❌ | ✅ | ✅ | ✅ |
+| `getTableSchema` | ❌ | ✅ | ✅ | ✅ |
+| `addColumn` | ❌ | ✅ | ✅ | ✅ |
+| `renameColumn` | ❌ | ✅ | ✅ | ✅ |
+| `modifyColumn` | ❌ | ❌ | ✅ | ✅ |
+
+Notes:
+- Memory adapter is a drop-in for core CRUD, query, and aggregation. Administrative DDL is SQL-only.
+- `findMany` is a convenience on SQL adapters for pagination plus total count.
+
+## Caveats and Differences
+
+- JSON storage and operators
+  - PostgreSQL uses `JSONB` and `jsonb_set`/`#>>` for path reads/writes.
+  - MySQL uses `JSON` with `JSON_EXTRACT` and `JSON_SET`.
+  - SQLite stores JSON as `TEXT` and uses `json_extract` (requires `json1` extension).
+- Boolean values
+  - PostgreSQL uses `TRUE/FALSE`.
+  - MySQL/SQLite often represent booleans as `TINYINT(1)`/`INTEGER` (1/0) at the SQL level.
+- Column management
+  - `DROP COLUMN` is not supported by SQLite.
+  - `MODIFY COLUMN` is not supported by SQLite; use `ALTER TABLE ... RENAME COLUMN` or recreate.
+- Upsert semantics
+  - SQL `upsertOne` is implemented as update-then-insert and may not be atomic; add unique constraints to ensure correctness.
+- Indexes
+  - PostgreSQL supports index types (`USING BTREE`, etc.); others are simpler. The adapter uses sensible defaults.
+- Pagination totals
+  - `findMany({ includeTotal: true })` performs an additional `COUNT(*)` query.
+- Transactions
+  - Adapters do not expose transaction helpers; use your client directly if needed.
+
+## Drop-in Replacement Scope
+
+- Implemented as MongoDB-like collection methods across backends:
+  - CRUD: `insertOne`, `insertMany`, `find`, `findOne`, `updateOne`, `updateMany`, `deleteOne`, `deleteMany`.
+  - Query helpers: `countDocuments`, `distinct`, `aggregate`, projection and computed fields via `$project`, `$addFields`, `$set`.
+  - SQL-only helpers: `findMany`, `createTableWithSchema`, `addColumn`, `renameColumn`, `modifyColumn`, `getTableSchema`, `listCollections`.
+- For pure MongoDB replacement needs (without DDL), memory and SQL adapters are compatible at the collection method level.
+## API Reference
+
+### createSchemalessAdapter(client?, database?, options?)
+
+- Parameters
+  - `client` (optional): backend client instance. Omit for memory.
+  - `database` (optional): one of `memory` | `sqlite` | `pg` | `mysql`. Defaults to `memory`.
+  - `options` (optional): `{ debug?: boolean }`.
+- Returns: `{ adapter, client? }`
+  - `adapter`: unified interface with Mongo-compatible collection methods.
+  - `client`: the raw client for SQL backends (not present for memory).
+
+### Adapter
+
+- `collection(name, opts?)` → `Collection`
+  - `opts` may include `{ id?: string, idStrategy?: 'auto'|'mongo'|'custom', idGenerator?: () => string }`.
+- `listCollections()` → `string[]`
+- `dropCollection(name)` → `{ acknowledged: boolean }`
+- SQL-only helpers
+  - `createTableWithSchema(name, jsonSchema)`
+  - `getTableSchema(name)` → `{ columns: Record<string, any> }`
+  - `addColumn(name, col, type, options?)`
+  - `renameColumn(name, from, to)`
+  - `modifyColumn(name, col, type, options?)` (pg/mysql)
+
+### Collection
+
+- CRUD
+  - `insertOne(doc)` → `{ acknowledged: boolean, insertedId: any }`
+  - `insertMany(docs)` → `{ acknowledged: boolean, insertedIds: any[] }`
+  - `find(filter?, projection?, options?)` → `{ toArray(): Promise<any[]>, count(): Promise<number> }`
+  - `findOne(filter?, projection?)` → `Promise<any | null>`
+  - `updateOne(filter, update, options?)` → `{ acknowledged: boolean, matchedCount: number, modifiedCount: number, upsertedId?: any }`
+  - `updateMany(filter, update, options?)` → `{ acknowledged: boolean, matchedCount: number, modifiedCount: number }`
+  - `upsertOne(filter, update)` → `{ acknowledged: boolean, upserted: boolean, upsertedId?: any }`
+  - `deleteOne(filter)` → `{ acknowledged: boolean, deletedCount: number }`
+  - `deleteMany(filter?)` → `{ acknowledged: boolean, deletedCount: number }`
+- Query helpers
+  - `countDocuments(filter?)` → `number`
+  - `estimatedDocumentCount()` → `number`
+  - `distinct(field, filter?)` → `any[]`
+  - `aggregate(pipeline)` → `any[]` (Mongo-like stages with SQL mapping under the hood)
+- SQL-only convenience
+  - `findMany({ filter, sort, page, pageSize, includeTotal })` → `{ items, total, page, pageSize }`
+
+### ID Strategies
+
+- `auto` (default): numeric autoincrement on SQL; in-memory numeric counter.
+- `mongo`: 24-character hex string (`_id`) for parity.
+- `custom`: provide `idGenerator()`; adapter respects provided id.
+
 
 ---
 

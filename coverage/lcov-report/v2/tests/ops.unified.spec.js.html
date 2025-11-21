@@ -1,0 +1,307 @@
+
+<!doctype html>
+<html lang="en">
+
+<head>
+    <title>Code coverage report for v2/tests/ops.unified.spec.js</title>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="../../prettify.css" />
+    <link rel="stylesheet" href="../../base.css" />
+    <link rel="shortcut icon" type="image/x-icon" href="../../favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style type='text/css'>
+        .coverage-summary .sorter {
+            background-image: url(../../sort-arrow-sprite.png);
+        }
+    </style>
+</head>
+    
+<body>
+<div class='wrapper'>
+    <div class='pad1'>
+        <h1><a href="../../index.html">All files</a> / <a href="index.html">v2/tests</a> ops.unified.spec.js</h1>
+        <div class='clearfix'>
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">100% </span>
+                <span class="quiet">Statements</span>
+                <span class='fraction'>75/75</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">100% </span>
+                <span class="quiet">Branches</span>
+                <span class='fraction'>62/62</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">100% </span>
+                <span class="quiet">Functions</span>
+                <span class='fraction'>0/0</span>
+            </div>
+        
+            
+            <div class='fl pad1y space-right2'>
+                <span class="strong">100% </span>
+                <span class="quiet">Lines</span>
+                <span class='fraction'>75/75</span>
+            </div>
+        
+            
+        </div>
+        <p class="quiet">
+            Press <em>n</em> or <em>j</em> to go to the next uncovered block, <em>b</em>, <em>p</em> or <em>k</em> for the previous block.
+        </p>
+        <template id="filterTemplate">
+            <div class="quiet">
+                Filter:
+                <input type="search" id="fileSearch">
+            </div>
+        </template>
+    </div>
+    <div class='status-line high'></div>
+    <pre><table class="coverage">
+<tr><td class="line-count quiet"><a name='L1'></a><a href='#L1'>1</a>
+<a name='L2'></a><a href='#L2'>2</a>
+<a name='L3'></a><a href='#L3'>3</a>
+<a name='L4'></a><a href='#L4'>4</a>
+<a name='L5'></a><a href='#L5'>5</a>
+<a name='L6'></a><a href='#L6'>6</a>
+<a name='L7'></a><a href='#L7'>7</a>
+<a name='L8'></a><a href='#L8'>8</a>
+<a name='L9'></a><a href='#L9'>9</a>
+<a name='L10'></a><a href='#L10'>10</a>
+<a name='L11'></a><a href='#L11'>11</a>
+<a name='L12'></a><a href='#L12'>12</a>
+<a name='L13'></a><a href='#L13'>13</a>
+<a name='L14'></a><a href='#L14'>14</a>
+<a name='L15'></a><a href='#L15'>15</a>
+<a name='L16'></a><a href='#L16'>16</a>
+<a name='L17'></a><a href='#L17'>17</a>
+<a name='L18'></a><a href='#L18'>18</a>
+<a name='L19'></a><a href='#L19'>19</a>
+<a name='L20'></a><a href='#L20'>20</a>
+<a name='L21'></a><a href='#L21'>21</a>
+<a name='L22'></a><a href='#L22'>22</a>
+<a name='L23'></a><a href='#L23'>23</a>
+<a name='L24'></a><a href='#L24'>24</a>
+<a name='L25'></a><a href='#L25'>25</a>
+<a name='L26'></a><a href='#L26'>26</a>
+<a name='L27'></a><a href='#L27'>27</a>
+<a name='L28'></a><a href='#L28'>28</a>
+<a name='L29'></a><a href='#L29'>29</a>
+<a name='L30'></a><a href='#L30'>30</a>
+<a name='L31'></a><a href='#L31'>31</a>
+<a name='L32'></a><a href='#L32'>32</a>
+<a name='L33'></a><a href='#L33'>33</a>
+<a name='L34'></a><a href='#L34'>34</a>
+<a name='L35'></a><a href='#L35'>35</a>
+<a name='L36'></a><a href='#L36'>36</a>
+<a name='L37'></a><a href='#L37'>37</a>
+<a name='L38'></a><a href='#L38'>38</a>
+<a name='L39'></a><a href='#L39'>39</a>
+<a name='L40'></a><a href='#L40'>40</a>
+<a name='L41'></a><a href='#L41'>41</a>
+<a name='L42'></a><a href='#L42'>42</a>
+<a name='L43'></a><a href='#L43'>43</a>
+<a name='L44'></a><a href='#L44'>44</a>
+<a name='L45'></a><a href='#L45'>45</a>
+<a name='L46'></a><a href='#L46'>46</a>
+<a name='L47'></a><a href='#L47'>47</a>
+<a name='L48'></a><a href='#L48'>48</a>
+<a name='L49'></a><a href='#L49'>49</a>
+<a name='L50'></a><a href='#L50'>50</a>
+<a name='L51'></a><a href='#L51'>51</a>
+<a name='L52'></a><a href='#L52'>52</a>
+<a name='L53'></a><a href='#L53'>53</a>
+<a name='L54'></a><a href='#L54'>54</a>
+<a name='L55'></a><a href='#L55'>55</a>
+<a name='L56'></a><a href='#L56'>56</a>
+<a name='L57'></a><a href='#L57'>57</a>
+<a name='L58'></a><a href='#L58'>58</a>
+<a name='L59'></a><a href='#L59'>59</a>
+<a name='L60'></a><a href='#L60'>60</a>
+<a name='L61'></a><a href='#L61'>61</a>
+<a name='L62'></a><a href='#L62'>62</a>
+<a name='L63'></a><a href='#L63'>63</a>
+<a name='L64'></a><a href='#L64'>64</a>
+<a name='L65'></a><a href='#L65'>65</a>
+<a name='L66'></a><a href='#L66'>66</a>
+<a name='L67'></a><a href='#L67'>67</a>
+<a name='L68'></a><a href='#L68'>68</a>
+<a name='L69'></a><a href='#L69'>69</a>
+<a name='L70'></a><a href='#L70'>70</a>
+<a name='L71'></a><a href='#L71'>71</a>
+<a name='L72'></a><a href='#L72'>72</a>
+<a name='L73'></a><a href='#L73'>73</a>
+<a name='L74'></a><a href='#L74'>74</a>
+<a name='L75'></a><a href='#L75'>75</a></td><td class="line-coverage quiet"><span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">1x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">2x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span>
+<span class="cline-any cline-yes">3x</span></td><td class="text"><pre class="prettyprint lang-js">import { createQueryBuilder, filterOps, exprOps, updateOps, stageHandlers } from '../index.js';
+import { runStringTest } from './common.js';
+&nbsp;
+const qb = createQueryBuilder({ filterOps, exprOps, updateOps, stageHandlers });
+&nbsp;
+const DBs = ['sqlite', 'pg', 'mysql'];
+&nbsp;
+for (const db of DBs) {
+  // FILTERS
+  runStringTest(`ops/${db} filter eq`, () =&gt; qb.collection('users', db).find({ age: 25 }).toSQL(), `SELECT * FROM users WHERE age = 25`);
+  runStringTest(`ops/${db} filter gt/gte`, () =&gt; qb.collection('users', db).find({ score: { $gt: 10, $gte: 5 } }).toSQL(), `SELECT * FROM users WHERE (score &gt; 10 AND score &gt;= 5)`);
+  runStringTest(`ops/${db} filter lt/lte`, () =&gt; qb.collection('users', db).find({ score: { $lt: 10, $lte: 5 } }).toSQL(), `SELECT * FROM users WHERE (score &lt; 10 AND score &lt;= 5)`);
+  runStringTest(`ops/${db} filter in`, () =&gt; qb.collection('users', db).find({ city: { $in: ['Paris','London'] } }).toSQL(), `SELECT * FROM users WHERE city IN ('Paris', 'London')`);
+  runStringTest(`ops/${db} filter nin`, () =&gt; qb.collection('users', db).find({ city: { $nin: ['Paris','London'] } }).toSQL(), `SELECT * FROM users WHERE city NOT IN ('Paris', 'London')`);
+  runStringTest(`ops/${db} filter exists true`, () =&gt; qb.collection('users', db).find({ nickname: { $exists: true } }).toSQL(), `SELECT * FROM users WHERE nickname IS NOT NULL`);
+  runStringTest(`ops/${db} filter exists false`, () =&gt; qb.collection('users', db).find({ nickname: { $exists: false } }).toSQL(), `SELECT * FROM users WHERE nickname IS NULL`);
+  runStringTest(`ops/${db} filter like`, () =&gt; qb.collection('users', db).find({ name: { $like: 'A%' } }).toSQL(), `SELECT * FROM users WHERE name LIKE 'A%'`);
+  runStringTest(`ops/${db} filter between`, () =&gt; qb.collection('users', db).find({ age: { $between: [18, 30] } }).toSQL(), `SELECT * FROM users WHERE age BETWEEN 18 AND 30`);
+  runStringTest(`ops/${db} filter json path`, () =&gt; qb.collection('users', db).find({ 'profile.country': 'France' }).toSQL(), /SELECT \* FROM users WHERE .*country.*= 'France'/);
+&nbsp;
+  // EXPRESSIONS
+  runStringTest(`ops/${db} expr add`, () =&gt; qb.collection('users', db).find({}, { next: { $add: ['$age', 5] } }).toSQL(), `SELECT (age + 5) AS next FROM users`);
+  runStringTest(`ops/${db} expr concat upper`, () =&gt; qb.collection('users', db).find({}, { U: { $upper: { $concat: ['$city', ', ', '$name'] } } }).toSQL(), db === 'sqlite' ? `SELECT UPPER((city || ', ' || name)) AS U FROM users` : `SELECT UPPER(CONCAT(city, ', ', name)) AS U FROM users`);
+  runStringTest(`ops/${db} expr cond`, () =&gt; qb.collection('users', db).find({}, { flag: { $cond: [ { $gte: ['$age', 18] }, 'adult', 'minor' ] } }).toSQL(), `SELECT CASE WHEN (age &gt;= 18) THEN 'adult' ELSE 'minor' END AS flag FROM users`);
+  runStringTest(`ops/${db} expr aggregates`, () =&gt; qb.aggregate([ { $group: { _id: '$city', total: { $sum: '$age' }, avgAge: { $avg: '$age' }, maxAge: { $max: '$age' } } }, { $sort: { total: -1 } } ])('users', db), db === 'mysql' ? `SELECT city AS _id, SUM(age) AS total, CAST(AVG(age) AS DOUBLE) AS avgAge, MAX(age) AS maxAge FROM (SELECT * FROM users) AS t1 GROUP BY city ORDER BY SUM(age) DESC` : `SELECT city AS _id, SUM(age) AS total, AVG(age) AS avgAge, MAX(age) AS maxAge FROM (SELECT * FROM users) AS t1 GROUP BY city ORDER BY SUM(age) DESC`
+  );
+&nbsp;
+  // STAGES
+  runStringTest(`ops/${db} stage match+project`, () =&gt; qb.aggregate([ { $match: { active: true } }, { $project: { name: 1, next: { $add: ['$age', 1] } } } ])('users', db), `SELECT name AS name, (age + 1) AS next FROM (SELECT * FROM users WHERE active = ${db === 'pg' ? 'TRUE' : '1'}) AS t1`);
+  runStringTest(`ops/${db} stage sort/limit/skip`, () =&gt; qb.aggregate([ { $sort: { age: -1 } }, { $limit: 10 }, { $skip: 20 } ])('users', db), `SELECT * FROM users ORDER BY age DESC LIMIT 10 OFFSET 20`);
+  runStringTest(`ops/${db} stage count`, () =&gt; qb.aggregate([ { $match: { age: { $gte: 25 } } }, { $count: 'total' } ])('users', db), `SELECT COUNT(*) AS total FROM (SELECT * FROM users WHERE age &gt;= 25) AS t1`);
+  runStringTest(`ops/${db} stage sortByCount`, () =&gt; qb.aggregate([ { $sortByCount: '$city' } ])('users', db), `SELECT city AS _id, COUNT(*) AS count FROM (SELECT * FROM users) AS t1 GROUP BY city ORDER BY count DESC`);
+  runStringTest(`ops/${db} stage bucket`, () =&gt; qb.aggregate([ { $bucket: { groupBy: '$age', boundaries: [0,18,30,100], default: 'other', output: { cnt: { $sum: 1 } } } } ])('users', db), `SELECT CASE WHEN age &gt;= 0 AND age &lt; 18 THEN 0 WHEN age &gt;= 18 AND age &lt; 30 THEN 18 WHEN age &gt;= 30 AND age &lt; 100 THEN 30 ELSE 'other' END AS _id, COUNT(*) AS count, COUNT(*) AS cnt FROM (SELECT * FROM users) AS t1 GROUP BY CASE WHEN age &gt;= 0 AND age &lt; 18 THEN 0 WHEN age &gt;= 18 AND age &lt; 30 THEN 18 WHEN age &gt;= 30 AND age &lt; 100 THEN 30 ELSE 'other' END`);
+  runStringTest(`ops/${db} stage addFields`, () =&gt; qb.aggregate([ { $addFields: { cityUpper: { $upper: '$city' }, next: { $add: ['$age', 1] } } } ])('users', db), `SELECT *, UPPER(${db === 'sqlite' ? 'city' : 'city'}) AS cityUpper, (age + 1) AS next FROM (SELECT * FROM users) AS t1`);
+  runStringTest(`ops/${db} stage set`, () =&gt; qb.aggregate([ { $set: { cityUpper: { $upper: '$city' }, next: { $add: ['$age', 1] } } } ])('users', db), `SELECT *, UPPER(${db === 'sqlite' ? 'city' : 'city'}) AS cityUpper, (age + 1) AS next FROM (SELECT * FROM users) AS t1`);
+&nbsp;
+  // UPDATES
+  runStringTest(`ops/${db} updateOne set`, () =&gt; qb.collection('users', db).updateOne({ name: 'Alice' }, { $set: { age: 26, 'profile.country': 'FR' } }), db === 'pg'
+    ? `UPDATE users SET age = 26, profile = jsonb_set(COALESCE(profile::jsonb, '{}'::jsonb), '{country}', to_jsonb('FR'), true) WHERE name = 'Alice'`
+    : db === 'mysql'
+      ? `UPDATE users SET age = 26, profile = JSON_SET(COALESCE(profile, '{}'), '$.country', 'FR') WHERE name = 'Alice' LIMIT 1`
+      : `UPDATE users SET age = 26, profile = json_set(COALESCE(profile, '{}'), '$.country', 'FR') WHERE name = 'Alice' LIMIT 1`
+  );
+&nbsp;
+  runStringTest(`ops/${db} updateMany inc/mul`, () =&gt; qb.collection('users', db).updateMany({ active: true }, { $inc: { age: 1 }, $mul: { score: 2 } }), db === 'pg'
+    ? `UPDATE users SET age = age + 1, score = score * 2 WHERE active = TRUE`
+    : db === 'mysql'
+      ? `UPDATE users SET age = age + 1, score = score * 2 WHERE active = 1`
+      : `UPDATE users SET age = age + 1, score = score * 2 WHERE active = 1`
+  );
+&nbsp;
+  runStringTest(`ops/${db} update unset`, () =&gt; qb.collection('users', db).updateMany({ name: 'Bob' }, { $unset: { nickname: 1 } }), db === 'pg'
+    ? `UPDATE users SET nickname = NULL WHERE name = 'Bob'`
+    : `UPDATE users SET nickname = NULL WHERE name = 'Bob'`
+  );
+&nbsp;
+  runStringTest(`ops/${db} update min`, () =&gt; qb.collection('users', db).updateMany({ active: true }, { $min: { age: 50 } }), db === 'sqlite'
+    ? `UPDATE users SET age = MIN(age, 50) WHERE active = 1`
+    : `UPDATE users SET age = LEAST(age, 50) WHERE active = ${db === 'pg' ? 'TRUE' : '1'}`
+  );
+&nbsp;
+  runStringTest(`ops/${db} update max`, () =&gt; qb.collection('users', db).updateMany({ active: true }, { $max: { age: 50 } }), db === 'sqlite'
+    ? `UPDATE users SET age = MAX(age, 50) WHERE active = 1`
+    : `UPDATE users SET age = GREATEST(age, 50) WHERE active = ${db === 'pg' ? 'TRUE' : '1'}`
+  );
+&nbsp;
+  runStringTest(`ops/${db} update currentDate`, () =&gt; qb.collection('users', db).updateMany({ name: 'Alice' }, { $currentDate: { lastModified: true } }), db === 'pg'
+    ? `UPDATE users SET lastModified = CURRENT_TIMESTAMP WHERE name = 'Alice'`
+    : db === 'mysql'
+      ? `UPDATE users SET lastModified = NOW() WHERE name = 'Alice'`
+      : `UPDATE users SET lastModified = datetime('now') WHERE name = 'Alice'`
+  );
+&nbsp;
+  runStringTest(`ops/${db} update rename`, () =&gt; qb.collection('users', db).updateMany({}, { $rename: { nickname: 'alias' } }), `UPDATE users SET alias = nickname, nickname = NULL`);
+}</pre></td></tr></table></pre>
+
+                <div class='push'></div><!-- for sticky footer -->
+            </div><!-- /wrapper -->
+            <div class='footer quiet pad2 space-top1 center small'>
+                Code coverage generated by
+                <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
+                at 2025-11-20T13:56:47.034Z
+            </div>
+        <script src="../../prettify.js"></script>
+        <script>
+            window.onload = function () {
+                prettyPrint();
+            };
+        </script>
+        <script src="../../sorter.js"></script>
+        <script src="../../block-navigation.js"></script>
+    </body>
+</html>
+    

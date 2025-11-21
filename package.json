@@ -1,6 +1,7 @@
 {
 	"name": "umosql",
-	"description": "Mongo like query for sqlite, mysql and pg",
+	"sideEffects": false,
+	"description": "MongoDB-style queries and schemaless adapters for PostgreSQL, MySQL, SQLite, Memory; optional drop-in Mongo adapter",
 	"version": "0.1.2",
 	"type": "module",
 	"source": "./src/index.js",
@@ -8,6 +9,7 @@
 	"module": "./dist/index.js",
 	"unpkg": "./dist/index.min.js",
 	"umd:main": "./dist/index.umd.js",
+	"types": "./index.d.ts",
 	"exports": {
 		".": {
 			"browser": "./dist/index.es.js",
@@ -32,6 +34,19 @@
 		},
 		"./package.json": "./package.json"
 	},
+	"typesVersions": {
+		"*": {
+			"lite": [
+				"lite/index.d.ts"
+			],
+			"tiny": [
+				"tiny/index.d.ts"
+			],
+			"*": [
+				"index.d.ts"
+			]
+		}
+	},
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/kethan/mosql.git"
@@ -39,30 +54,61 @@
 	"files": [
 		"dist",
 		"lite",
-		"tiny"
+		"tiny",
+		"index.d.ts",
+		"lite/index.d.ts",
+		"tiny/index.d.ts"
 	],
 	"scripts": {
-		"build": "rollup --config rollup.config.js",
-		"test": "node test.js && node ./sqlite/test.js",
-		"test:db": "node ./mysql/test.js && node ./pg/test.js",
-		"prepare": "husky"
+		"build": "rollup --config rollup.config.js  && npm run copy:types",
+		"test": "node ./tests/run-all.js",
+		"test:db": "node ./tests/schemaless.pg.spec.js && node ./tests/pg.schema.types.spec.js && node ./tests/schemaless.mysql.spec.js && node ./tests/mysql.schema.types.spec.js && node ./tests/admin.unified.spec.js",
+		"coverage": "c8 --reporter=text-summary --reporter=lcov npm run test",
+		"db:up": "docker compose up -d",
+		"db:down": "docker compose down",
+		"coverage:db": "npm run db:up && node -e \"setTimeout(()=>process.exit(0), 15000)\" && npm run coverage && npm run db:down",
+		"prepare": "husky install",
+		"copy:types": "node -e \"const fs=require('fs');try{fs.mkdirSync('dist',{recursive:true});fs.copyFileSync('index.d.ts','dist/index.d.ts')}catch{};try{fs.mkdirSync('lite/dist',{recursive:true});fs.copyFileSync('lite/index.d.ts','lite/dist/index.d.ts')}catch{};try{fs.mkdirSync('tiny/dist',{recursive:true});fs.copyFileSync('tiny/index.d.ts','tiny/dist/index.d.ts')}catch{}\""
 	},
 	"devDependencies": {
+		"@libsql/client": "^0.15.15",
+		"@neondatabase/serverless": "^1.0.2",
 		"@rollup/plugin-terser": "^0.4.4",
 		"better-sqlite3": "^12.4.1",
+		"c8": "^10.1.3",
 		"dotenv": "^17.2.3",
+		"drizzle-orm": "^0.44.7",
 		"husky": "^9.1.4",
+		"mongodb": "^6.10.0",
 		"mysql2": "^3.15.3",
 		"pg": "^8.16.3",
 		"rollup": "^4.20.0",
-		"rollup-plugin-bundle-size": "^1.0.3"
+		"rollup-plugin-bundle-size": "^1.0.3",
+		"rollup-plugin-tree-shakeable": "^2.0.0",
+		"uqry": "^0.0.33"
 	},
 	"keywords": [
-		"mosql",
-		"libraries",
-		"module",
-		"library"
+		"mongodb",
+		"postgresql",
+		"mysql",
+		"sqlite",
+		"sql",
+		"nosql",
+		"query-builder",
+		"aggregation",
+		"json",
+		"schemaless",
+		"adapter",
+		"distinct",
+		"upsert",
+		"serverless",
+		"orm",
+		"umosql",
+		"mosql"
 	],
+	"engines": {
+		"node": ">=18"
+	},
 	"author": "Kethan Surana",
 	"license": "ISC",
 	"bugs": {

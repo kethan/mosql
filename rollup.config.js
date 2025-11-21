@@ -3,17 +3,20 @@ import bundleSize from 'rollup-plugin-bundle-size';
 
 const resolve = (pkg, input = "src/index", output = "dist/index") => ({
 	input: `${input}.js`,
+	treeshake: 'smallest',
 	plugins: [
-		bundleSize()
+		bundleSize(),
 	],
 	output: [
 		{
 			file: `${output}.es.js`,
 			format: 'es',
+			exports: 'named',
 		},
 		{
 			file: `${output}.js`,
 			format: 'cjs',
+			exports: 'named',
 		},
 		{
 			file: `${output}.min.js`,
@@ -21,6 +24,7 @@ const resolve = (pkg, input = "src/index", output = "dist/index") => ({
 			name: pkg,
 			strict: false,
 			compact: true,
+			exports: 'named',
 			plugins: [terser()]
 		},
 		{
@@ -29,13 +33,14 @@ const resolve = (pkg, input = "src/index", output = "dist/index") => ({
 			name: pkg,
 			strict: false,
 			compact: true,
+			exports: 'named',
 			plugins: [terser()]
 		}
 	]
 });
 
 export default [
-	resolve("umosql"),
-	resolve("umosql", "lite/index", "lite/dist/index"),
-	resolve("umosql", "tiny/index", "tiny/dist/index")
+    resolve("umosql", "index", "dist/index"),
+    resolve("umosql", "lite/index", "lite/dist/index"),
+    resolve("umosql", "tiny/index", "tiny/dist/index")
 ]
