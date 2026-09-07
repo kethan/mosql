@@ -29,7 +29,8 @@ jobs:
         if: github.event_name == 'push'
         needs: unit
         runs-on: ubuntu-latest
-
+        timeout-minutes: 20
+    
         services:
             postgres:
                 image: postgres:15-alpine
@@ -40,7 +41,11 @@ jobs:
                 ports:
                     - 5432:5432
                 options: >-
-                    --health-cmd "pg_isready -U test -d testdb" --health-interval 5s --health-timeout 5s --health-retries 20
+                    --health-cmd "pg_isready -U test -d testdb"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 20
+    
             mysql:
                 image: mysql:8.0
                 env:
@@ -51,7 +56,11 @@ jobs:
                 ports:
                     - 3306:3306
                 options: >-
-                    --health-cmd "mysqladmin ping -h 127.0.0.1 -utest -psecret" --health-interval 5s --health-timeout 5s --health-retries 20
+                    --health-cmd "mysqladmin ping -h 127.0.0.1 -utest -psecret"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 20
+    
             mongodb:
                 image: mongo:6.0
                 env:
@@ -61,33 +70,54 @@ jobs:
                 ports:
                     - 27017:27017
                 options: >-
-                    --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 })' --username root --password secret --authenticationDatabase admin" --health-interval 5s --health-timeout 5s --health-retries 20
-
+                    --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 })'
+                    --username root --password secret
+                    --authenticationDatabase admin"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 20
+    
         env:
             PG_HOST: localhost
             PG_PORT: 5432
             PG_USER: test
             PG_PASSWORD: secret
             PG_DB: testdb
+    
             MYSQL_HOST: localhost
+            MYSQL_PORT: 3306
             MYSQL_USER: test
             MYSQL_PASS: secret
             MYSQL_DB: testdb
+    
             MONGO_HOST: localhost
             MONGO_PORT: 27017
             MONGO_USER: root
             MONGO_PASSWORD: secret
             MONGO_DB: testdb
-
+            MONGO_AUTH_SOURCE: admin
+    
         steps:
             - uses: actions/checkout@v4
+    
             - name: Set up Bun
               uses: oven-sh/setup-bun@v2
               with:
                   bun-version: latest
+    
             - name: Install dependencies
               run: bun install --silent
+    
             - name: Build
               run: bun run build
+    
+            - name: Check databases
+              run: |
+                  pg_isready -h localhost -p 5432 -U test -d testdb
+                  mysqladmin ping -h 127.0.0.1 -utest -psecret
+                  mongosh "mongodb://root:secret@localhost:27017/testdb?authSource=admin" --eval "db.runCommand({ ping: 1 })"
+    
             - name: Run DB integration tests
+              timeout-minutes: 15
               run: bun run test:db
+
