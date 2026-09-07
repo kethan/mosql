@@ -115,7 +115,6 @@ jobs:
               run: |
                   pg_isready -h localhost -p 5432 -U test -d testdb
                   mysqladmin ping -h 127.0.0.1 -utest -psecret
-                  mongosh "mongodb://root:secret@localhost:27017/testdb?authSource=admin" --eval "db.runCommand({ ping: 1 })"
     
             - name: Run DB integration tests
               timeout-minutes: 15
