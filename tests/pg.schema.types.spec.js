@@ -9,8 +9,18 @@ const main = async () => {
   if (!cfg.host) return;
   const pkg = await import('pg');
   const Client = pkg.Client || pkg.default?.Client;
-  const client = new Client(cfg);
-  try { await client.connect(); } catch { return; }
+  const client = new Client({
+  ...cfg,
+  connectionTimeoutMillis: 5000,
+  query_timeout: 10000,
+});
+  
+  try {
+  await client.connect();
+} catch (e) {
+  console.error('Postgres connection failed:', e);
+  process.exit(1);
+}
   const { adapter } = createSchemalessAdapter(client, 'pg');
   const coll = adapter.collection('pg_schema_types', {
     schema: {
