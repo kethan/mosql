@@ -1,122 +1,196 @@
-# This workflow will do a clean installation of node dependencies, cache/restore them, build the source code and run tests across different versions of node
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-nodejs
-
 name: Tests
 
 on:
-    push:
-        branches: ["main"]
-    pull_request:
-        branches: ["main"]
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
 
 jobs:
-    unit:
-        runs-on: ubuntu-latest
-        steps:
-            - uses: actions/checkout@v4
-            - name: Set up Bun
-              uses: oven-sh/setup-bun@v2
-              with:
-                  bun-version: latest
-            - name: Install dependencies
-              run: bun install --silent
-            - name: Build
-              run: bun run build
-            - name: Run unit tests
-              run: bun run test
+  unit:
+    runs-on: ubuntu-latest
 
-    db:
-        if: github.event_name == 'push'
-        needs: unit
-        runs-on: ubuntu-latest
-        timeout-minutes: 20
-    
-        services:
-            postgres:
-                image: postgres:15-alpine
-                env:
-                    POSTGRES_USER: test
-                    POSTGRES_PASSWORD: secret
-                    POSTGRES_DB: testdb
-                ports:
-                    - 5432:5432
-                options: >-
-                    --health-cmd "pg_isready -U test -d testdb"
-                    --health-interval 5s
-                    --health-timeout 5s
-                    --health-retries 20
-    
-            mysql:
-                image: mysql:8.0
-                env:
-                    MYSQL_ROOT_PASSWORD: secret
-                    MYSQL_DATABASE: testdb
-                    MYSQL_USER: test
-                    MYSQL_PASSWORD: secret
-                ports:
-                    - 3306:3306
-                options: >-
-                    --health-cmd "mysqladmin ping -h 127.0.0.1 -utest -psecret"
-                    --health-interval 5s
-                    --health-timeout 5s
-                    --health-retries 20
-    
-            mongodb:
-                image: mongo:6.0
-                env:
-                    MONGO_INITDB_ROOT_USERNAME: root
-                    MONGO_INITDB_ROOT_PASSWORD: secret
-                    MONGO_INITDB_DATABASE: testdb
-                ports:
-                    - 27017:27017
-                options: >-
-                    --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 })'
-                    --username root --password secret
-                    --authenticationDatabase admin"
-                    --health-interval 5s
-                    --health-timeout 5s
-                    --health-retries 20
-    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --silent
+
+      - name: Build
+        run: bun run build
+
+      - name: Run unit tests
+        run: bun run test
+
+  db:
+    if: github.event_name == 'push'
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:15-alpine
         env:
-            PG_HOST: localhost
-            PG_PORT: 5432
-            PG_USER: test
-            PG_PASSWORD: secret
-            PG_DB: testdb
-    
-            MYSQL_HOST: localhost
-            MYSQL_PORT: 3306
-            MYSQL_USER: test
-            MYSQL_PASS: secret
-            MYSQL_DB: testdb
-    
-            MONGO_HOST: localhost
-            MONGO_PORT: 27017
-            MONGO_USER: root
-            MONGO_PASSWORD: secret
-            MONGO_DB: testdb
-            MONGO_AUTH_SOURCE: admin
-    
-        steps:
-            - uses: actions/checkout@v4
-    
-            - name: Set up Bun
-              uses: oven-sh/setup-bun@v2
-              with:
-                  bun-version: latest
-    
-            - name: Install dependencies
-              run: bun install --silent
-    
-            - name: Build
-              run: bun run build
-    
-            - name: Check databases
-              run: |
-                  pg_isready -h localhost -p 5432 -U test -d testdb
-                  mysqladmin ping -h 127.0.0.1 -utest -psecret
-    
-            - name: Run DB integration tests
-              timeout-minutes: 15
-              run: bun run test:db
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: secret
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d testdb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
 
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: secret
+          MYSQL_DATABASE: testdb
+          MYSQL_USER: test
+          MYSQL_PASSWORD: secret
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -utest -psecret"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+      mongodb:
+        image: mongo:6.0
+        env:
+          MONGO_INITDB_ROOT_USERNAME: root
+          MONGO_INITDB_ROOT_PASSWORD: secret
+          MONGO_INITDB_DATABASE: testdb
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet
+          --username root
+          --password secret
+          --authenticationDatabase admin
+          --eval 'db.runCommand({ ping: 1 })'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      PG_HOST: localhost
+      PG_PORT: 5432
+      PG_USER: test
+      PG_PASSWORD: secret
+      PG_DB: testdb
+
+      MYSQL_HOST: localhost
+      MYSQL_PORT: 3306
+      MYSQL_USER: test
+      MYSQL_PASS: secret
+      MYSQL_DB: testdb
+
+      MONGO_HOST: localhost
+      MONGO_PORT: 27017
+      MONGO_USER: root
+      MONGO_PASSWORD: secret
+      MONGO_DB: testdb
+      MONGO_AUTH_SOURCE: admin
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --silent
+
+      - name: Build
+        run: bun run build
+
+      - name: Check PostgreSQL
+        run: |
+          pg_isready -h localhost -p 5432 -U test -d testdb
+
+      - name: Check MySQL
+        run: |
+          mysqladmin ping -h 127.0.0.1 -utest -psecret
+
+      - name: Check MongoDB
+        run: |
+          mongosh \
+            --host localhost:27017 \
+            --username root \
+            --password secret \
+            --authenticationDatabase admin \
+            --eval 'db.runCommand({ ping: 1 })'
+
+      - name: PostgreSQL diagnostics
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client
+          psql "postgresql://test:secret@localhost:5432/testdb" \
+            -c "SELECT version();"
+          psql "postgresql://test:secret@localhost:5432/testdb" \
+            -c "SELECT now();"
+
+      - name: Database environment
+        run: |
+          echo "PG_HOST=$PG_HOST"
+          echo "PG_PORT=$PG_PORT"
+          echo "PG_USER=$PG_USER"
+          echo "PG_DB=$PG_DB"
+          echo "MYSQL_HOST=$MYSQL_HOST"
+          echo "MYSQL_PORT=$MYSQL_PORT"
+          echo "MYSQL_USER=$MYSQL_USER"
+          echo "MYSQL_DB=$MYSQL_DB"
+          echo "MONGO_HOST=$MONGO_HOST"
+          echo "MONGO_PORT=$MONGO_PORT"
+          echo "MONGO_USER=$MONGO_USER"
+          echo "MONGO_DB=$MONGO_DB"
+
+      - name: Run PostgreSQL schemaless tests
+        run: |
+          echo "=== schemaless.pg.spec.js ==="
+          timeout 3m node ./tests/schemaless.pg.spec.js
+
+      - name: Run PostgreSQL schema types tests
+        run: |
+          echo "=== pg.schema.types.spec.js ==="
+          timeout 3m node ./tests/pg.schema.types.spec.js
+
+      - name: Run MySQL schemaless tests
+        run: |
+          echo "=== schemaless.mysql.spec.js ==="
+          timeout 3m node ./tests/schemaless.mysql.spec.js
+
+      - name: Run MySQL schema types tests
+        run: |
+          echo "=== mysql.schema.types.spec.js ==="
+          timeout 3m node ./tests/mysql.schema.types.spec.js
+
+      - name: Run admin unified tests
+        run: |
+          echo "=== admin.unified.spec.js ==="
+          timeout 3m node ./tests/admin.unified.spec.js
+
+      - name: Dump PostgreSQL container logs
+        if: failure()
+        run: docker logs "${{ job.services.postgres.id }}" || true
+
+      - name: Dump MySQL container logs
+        if: failure()
+        run: docker logs "${{ job.services.mysql.id }}" || true
+
+      - name: Dump MongoDB container logs
+        if: failure()
+        run: docker logs "${{ job.services.mongodb.id }}" || true
