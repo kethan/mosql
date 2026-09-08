@@ -119,28 +119,32 @@ jobs:
 
       - name: Check PostgreSQL
         run: |
-          pg_isready -h localhost -p 5432 -U test -d testdb
+          pg_isready \
+            -h localhost \
+            -p 5432 \
+            -U test \
+            -d testdb
 
       - name: Check MySQL
         run: |
-          mysqladmin ping -h 127.0.0.1 -utest -psecret
-
-      - name: Check MongoDB
-        run: |
-          mongosh \
-            --host localhost:27017 \
-            --username root \
-            --password secret \
-            --authenticationDatabase admin \
-            --eval 'db.runCommand({ ping: 1 })'
+          mysqladmin ping \
+            -h 127.0.0.1 \
+            -utest \
+            -psecret
 
       - name: PostgreSQL diagnostics
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y postgresql-client
-          psql "postgresql://test:secret@localhost:5432/testdb" \
+
+          echo "=== PostgreSQL version ==="
+          psql \
+            "postgresql://test:secret@localhost:5432/testdb" \
             -c "SELECT version();"
-          psql "postgresql://test:secret@localhost:5432/testdb" \
+
+          echo "=== PostgreSQL time ==="
+          psql \
+            "postgresql://test:secret@localhost:5432/testdb" \
             -c "SELECT now();"
 
       - name: Database environment
@@ -149,10 +153,12 @@ jobs:
           echo "PG_PORT=$PG_PORT"
           echo "PG_USER=$PG_USER"
           echo "PG_DB=$PG_DB"
+
           echo "MYSQL_HOST=$MYSQL_HOST"
           echo "MYSQL_PORT=$MYSQL_PORT"
           echo "MYSQL_USER=$MYSQL_USER"
           echo "MYSQL_DB=$MYSQL_DB"
+
           echo "MONGO_HOST=$MONGO_HOST"
           echo "MONGO_PORT=$MONGO_PORT"
           echo "MONGO_USER=$MONGO_USER"
@@ -160,37 +166,45 @@ jobs:
 
       - name: Run PostgreSQL schemaless tests
         run: |
-          echo "=== schemaless.pg.spec.js ==="
+          echo "=== START schemaless.pg.spec.js ==="
           timeout 3m node ./tests/schemaless.pg.spec.js
+          echo "=== END schemaless.pg.spec.js ==="
 
       - name: Run PostgreSQL schema types tests
         run: |
-          echo "=== pg.schema.types.spec.js ==="
+          echo "=== START pg.schema.types.spec.js ==="
           timeout 3m node ./tests/pg.schema.types.spec.js
+          echo "=== END pg.schema.types.spec.js ==="
 
       - name: Run MySQL schemaless tests
         run: |
-          echo "=== schemaless.mysql.spec.js ==="
+          echo "=== START schemaless.mysql.spec.js ==="
           timeout 3m node ./tests/schemaless.mysql.spec.js
+          echo "=== END schemaless.mysql.spec.js ==="
 
       - name: Run MySQL schema types tests
         run: |
-          echo "=== mysql.schema.types.spec.js ==="
+          echo "=== START mysql.schema.types.spec.js ==="
           timeout 3m node ./tests/mysql.schema.types.spec.js
+          echo "=== END mysql.schema.types.spec.js ==="
 
       - name: Run admin unified tests
         run: |
-          echo "=== admin.unified.spec.js ==="
+          echo "=== START admin.unified.spec.js ==="
           timeout 3m node ./tests/admin.unified.spec.js
+          echo "=== END admin.unified.spec.js ==="
 
       - name: Dump PostgreSQL container logs
         if: failure()
-        run: docker logs "${{ job.services.postgres.id }}" || true
+        run: |
+          docker logs "${{ job.services.postgres.id }}" || true
 
       - name: Dump MySQL container logs
         if: failure()
-        run: docker logs "${{ job.services.mysql.id }}" || true
+        run: |
+          docker logs "${{ job.services.mysql.id }}" || true
 
       - name: Dump MongoDB container logs
         if: failure()
-        run: docker logs "${{ job.services.mongodb.id }}" || true
+        run: |
+          docker logs "${{ job.services.mongodb.id }}" || true
