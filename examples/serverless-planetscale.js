@@ -1,8 +1,8 @@
-import dotenv from 'dotenv';
-import fetch from 'node-fetch';
 import { createSQLAdapter } from '../src/schemaless.js';
 import { createQueryBuilder, filterOps, exprOps, updateOps, stageHandlers } from '../index.js';
-dotenv.config();
+import { loadEnv } from '../src/env.js';
+
+await loadEnv();
 
 const qb = createQueryBuilder({ filterOps, exprOps, updateOps, stageHandlers });
 

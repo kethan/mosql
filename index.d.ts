@@ -45,6 +45,34 @@ export interface QueryBuilderApi {
   db(collectionName: string, database?: DBType): CollectionApi;
 }
 
+export interface QueryBuilderConfig {
+  filterOps?: Record<string, Function>;
+  exprOps?: Record<string, Function>;
+  updateOps?: Record<string, Function>;
+  stageHandlers?: Record<string, Function>;
+  debug?: boolean;
+}
+
+export interface ValidateApi {
+  col(name: string, db?: DBType): string;
+  alias(str: any): string;
+  arr(value: any, op: string): any[];
+  int(value: any, op: string): number;
+}
+
+/** Operator tables, usable as-is or as a base for a custom build. */
+export const filterOps: Record<string, (value: any, db?: DBType, field?: string) => string>;
+export const exprOps: Record<string, (args: any[], ctx?: any) => string>;
+export const updateOps: Record<string, (fields: any, db?: DBType) => string | string[]>;
+export const stageHandlers: Record<string, (spec: any, state: any, db?: DBType, helpers?: any) => void>;
+
+/** Builds an isolated query builder with a custom operator subset. */
+export function createQueryBuilder(config?: QueryBuilderConfig): QueryBuilderApi;
+
+export const validate: ValidateApi;
+export function escape(value: any, db?: DBType): string;
+export function jsonPath(path: string, db?: DBType, castType?: 'numeric' | 'int' | 'boolean'): string;
+
 export function filter(q: Record<string, any>, db?: DBType): string;
 export function expression(x: any, db?: DBType): string;
 export function aggregate(pipeline: any[]): (table: string, db?: DBType) => string;

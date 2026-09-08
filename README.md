@@ -12,12 +12,25 @@
 
 ## Install
 
-```
+```bash
 npm i umosql
-npm i umosql/lite
-npm i umosql/tiny
-
 ```
+
+Every entry point ships in that one package — import the ones you need:
+
+| Entry point    | Import                                                     | What you get                                                                  |
+| -------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| **Full**       | `import { collection } from "umosql"`                      | MongoDB → SQL query builder (SQL strings, no driver)                          |
+| **Lite**       | `import lite from "umosql/lite"`                           | Smaller builder: JSON paths + basic aggregation                               |
+| **Tiny**       | `import tiny from "umosql/tiny"`                           | Smallest builder: basic filters/expressions, `$set` only                      |
+| **Schemaless** | `import { createSchemalessAdapter } from "umosql/schemaless"` | Executes queries: wraps a `better-sqlite3` / `pg` / `mysql2` handle        |
+| **Memory**     | `import { collection } from "umosql/memory"`               | In-memory MongoDB-style engine (no SQL, no driver)                            |
+| **Client**     | `import { createSchemalessClient } from "umosql/client"`   | One factory for `memory` / `sqlite` / `pg` / `mysql` / `mongodb` / any executor |
+
+> **umosql has zero runtime dependencies.** No driver is bundled, and none is declared as a
+> dependency or peer dependency — so nothing gets auto-installed into your project. You install
+> the driver you want, and it is loaded lazily only when you request that backend.
+> `dotenv` is optional in the same way: `.env` is read when it is installed, silently skipped when it is not.
 
 ## 📊 Feature Comparison
 
@@ -98,8 +111,15 @@ Transform MongoDB queries into SQL (PostgreSQL, MySQL, SQLite) with a universal 
 
 ```bash
 npm i umosql
-npm i umosql/lite
-npm i umosql/tiny
+```
+
+```javascript
+import { collection } from "umosql";                         // query builder
+import lite from "umosql/lite";                              // smaller builder
+import tiny from "umosql/tiny";                              // smallest builder
+import { createSchemalessAdapter } from "umosql/schemaless"; // adapters
+import { collection as memCollection } from "umosql/memory"; // in-memory engine
+import { createSchemalessClient } from "umosql/client";      // unified client
 ```
 
 ### Basic Usage
@@ -133,7 +153,7 @@ PostgreSQL (JSON and estimated count):
 
 ```javascript
 import pkg from 'pg';
-import { createSchemalessAdapter } from './src/schemaless.js';
+import { createSchemalessAdapter } from 'umosql/schemaless';
 const client = new pkg.Client({ host, user, password, database });
 await client.connect();
 const { adapter } = createSchemalessAdapter(client, 'pg');
@@ -148,7 +168,7 @@ MySQL (JSON update and count):
 
 ```javascript
 import mysql from 'mysql2/promise';
-import { createSchemalessAdapter } from './src/schemaless.js';
+import { createSchemalessAdapter } from 'umosql/schemaless';
 const conn = await mysql.createConnection({ host, user, password, database });
 const { adapter } = createSchemalessAdapter(conn, 'mysql');
 const users = adapter.collection('users');
@@ -161,12 +181,23 @@ await conn.end();
 MongoDB (drop-in behavior):
 
 ```javascript
-import { createMongoSchemaless } from './src/adapter/mongodb/adapter.js';
-const { adapter, client } = await createMongoSchemaless({ host, user, password, database });
-const users = adapter.collection('users');
+import { createSchemalessClient } from 'umosql/client';
+const client = await createSchemalessClient('mongodb', { host, user, password, database });
+const users = client.db(database).collection('users');
 await users.insertOne({ name: 'Alice', profile: { score: 85 } });
 await users.updateOne({ name: 'Alice' }, { $inc: { 'profile.score': 5 } });
 console.log(await users.estimatedDocumentCount());
+await client.close();
+```
+
+In-memory (no driver, great for tests and edge runtimes):
+
+```javascript
+import { createSchemalessClient } from 'umosql/client';
+const client = await createSchemalessClient('memory');
+const users = client.db('app').collection('users');
+await users.insertOne({ name: 'Alice', profile: { score: 85 } });
+console.log(await (await users.find({ 'profile.score': { $gte: 80 } })).toArray());
 await client.close();
 ```
 
@@ -174,7 +205,7 @@ SQLite (in-memory):
 
 ```javascript
 import Database from 'better-sqlite3';
-import { createSchemalessAdapter } from './src/schemaless.js';
+import { createSchemalessAdapter } from 'umosql/schemaless';
 const { adapter } = createSchemalessAdapter(new Database(':memory:'), 'sqlite');
 const users = adapter.collection('users');
 await users.insertOne({ name: 'Alice', profile: { score: 85 } });
@@ -247,7 +278,7 @@ lite.filter({ 'profile.country': 'FR' }, 'pg');
 - Example:
 
 ```javascript
-import { createQueryBuilder, filterOps, exprOps, updateOps } from './src/index.js';
+import { createQueryBuilder, filterOps, exprOps, updateOps } from 'umosql';
 
 const custom = createQueryBuilder({
   filterOps: { $eq: filterOps.$eq, $in: filterOps.$in },
@@ -283,7 +314,9 @@ This approach lets you tailor the library to your use case and keep bundles extr
 - [Expression Operators](#expression-operators)
 - [Custom Operators](#custom-operators)
 - [Operator Support Matrix](#operator-support-matrix)
+- [Universal Adapters](#-universal-adapters)
 - [Schemaless Adapters](#schemaless-adapters)
+- [API Reference](#api-reference)
 
 ---
 
@@ -1431,49 +1464,81 @@ app.use((err, req, res, next) => {
 
 ---
 
-## 🔌 Universal Adapters (TODO)
+## 🔌 Universal Adapters
 
-### SQL Adapter (with execution)
+### Unified Client (one factory, every backend)
 
 ```javascript
-import { SQLAdapter } from "umosql/adapters";
+import { createSchemalessClient } from "umosql/client";
 
-const db = new SQLAdapter({
-	type: "pg", // 'pg', 'mysql', or 'sqlite'
+// 'memory' | 'sqlite' | 'pg' | 'mysql' | 'mongodb' | 'sql'
+const client = await createSchemalessClient("pg", {
 	host: "localhost",
 	database: "mydb",
 	user: "postgres",
 	password: "password",
 });
 
-await db.connect();
-
-// Use collection interface
-const users = db.collection("users");
+const users = client.db("mydb").collection("users");
 
 // All operations return promises
-const adults = await users.find({ age: { $gte: 18 } });
-const newUser = await users.insertOne({ name: "Alice", age: 25 });
-await users.updateOne({ id: 1 }, { $inc: { loginCount: 1 } });
+const inserted = await users.insertOne({ name: "Alice", age: 25 });
+await users.updateOne({ name: "Alice" }, { $inc: { loginCount: 1 } });
 await users.deleteMany({ active: false });
+
+// find() is async and returns a chainable cursor
+const adults = await (await users.find({ age: { $gte: 18 } }))
+	.sort({ age: -1 })
+	.limit(10)
+	.toArray();
 
 // Aggregation
 const stats = await users.aggregate([
 	{ $group: { _id: "$city", count: { $sum: 1 } } },
 ]);
 
-await db.disconnect();
+// client.raw is the underlying driver handle (pg.Client, mysql2 connection, ...)
+await client.close();
+```
+
+Only the backend you ask for is imported, so the other drivers do not need to be installed.
+
+#### Drivers are yours, not ours
+
+| Backend   | Install yourself      | Or bring your own                                                        |
+| --------- | --------------------- | ------------------------------------------------------------------------ |
+| `memory`  | nothing               | —                                                                        |
+| `sql`     | nothing (any driver)  | `executor(sql, params)` — Neon, Turso, PlanetScale, Hyperdrive, ...      |
+| `sqlite`  | `npm i better-sqlite3`| `{ client: db }` or `{ driver: { default: Database } }`                  |
+| `pg`      | `npm i pg`            | `{ client: pgClient }` (adopted as-is, never re-connected) or `{ driver }`|
+| `mysql`   | `npm i mysql2`        | `{ conn }` / `{ client }` or `{ driver }`                                |
+| `mongodb` | `npm i mongodb`       | `{ client: mongoClient }` or `{ driver }`                                |
+
+```javascript
+// umosql never resolves the package itself:
+import { Client } from "pg";
+const pgClient = new Client({ connectionString: process.env.DATABASE_URL });
+await pgClient.connect();
+
+const client = await createSchemalessClient("pg", { client: pgClient });
+```
+
+If a driver is missing you get an actionable error instead of a module-resolution stack:
+
+```
+umosql: the "pg" backend needs the "pg" driver, which is not installed.
+  -> install it yourself: `npm i pg`
+  -> or bring your own: createSchemalessClient("pg", { client }) / { driver }
+umosql never bundles drivers.
 ```
 
 ### Memory Adapter
 
 ```javascript
-import { MemoryAdapter } from "umosql/adapters";
+import { createSchemalessClient } from "umosql/client";
 
-const db = new MemoryAdapter();
-await db.connect();
-
-const users = db.collection("users");
+const client = await createSchemalessClient("memory");
+const users = client.db("app").collection("users");
 
 // Works exactly like MongoDB
 await users.insertMany([
@@ -1482,41 +1547,84 @@ await users.insertMany([
 	{ name: "Charlie", age: 22, tags: ["premium", "vip"] },
 ]);
 
-// All MongoDB query features work
-const premium = await users.find({ tags: { $in: ["premium"] } });
-const adults = await users.find({ age: { $gte: 18 } });
-
-// Update with operators
-await users.updateMany(
-	{ tags: { $in: ["premium"] } },
-	{ $inc: { points: 100 } }
-);
-
-// Aggregation
+const premium = await (await users.find({ tags: { $in: ["premium"] } })).toArray();
+await users.updateMany({ tags: { $in: ["premium"] } }, { $inc: { points: 100 } });
 const grouped = await users.aggregate([
 	{ $group: { _id: "$age", count: { $sum: 1 } } },
 ]);
+
+await client.close(); // drops every in-memory store
+```
+
+Each `client.db(name)` gets its own isolated store, so database names never share documents.
+
+### In-memory engine without adapters (synchronous)
+
+```javascript
+import { collection, db } from "umosql/memory";
+
+const users = collection("users", [
+	{ name: "Alice", age: 25, tags: ["premium"] },
+	{ name: "Bob", age: 30, tags: ["basic"] },
+]);
+
+users.find({ tags: { $in: ["premium"] } }).toArray(); // no promises
+users.updateMany({ age: { $gte: 18 } }, { $inc: { points: 100 } });
+users.aggregate([{ $group: { _id: "$age", count: { $sum: 1 } } }]);
+
+// Or several named databases:
+const app = db("app");
+const logs = app.collection("logs", [], { idStrategy: "mongo" });
+```
+
+### Bring your own driver (adapters only)
+
+```javascript
+import { createSchemalessAdapter } from "umosql/schemaless";
+import Database from "better-sqlite3";
+
+const { adapter } = createSchemalessAdapter(new Database(":memory:"), "sqlite");
+const users = adapter.collection("users");
+```
+
+### Serverless / HTTP drivers
+
+```javascript
+import { createSchemalessClient } from "umosql/client";
+
+// Neon, Turso, PlanetScale, Cloudflare Hyperdrive, ...
+const client = await createSchemalessClient("sql", {
+	database: "pg",
+	executor: async (sql, params) => {
+		const res = await fetch(url, {
+			method: "POST",
+			headers: { Authorization: `Bearer ${token}` },
+			body: JSON.stringify({ sql, params }),
+		});
+		return { rows: (await res.json()).rows };
+	},
+});
 ```
 
 ### Switch Between Adapters
 
 ```javascript
-import { connect } from "umosql/adapters";
+import { createSchemalessClient } from "umosql/client";
 
-// Use environment variable to switch
+// Use an environment variable to switch backends
 const dbType = process.env.DB_TYPE || "memory";
-const db = await connect(dbType, {
-	// PostgreSQL
+const client = await createSchemalessClient(dbType, {
 	host: process.env.DB_HOST,
 	database: process.env.DB_NAME,
 	user: process.env.DB_USER,
 	password: process.env.DB_PASSWORD,
 });
 
-// Same code works with any adapter!
-const users = db.collection("users");
+// Same code works with any backend
+const users = client.db("app").collection("users");
 await users.insertOne({ name: "Alice" });
-const results = await users.find({ age: { $gte: 18 } });
+const results = await (await users.find({ age: { $gte: 18 } })).toArray();
+await client.close();
 ```
 
 ---
@@ -1728,13 +1836,13 @@ users.updateOne(
 
 #### Code References
 
-- Filter operators: `mosql/src/index.js:196` and `mosql/adapters/memory.js:74`
-- Expression operators: `mosql/src/index.js:253` and `mosql/adapters/memory.js:121`
-- Update operators: `mosql/src/index.js:426` and `mosql/adapters/memory.js:311`
-- Aggregation stages: `mosql/src/index.js:477` and `mosql/adapters/memory.js:419`
-- JSON path extraction: `mosql/src/index.js:80`
-- JSON updates (`$set`, `$inc`, `$mul`): `mosql/src/index.js:98`
-- Aggregate builder and stage assembly: `mosql/src/index.js:717`
+- Filter operators: `src/index.js:196` and `src/adapter/memory/memory.js:74`
+- Expression operators: `src/index.js:253` and `src/adapter/memory/memory.js:121`
+- Update operators: `src/index.js:426` and `src/adapter/memory/memory.js:311`
+- Aggregation stages: `src/index.js:477` and `src/adapter/memory/memory.js:419`
+- JSON path extraction: `src/index.js:80`
+- JSON updates (`$set`, `$inc`, `$mul`): `src/index.js:98`
+- Aggregate builder and stage assembly: `src/index.js:717`
 
 ### Compatibility & Testing
 
@@ -1754,7 +1862,7 @@ users.updateOne(
 - Default backend is memory when omitted.
 
 ```javascript
-import { createSchemalessAdapter } from './v2/src/schemaless.js';
+import { createSchemalessAdapter } from 'umosql/schemaless';
 
 // Memory (default)
 const { adapter } = createSchemalessAdapter();
@@ -1768,7 +1876,7 @@ console.log(await (await users.find({ name: 'Alice' })).toArray());
 - Use a single factory to target SQL backends without per-backend adapter folders.
 
 ```javascript
-import { createSchemalessAdapter } from './v2/src/schemaless.js';
+import { createSchemalessAdapter } from 'umosql/schemaless';
 import Database from 'better-sqlite3';
 
 // SQLite
@@ -1796,19 +1904,29 @@ const { adapter: myAdapter } = createSchemalessAdapter(conn, 'mysql');
 - Example usage:
 
 ```javascript
-import { createMongoSchemaless } from './v2/adapter/mongodb/adapter.js';
+import { createSchemalessClient } from 'umosql/client';
 
-const { adapter } = await createMongoSchemaless({ host: 'localhost', port: 27017, database: 'test' });
-const users = adapter.collection('users');
+const client = await createSchemalessClient('mongodb', { host: 'localhost', port: 27017, database: 'test' });
+const users = client.db('test').collection('users');
 await users.insertOne({ name: 'Alice' });
 const rows = await (await users.find({ name: 'Alice' })).toArray();
+await client.close();
+```
+
+The raw adapter factory is re-exported from `umosql/client` if you prefer it:
+
+```javascript
+import { createMongoSchemaless } from 'umosql/client';
+
+const { adapter, client } = await createMongoSchemaless({ host: 'localhost', database: 'test' });
 ```
 
 ### Serverless Examples (Drizzle)
 
-- Neon: `v2/examples/serverless-neon-drizzle.js` (requires `NEON_HTTP_URL`)
-- Turso: `v2/examples/serverless-turso-drizzle.js` (requires `TURSO_HTTP_URL`, `TURSO_TOKEN`)
-- PlanetScale: planned; example will be guarded by env detection.
+- Neon: `examples/serverless-neon-drizzle.js` (requires `NEON_HTTP_URL`)
+- Turso: `examples/serverless-turso-drizzle.js` (requires `TURSO_HTTP_URL`, `TURSO_TOKEN`)
+- PlanetScale: `examples/serverless-planetscale.js` (requires `PSCALE_DATA_API_URL`, `PSCALE_TOKEN`)
+- Runnable tour of every backend: `examples/client.js` (`node examples/client.js`)
 
 ### Auto ID Creation
 
@@ -1824,6 +1942,8 @@ const rows = await (await users.find({ name: 'Alice' })).toArray();
 - Configure per database/collection
 
 ```javascript
+import { createSchemalessClient } from 'umosql/client';
+
 const client = await createSchemalessClient('pg', { host, port, user, password, database });
 const db = client.db('test_database', { id: '_id', idStrategy: 'mongo' });
 const users = db.collection('users');
@@ -1831,6 +1951,8 @@ await users.insertOne({ name: 'Alice' });
 ```
 
 ```javascript
+import { createSchemalessClient } from 'umosql/client';
+
 const client = await createSchemalessClient('sql', {
   database: 'sqlite',
   executor: async (sql, params) => {}
@@ -1839,6 +1961,8 @@ const db = client.db('mydb', { id: '_id', idStrategy: 'custom', idGenerator: () 
 const events = db.collection('events');
 await events.insertOne({ type: 'click' });
 ```
+
+Passing `idGenerator` without `idStrategy` implies `custom` — under `auto` adapters would ignore it.
 
 ### Serverless Behavior
 
@@ -1908,6 +2032,57 @@ Notes:
 - For pure MongoDB replacement needs (without DDL), memory and SQL adapters are compatible at the collection method level.
 ## API Reference
 
+### Entry points
+
+| Module                | Exports                                                                                                                                                                                                                                       |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `umosql`              | `collection` (default), `filter`, `expression`, `aggregate`, `insertMany`, `updateMany`, `deleteMany`, `FindQuery`, `extend`, `db`, `createQueryBuilder`, `filterOps`, `exprOps`, `updateOps`, `stageHandlers`, `escape`, `jsonPath`, `validate` |
+| `umosql/lite`         | default builder object + `collection`, `filter`, `expression`, `aggregate`, `extend`, `db`                                                                                                                                                    |
+| `umosql/tiny`         | default builder object + `collection`, `filter`, `expression`, `aggregate`, `extend`, `db`                                                                                                                                                    |
+| `umosql/schemaless`   | `createSchemalessAdapter`, `createSQLAdapter`, `createMemorySchemaless`                                                                                                                                                                       |
+| `umosql/memory`       | `collection` (default), `db`, `Database`, `Collection`, `FindQuery`, `filter`, `expression`, `aggregate`, `project`, `extend`, `createMemoryDB`, `createMemorySchemaless`, `filterOps`, `exprOps`, `updateOps`, `stageOps`, `deepEquals`, `getPath`, `setPath`, `deletePath`, `clone` |
+| `umosql/client`       | `createSchemalessClient` (default), `CLIENT_TYPES`, `createSchemalessAdapter`, `createSQLAdapter`, `createMemorySchemaless`, `createMongoSchemaless`                                                                                          |
+
+Each entry point is published as ESM (`.es.js`), CommonJS (`.cjs`), UMD, minified IIFE, and a matching `.d.ts`.
+The query-builder entries (`umosql`, `/lite`, `/tiny`) only produce SQL strings; the adapter entries
+(`/schemaless`, `/memory`, `/client`) execute them.
+
+### createSchemalessClient(type?, config?)
+
+- `type`: `memory` (in-process), `sqlite` (`better-sqlite3`), `pg`, `mysql`, `mongodb`, or `sql`
+  (any driver through your own `executor`). Defaults to `sqlite`.
+- `config`
+  - `client` / `conn`: reuse an existing driver instance instead of creating one — the driver package
+    is then **never imported**. A `pg` client you pass in is **not** re-connected (pg throws on a second
+    `connect()`).
+  - `driver`: inject the driver module (e.g. `await import('pg')`, or a stub in tests) when you want
+    umosql to construct the connection but not resolve the package.
+  - `driverOptions`: extra options forwarded to the driver constructor / connection factory.
+  - `filename`: sqlite file (default `:memory:`).
+  - `host`, `port`, `user`, `password`, `database`: pg / mysql / mongodb.
+  - `connectionString` | `url` (+ `ssl`): pg connection string (Neon, Supabase, ...).
+  - `uri`: mysql connection URI.
+  - `executor(sql, params)`: required for `type: 'sql'`; return driver rows (`{ rows }`, `mysql2`'s
+    `[rows, fields]`, or a plain array). Optional `close()` for teardown.
+  - `debug`: log every generated statement.
+  - `id` | `idColumn`, `idStrategy`, `idGenerator`: defaults for collections created via `db()`.
+- Returns `{ type, raw, adapter, db(name?, options?), close() }`
+  - `raw`: the underlying driver instance (`pg.Client`, `mysql2` connection, `MongoClient`,
+    `better-sqlite3` handle, in-memory `Database`); `null` for `type: 'sql'` unless you pass `client`.
+  - `db(name, options?)` → `{ name, collection(name, opts?), adapter }`. For `memory`, each name gets an
+    isolated store; for SQL/Mongo it scopes id options.
+  - `close()`: releases the driver (ends connections, drops in-memory stores). Safe to call twice.
+
+```javascript
+import { createSchemalessClient } from 'umosql/client';
+
+const client = await createSchemalessClient('sqlite', { filename: ':memory:' });
+const users = client.db('app').collection('users');
+await users.insertOne({ name: 'Alice', age: 25 });
+console.log(await (await users.find({ age: { $gte: 18 } })).toArray());
+await client.close();
+```
+
 ### createSchemalessAdapter(client?, database?, options?)
 
 - Parameters
@@ -1917,6 +2092,16 @@ Notes:
 - Returns: `{ adapter, client? }`
   - `adapter`: unified interface with Mongo-compatible collection methods.
   - `client`: the raw client for SQL backends (not present for memory).
+  - memory returns `{ adapter, database }` instead, where `database` is the in-memory `Database`.
+- Use `createSchemalessClient` when you want the driver created/closed for you, or `mongodb` support.
+
+### Drivers
+
+- umosql declares **no** runtime dependencies and bundles **no** driver code (`pg`, `mysql2`,
+  `better-sqlite3`, `mongodb` and `dotenv` stay external in every build).
+- Install only what you use, or pass `{ client }` / `{ driver }` to skip resolution entirely.
+- `loadDriver(backend, specifier, () => import(specifier))` is exported from `umosql/client` if you
+  want the same lazy-load-with-hint behaviour in a custom backend.
 
 ### Adapter
 

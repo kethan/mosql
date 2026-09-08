@@ -2,6 +2,11 @@
 // SCHEMA-LESS SQL ADAPTER
 // ============================================
 
+import { createQueryBuilder, filterOps, exprOps, updateOps, stageHandlers } from './index.js';
+import { createMemorySchemaless } from './adapter/memory/adapter.js';
+
+export { createMemorySchemaless };
+
 /* Copied from v2/src/new.js (renamed) */
 /* Contents identical to ensure API continuity */
 
@@ -182,6 +187,3 @@ export const createSchemalessAdapter = (client, database = 'memory', { debug = f
     }
     return { adapter: createSQLAdapter({ database, execute, queryBuilder: qb, debug }), client };
 };
-import { createQueryBuilder, filterOps, exprOps, updateOps, stageHandlers } from './index.js';
-import { createMemorySchemaless } from './adapter/memory/adapter.js';
- 

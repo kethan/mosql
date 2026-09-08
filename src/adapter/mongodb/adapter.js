@@ -1,8 +1,13 @@
-import dotenv from 'dotenv';
-dotenv.config();
+import { loadEnv } from '../../env.js';
+import { loadDriver, pick } from '../../drivers.js';
 
 export const createMongoSchemaless = async (config = {}) => {
-  const { MongoClient } = await import('mongodb');
+  await loadEnv();
+  // `mongodb` is never bundled: inject it via `config.driver`, or install it and
+  // let this lazy import pick it up.
+  const driver = config.driver || await loadDriver('mongodb', 'mongodb', () => import('mongodb'));
+  const MongoClient = pick(driver, 'MongoClient');
+  if (typeof MongoClient !== 'function') throw new Error("umosql: could not find MongoClient in the 'mongodb' driver (pass { driver })");
   const host = config.host || process.env.MONGO_HOST || 'localhost';
   const port = config.port || process.env.MONGO_PORT || 27017;
   const user = config.user || process.env.MONGO_USER;
@@ -12,8 +17,8 @@ export const createMongoSchemaless = async (config = {}) => {
 
   const auth = user && password ? `${encodeURIComponent(user)}:${encodeURIComponent(password)}@` : '';
   const uri = `mongodb://${auth}${host}:${port}`;
-  const client = new MongoClient(uri, { serverSelectionTimeoutMS: 5000 });
-  await client.connect();
+  const client = config.client || new MongoClient(uri, { serverSelectionTimeoutMS: 5000, ...(config.driverOptions || {}) });
+  if (!config.client) await client.connect();
   const db = client.db(database);
 
   class MongoCollection {

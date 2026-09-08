@@ -258,7 +258,8 @@ for (const db of dbs) {
       const row = await coll.findOne({ _id: 'CUSTOM_ID_1' });
       return [{ ok: String(r.insertedId) === 'CUSTOM_ID_1' && !!row }];
     }, [{ ok: true }]);
-  } else if (db.name !== 'memory') {
+  } else {
+    // memory included: its idGenerator option is honoured again (was silently dropped)
     await runTest(`unified/${db.name} idStrategy custom`, async () => {
       const gen = () => 'CUSTOM_ID_1';
       const coll = adapter.collection(`ids_custom_${db.name}`, { idStrategy: 'custom', idGenerator: gen });

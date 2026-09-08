@@ -5,32 +5,59 @@
 	"version": "0.2.0",
 	"type": "module",
 	"source": "./src/index.js",
-	"main": "./dist/index.js",
-	"module": "./dist/index.js",
+	"main": "./dist/index.cjs",
+	"module": "./dist/index.es.js",
 	"unpkg": "./dist/index.min.js",
 	"umd:main": "./dist/index.umd.js",
 	"types": "./index.d.ts",
 	"exports": {
 		".": {
+			"types": "./index.d.ts",
 			"browser": "./dist/index.es.js",
 			"umd": "./dist/index.umd.js",
 			"import": "./dist/index.es.js",
-			"default": "./dist/index.es.js",
-			"require": "./dist/index.js"
+			"require": "./dist/index.cjs",
+			"default": "./dist/index.es.js"
 		},
 		"./lite": {
+			"types": "./lite/index.d.ts",
 			"browser": "./lite/dist/index.es.js",
 			"umd": "./lite/dist/index.umd.js",
 			"import": "./lite/dist/index.es.js",
-			"default": "./lite/dist/index.es.js",
-			"require": "./lite/dist/index.js"
+			"require": "./lite/dist/index.cjs",
+			"default": "./lite/dist/index.es.js"
 		},
 		"./tiny": {
+			"types": "./tiny/index.d.ts",
 			"browser": "./tiny/dist/index.es.js",
 			"umd": "./tiny/dist/index.umd.js",
 			"import": "./tiny/dist/index.es.js",
-			"default": "./tiny/dist/index.es.js",
-			"require": "./tiny/dist/index.js"
+			"require": "./tiny/dist/index.cjs",
+			"default": "./tiny/dist/index.es.js"
+		},
+		"./schemaless": {
+			"types": "./schemaless.d.ts",
+			"browser": "./dist/schemaless.es.js",
+			"umd": "./dist/schemaless.umd.js",
+			"import": "./dist/schemaless.es.js",
+			"require": "./dist/schemaless.cjs",
+			"default": "./dist/schemaless.es.js"
+		},
+		"./memory": {
+			"types": "./memory.d.ts",
+			"browser": "./dist/memory.es.js",
+			"umd": "./dist/memory.umd.js",
+			"import": "./dist/memory.es.js",
+			"require": "./dist/memory.cjs",
+			"default": "./dist/memory.es.js"
+		},
+		"./client": {
+			"types": "./client.d.ts",
+			"browser": "./dist/client.es.js",
+			"umd": "./dist/client.umd.js",
+			"import": "./dist/client.es.js",
+			"require": "./dist/client.cjs",
+			"default": "./dist/client.es.js"
 		},
 		"./package.json": "./package.json"
 	},
@@ -41,6 +68,15 @@
 			],
 			"tiny": [
 				"tiny/index.d.ts"
+			],
+			"schemaless": [
+				"schemaless.d.ts"
+			],
+			"memory": [
+				"memory.d.ts"
+			],
+			"client": [
+				"client.d.ts"
 			],
 			"*": [
 				"index.d.ts"
@@ -57,7 +93,10 @@
 		"tiny",
 		"index.d.ts",
 		"lite/index.d.ts",
-		"tiny/index.d.ts"
+		"tiny/index.d.ts",
+		"schemaless.d.ts",
+		"memory.d.ts",
+		"client.d.ts"
 	],
 	"scripts": {
 		"build": "rollup --config rollup.config.js",

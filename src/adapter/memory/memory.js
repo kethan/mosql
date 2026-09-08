@@ -812,7 +812,7 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
             this.options = options || {};
             this.idColumn = this.options.idColumn || '_id';
             this.idStrategy = this.options.idStrategy || 'auto';
-            this.idGenerator = typeof this.options.idGenerator === 'function' ? this.idGenerator : null;
+            this.idGenerator = typeof this.options.idGenerator === 'function' ? this.options.idGenerator : null;
         }
         
         _genId() { return this._id++; }
@@ -938,7 +938,7 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
             return { deletedCount: 1, acknowledged: true };
         }
         
-        deleteMany(q) {
+        deleteMany(q = {}) {
             const init = this._data.length;
             for (let i = this._data.length - 1; i >= 0; i--) {
                 if (filter(q)(this._data[i])) this._data.splice(i, 1);
@@ -1039,7 +1039,7 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
     };
     
     const db = (name) => new Database(name);
-    const collection = (name, initData = []) => new Collection(name, initData);
+    const collection = (name, initData = [], options) => new Collection(name, initData, options);
     
     return {
         filter,
