@@ -13,50 +13,57 @@ const copyTypes = (src, dest) => ({
     }
 });
 
-const resolve = (pkg, input = "src/index", output = "dist/index") => ({
+// Optional/peer drivers are loaded lazily at runtime and must never be
+// inlined into a published bundle (they are devDependencies here).
+const OPTIONAL_DEPS = ['dotenv', 'pg', 'mysql2/promise', 'better-sqlite3', 'mongodb'];
+
+// The package is `"type": "module"`, so the CommonJS build has to use the
+// `.cjs` extension or Node refuses to load it through the "require" condition.
+const resolve = ({ name, input, output, types, external = [], globalName = name }) => ({
     input: `${input}.js`,
+    external: [...external],
     treeshake: 'smallest',
     plugins: [
         bundleSize(),
-        copyTypes(
-            input === 'index' ? 'index.d.ts' : input === 'lite/index' ? 'lite/index.d.ts' : 'tiny/index.d.ts',
-            output === 'dist/index' ? 'dist/index.d.ts' : output === 'lite/dist/index' ? 'lite/dist/index.d.ts' : 'tiny/dist/index.d.ts'
-        ),
+        copyTypes(types, `${output}.d.ts`),
     ],
-	output: [
-		{
-			file: `${output}.es.js`,
-			format: 'es',
-			exports: 'named',
-		},
-		{
-			file: `${output}.js`,
-			format: 'cjs',
-			exports: 'named',
-		},
-		{
-			file: `${output}.min.js`,
-			format: 'iife',
-			name: pkg,
-			strict: false,
-			compact: true,
-			exports: 'named',
-			plugins: [terser()]
-		},
-		{
-			file: `${output}.umd.js`,
-			format: 'umd',
-			name: pkg,
-			strict: false,
-			compact: true,
-			exports: 'named',
-			plugins: [terser()]
-		}
-	]
+    output: [
+        {
+            file: `${output}.es.js`,
+            format: 'es',
+            exports: 'named',
+        },
+        {
+            file: `${output}.cjs`,
+            format: 'cjs',
+            exports: 'named',
+        },
+        {
+            file: `${output}.min.js`,
+            format: 'iife',
+            name: globalName,
+            strict: false,
+            compact: true,
+            exports: 'named',
+            plugins: [terser()]
+        },
+        {
+            file: `${output}.umd.js`,
+            format: 'umd',
+            name: globalName,
+            strict: false,
+            compact: true,
+            exports: 'named',
+            plugins: [terser()]
+        }
+    ]
 });
 
 export default [
-    resolve("umosql", "index", "dist/index"),
-    resolve("umosql", "lite/index", "lite/dist/index"),
-    resolve("umosql", "tiny/index", "tiny/dist/index")
+    resolve({ name: 'umosql', input: 'index', output: 'dist/index', types: 'index.d.ts' }),
+    resolve({ name: 'umosql', input: 'lite/index', output: 'lite/dist/index', types: 'lite/index.d.ts' }),
+    resolve({ name: 'umosql', input: 'tiny/index', output: 'tiny/dist/index', types: 'tiny/index.d.ts' }),
+    resolve({ name: 'umosqlSchemaless', input: 'src/schemaless', output: 'dist/schemaless', types: 'schemaless.d.ts' }),
+    resolve({ name: 'umosqlMemory', input: 'src/memory', output: 'dist/memory', types: 'memory.d.ts' }),
+    resolve({ name: 'umosqlClient', input: 'src/client', output: 'dist/client', types: 'client.d.ts', external: OPTIONAL_DEPS }),
 ]

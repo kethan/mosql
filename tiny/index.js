@@ -42,5 +42,5 @@ const tiny = createQueryBuilder({
   }
 });
 
-export const { collection, aggregate, filter, db } = tiny;
+export const { collection, aggregate, filter, expression, extend, db } = tiny;
 export default tiny;

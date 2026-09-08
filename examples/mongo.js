@@ -1,6 +1,7 @@
-import dotenv from 'dotenv';
-import { createMongoSchemaless } from '../src/adapter/mongodb/adapter.js';
-dotenv.config();
+import { createMongoSchemaless } from '../src/client.js';
+import { loadEnv } from '../src/env.js';
+
+await loadEnv();
 
 (async () => {
   const { adapter, client } = await createMongoSchemaless({
