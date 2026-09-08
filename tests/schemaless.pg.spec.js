@@ -8,7 +8,11 @@ const config = { host: process.env.PG_HOST, port: process.env.PG_PORT || 5432, u
 
 const main = async () => {
   if (!config.host) {
-    throw new Error('PG_HOST is not set');
+    // Consistent with the other database specs: without a configured server the
+    // file is a no-op, so `npm test` stays runnable offline (the unit CI job has
+    // no PostgreSQL) while the db job still executes it.
+    console.log('SKIP schemaless.pg - PG_HOST is not set');
+    return;
   }
 
   const { Client } = pkg;

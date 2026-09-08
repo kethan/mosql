@@ -237,8 +237,9 @@ describe('Expression Test', () => {
         },
         {
             title: '$divide',
+            // sqlite: cast keeps the division real instead of truncating
             input: () => expression({ $divide: [10, 2] }),
-            expected: '(10 / NULLIF(2, 0))'
+            expected: '(CAST(10 AS REAL) / NULLIF(2, 0))'
         },
         {
             title: '$concat',

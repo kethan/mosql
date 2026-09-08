@@ -195,11 +195,27 @@ const main = async () => {
 
     log('14. building test document');
 
+    const defOf = (k) =>
+      typeof coll.schema[k] === 'string' ? {} : coll.schema[k] || {};
+    const required = Object.keys(coll.schema).filter((k) => defOf(k).required);
+    const withDefault = Object.keys(coll.schema).filter(
+      (k) => defOf(k).default !== undefined
+    );
+    const nullable = (k) => !required.includes(k);
+
+    // NULL for every column that accepts it. Columns declared NOT NULL are left
+    // out - they are asserted below instead, because inserting NULL into them
+    // is the one thing the schema forbids.
     const doc = Object.fromEntries(
-      Object.keys(coll.schema).map((k) => [k, null])
+      Object.keys(coll.schema)
+        .filter(nullable)
+        .map((k) => [k, null])
     );
 
-    log('15. inserting test document');
+    log('15. inserting test document', {
+      columns: Object.keys(doc).length,
+      skipped: [...required, ...withDefault],
+    });
 
     await withTimeout(
       coll.insertOne(doc),
@@ -208,6 +224,23 @@ const main = async () => {
     );
 
     log('16. insert finished');
+
+    await runTest('pg schema defaults and NOT NULL', async () => {
+      // a column with a DEFAULT keeps it when the document omits the key
+      const row = await coll.findOne({});
+      const defaults = {};
+      for (const k of withDefault) defaults[k] = row[k];
+
+      // a NOT NULL column rejects NULL
+      let rejected = false;
+      try {
+        await coll.insertOne({ ...doc, [required[0]]: null });
+      } catch (e) {
+        rejected = /not-null|violates/i.test(String(e?.message || e));
+      }
+
+      return [{ defaults, rejected }];
+    }, [{ defaults: { defaultCol: 100 }, rejected: true }]);
 
     const ensure = async (name, typeSpec) => {
       log(`17.${name}.1 getTableSchema`);

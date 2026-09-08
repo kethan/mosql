@@ -138,7 +138,8 @@ users.updateOne(
     { $set: { status: "active" }, $inc: { loginCount: 1 } }
 );
 // UPDATE users SET status = 'active', loginCount = loginCount + 1
-// WHERE email = 'alice@example.com' LIMIT 1
+// WHERE email = 'alice@example.com'
+//   AND ctid IN (SELECT ctid FROM users WHERE email = 'alice@example.com' LIMIT 1)
 
 users.insertMany([
 	{ name: "Alice", age: 25 },
@@ -457,6 +458,11 @@ users.find({ email: { $nlike: "%@temporary.com" } }).toSQL();
 // NOT ILIKE
 users.find({ username: { $nilike: "admin%" } }).toSQL();
 // PostgreSQL: SELECT * FROM users WHERE username NOT ILIKE 'admin%'
+// Others: SELECT * FROM users WHERE LOWER(username) NOT LIKE LOWER('admin%')
+
+// $not on a field negates the conditions nested in it
+users.find({ age: { $not: { $lt: 23 } } }).toSQL();
+// SELECT * FROM users WHERE NOT (age < 23)
 
 // REGEX - Regular expression matching
 users.find({ code: { $regex: /^[A-Z]{3}\d{3}$/ } }).toSQL();
@@ -632,7 +638,8 @@ users.updateOne(
 	{ $set: { status: "verified", verifiedAt: new Date() } }
 );
 // UPDATE users SET status = 'verified', verifiedAt = '2024-01-01 12:00:00'
-// WHERE email = 'alice@example.com' LIMIT 1
+// WHERE email = 'alice@example.com'
+//   AND ctid IN (SELECT ctid FROM users WHERE email = 'alice@example.com' LIMIT 1)
 
 // Update many documents
 users.updateMany(
@@ -644,11 +651,13 @@ users.updateMany(
 // Increment values
 users.updateOne({ id: 1 }, { $inc: { loginCount: 1, points: 10 } });
 // UPDATE users SET loginCount = loginCount + 1, points = points + 10
-// WHERE id = 1 LIMIT 1
+// WHERE id = 1
+//   AND ctid IN (SELECT ctid FROM users WHERE id = 1 LIMIT 1)
 
 // Multiply values
 users.updateOne({ id: 1 }, { $mul: { score: 1.1 } });
-// UPDATE users SET score = score * 1.1 WHERE id = 1 LIMIT 1
+// UPDATE users SET score = score * 1.1 WHERE id = 1
+//   AND ctid IN (SELECT ctid FROM users WHERE id = 1 LIMIT 1)
 
 // Set to minimum
 users.updateMany({}, { $min: { minPrice: 10 } });
@@ -660,7 +669,8 @@ users.updateMany({}, { $max: { maxDiscount: 50 } });
 
 // Unset fields (set to NULL)
 users.updateOne({ id: 1 }, { $unset: { tempToken: "", tempData: "" } });
-// UPDATE users SET tempToken = NULL, tempData = NULL WHERE id = 1 LIMIT 1
+// UPDATE users SET tempToken = NULL, tempData = NULL WHERE id = 1
+//   AND ctid IN (SELECT ctid FROM users WHERE id = 1 LIMIT 1)
 
 // Rename fields
 users.updateMany({}, { $rename: { oldField: "newField" } });
@@ -671,9 +681,14 @@ users.updateOne(
 	{ id: 1 },
 	{ $currentDate: { lastLogin: true, updatedAt: true } }
 );
-// PostgreSQL: UPDATE users SET lastLogin = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP WHERE id = 1 LIMIT 1
+// PostgreSQL: UPDATE users SET lastLogin = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP WHERE id = 1 AND ctid IN (SELECT ctid FROM users WHERE id = 1 LIMIT 1)
 // MySQL: UPDATE users SET lastLogin = NOW(), updatedAt = NOW() WHERE id = 1 LIMIT 1
-// SQLite: UPDATE users SET lastLogin = datetime('now'), updatedAt = datetime('now') WHERE id = 1 LIMIT 1
+// SQLite: UPDATE users SET lastLogin = datetime('now'), updatedAt = datetime('now') WHERE id = 1 AND rowid IN (SELECT rowid FROM users WHERE id = 1 LIMIT 1)
+
+> `updateOne` and `deleteOne` affect at most one row on every dialect. MySQL gets
+> `LIMIT 1`; SQLite and PostgreSQL have no LIMIT on DML, so the statement is
+> narrowed with `rowid` / `ctid` instead (the row identifier both support).
+> `updateMany` and `deleteMany` never carry the narrowing.
 
 // Multiple operators combined
 users.updateOne(
@@ -723,7 +738,8 @@ users.updateMany(
 ```javascript
 // Delete one document
 users.deleteOne({ email: "old@example.com" });
-// DELETE FROM users WHERE email = 'old@example.com' LIMIT 1
+// DELETE FROM users WHERE email = 'old@example.com'
+//   AND ctid IN (SELECT ctid FROM users WHERE email = 'old@example.com' LIMIT 1)
 
 // Delete many documents
 users.deleteMany({ active: false });
@@ -753,7 +769,8 @@ users.deleteMany({ age: { $lt: 13 } }, { returning: ["id", "name", "email"] });
 // DELETE FROM users WHERE age < 13 RETURNING id, name, email
 
 users.deleteOne({ id: 123 }, { returning: "*" });
-// DELETE FROM users WHERE id = 123 LIMIT 1 RETURNING *
+// DELETE FROM users WHERE id = 123
+//   AND ctid IN (SELECT ctid FROM users WHERE id = 123 LIMIT 1) RETURNING *
 ```
 
 ---
@@ -1748,13 +1765,13 @@ users.updateOne(
 | `$ilike` | ✅ | ✅ | ✅ | ✅ | PG: `ILIKE`; others: `LOWER(field) LIKE LOWER(value)` |
 | `$nlike` | ✅ | ✅ | ✅ | ✅ | `NOT LIKE` |
 | `$nilike` | ✅ | ✅ | ✅ | ✅ | PG: `NOT ILIKE`; others: `NOT LIKE LOWER(...)` |
-| `$regex` | ✅ | ⚠️ | ✅ | ✅ | PG: `~`; MySQL: `REGEXP`; SQLite: needs `REGEXP` UDF |
+| `$regex` | ✅ | ⚠️ | ✅ | ✅ | PG: `~`; MySQL: `REGEXP`; SQLite: rewritten to `LIKE`, exact only for `^…$` anchored patterns |
 | `$exists` | ✅ | ✅ | ✅ | ✅ | `IS NULL` / `IS NOT NULL` |
 | `$between` | ✅ | ✅ | ✅ | ✅ | `BETWEEN a AND b` |
-| `$mod` | ✅ | ✅ | ✅ | ✅ | `field % m = r` |
+| `$mod` | ✅ | ✅ | ✅ | ✅ | `field % m = r`; both operands must be finite numbers |
 | `$and` | ✅ | ✅ | ✅ | ✅ | Parenthesized conjunctions |
 | `$or` | ✅ | ✅ | ✅ | ✅ | Parenthesized disjunctions |
-| `$not` | ✅ | ✅ | ✅ | ✅ | `NOT ( ... )` |
+| `$not` | ✅ | ✅ | ✅ | ✅ | `NOT ( ... )`, top level or per field: `{ age: { $not: { $lt: 23 } } }` |
 | `$nor` | ✅ | ✅ | ✅ | ✅ | `NOT ( ... OR ... )` |
 | `$expr` | ✅ | ✅ | ✅ | ✅ | Embed expression in filter |
 | `$type` | ✅ | — | — | — | Memory-only |
@@ -1769,7 +1786,7 @@ users.updateOne(
 | `$add` | ✅ | ✅ | ✅ | ✅ | `+` |
 | `$subtract` | ✅ | ✅ | ✅ | ✅ | `-` |
 | `$multiply` | ✅ | ✅ | ✅ | ✅ | `*` |
-| `$divide` | ✅ | ✅ | ✅ | ✅ | `/ NULLIF(...,0)` |
+| `$divide` | ✅ | ✅ | ✅ | ✅ | `/ NULLIF(...,0)`; SQLite/PostgreSQL cast to REAL/numeric first, so `25 / 2` is `12.5` |
 | `$mod` | ✅ | ✅ | ✅ | ✅ | `%` |
 | `$abs` | ✅ | ✅ | ✅ | ✅ | `ABS()` |
 | `$ceil` | ✅ | ✅ | ✅ | ✅ | `CEIL()` |
@@ -1780,7 +1797,7 @@ users.updateOne(
 | `$concat` | ✅ | ✅ | ✅ | ✅ | PG/MySQL: `CONCAT`, SQLite: `||` |
 | `$upper` | ✅ | ✅ | ✅ | ✅ | `UPPER()` |
 | `$lower` | ✅ | ✅ | ✅ | ✅ | `LOWER()` |
-| `$substr` | ✅ | ✅ | ✅ | ✅ | `SUBSTRING()` |
+| `$substr` | ✅ | ✅ | ✅ | ✅ | `SUBSTRING()` with a 0 based start index, like MongoDB |
 | `$trim`/`$ltrim`/`$rtrim` | ✅ | ✅ | ✅ | ✅ | `TRIM` variants |
 | `$strLen` | ✅ | ✅ | ✅ | ✅ | `LENGTH()` |
 | `$replace` | ✅ | ✅ | ✅ | ✅ | `REPLACE()` |
@@ -1836,21 +1853,37 @@ users.updateOne(
 
 #### Code References
 
-- Filter operators: `src/index.js:196` and `src/adapter/memory/memory.js:74`
-- Expression operators: `src/index.js:253` and `src/adapter/memory/memory.js:121`
-- Update operators: `src/index.js:426` and `src/adapter/memory/memory.js:311`
-- Aggregation stages: `src/index.js:477` and `src/adapter/memory/memory.js:419`
-- JSON path extraction: `src/index.js:80`
-- JSON updates (`$set`, `$inc`, `$mul`): `src/index.js:98`
-- Aggregate builder and stage assembly: `src/index.js:717`
+- Filter operators: `FILTER OPERATORS` in `src/index.js`, `filterOps` in `src/adapter/memory/memory.js`
+- Expression operators: `EXPRESSION OPERATORS` in `src/index.js`, `exprOps` in the memory engine
+- Update operators: `UPDATE OPERATORS` in `src/index.js`, `updateOps` in the memory engine
+- Aggregation stages: `AGGREGATE PIPELINE` in `src/index.js`, `stageOps` in the memory engine
+- JSON path extraction and JSON updates: `jsonPath()` / `jsonUpdate()` in `src/index.js`
+- Single-row narrowing for `updateOne`/`deleteOne`: `whereClause()` in `src/index.js`
+- CRUD SQL: `collection()` in `src/index.js`, executed by `SQLCollection` in `src/schemaless.js`
 
 ### Compatibility & Testing
 
 - PostgreSQL: tested with 16; native `ILIKE` and regex `~` used.
 - MySQL: tested with 8.x; uses `REGEXP`, `LOWER(...) LIKE LOWER(...)` for case-insensitive like.
-- SQLite: tested with `better-sqlite3`; regex requires `REGEXP` extension/UDF.
+- SQLite: tested with `better-sqlite3`; `$regex` is rewritten to `LIKE`, so only `^`/`$` anchored
+  patterns map exactly (a `REGEXP` UDF can be registered for full fidelity). `UPDATE/DELETE … LIMIT`
+  is not available, so single-row statements are narrowed through `rowid`.
 - Memory: full operator coverage, including array and pipeline-only stages.
 - Unified suite covers filters, expressions, updates, and aggregation across adapters where applicable.
+
+### Running the Tests
+
+```bash
+npm test        # every tests/*.spec.js file
+npm run test:db # only the specs that talk to a real database
+npm run db:up   # docker compose: postgres + mysql + mongodb, then `npm run coverage:db`
+```
+
+`tests/run-all.js` runs each spec file in its own Node process and fails as soon as one of them
+exits non-zero, so an assertion error cannot be printed and ignored. The specs that need a server
+(`pg`, `mysql`, `mongodb`) check their environment first (`PG_HOST`, `MYSQL_HOST`, …) and skip
+without it, which keeps `npm test` meaningful offline; the CI `db` job provides the variables and
+runs them for real.
 
 ## Schemaless Adapters
 
@@ -2122,11 +2155,13 @@ await client.close();
   - `insertOne(doc)` → `{ acknowledged: boolean, insertedId: any }`
   - `insertMany(docs)` → `{ acknowledged: boolean, insertedIds: any[] }`
   - `find(filter?, projection?, options?)` → `{ toArray(): Promise<any[]>, count(): Promise<number> }`
+    (`count()` runs a `SELECT COUNT(*)` for the filter - it does not fetch rows; a `limit`/`skip`
+    on the cursor is applied to the returned number)
   - `findOne(filter?, projection?)` → `Promise<any | null>`
-  - `updateOne(filter, update, options?)` → `{ acknowledged: boolean, matchedCount: number, modifiedCount: number, upsertedId?: any }`
+  - `updateOne(filter, update, options?)` → `{ acknowledged: boolean, matchedCount: number, modifiedCount: number, upsertedId?: any }` (at most one row, on every dialect)
   - `updateMany(filter, update, options?)` → `{ acknowledged: boolean, matchedCount: number, modifiedCount: number }`
   - `upsertOne(filter, update)` → `{ acknowledged: boolean, upserted: boolean, upsertedId?: any }`
-  - `deleteOne(filter)` → `{ acknowledged: boolean, deletedCount: number }`
+  - `deleteOne(filter)` → `{ acknowledged: boolean, deletedCount: number }` (at most one row, on every dialect)
   - `deleteMany(filter?)` → `{ acknowledged: boolean, deletedCount: number }`
 - Query helpers
   - `countDocuments(filter?)` → `number`

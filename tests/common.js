@@ -45,3 +45,14 @@ export const runStringTest = (title, exec, expected) => {
   else assert.strictEqual(actual, expected);
   console.log(`PASS ${title}`);
 };
+
+// The tail a single-row statement carries after its SET/FROM clause.
+// `LIMIT 1` only exists on MySQL; SQLite narrows through `rowid` and PostgreSQL
+// through `ctid`, because neither supports `UPDATE/DELETE ... LIMIT`.
+export const oneRow = (db, table, where) => {
+  const cond = where ? ` WHERE ${where}` : '';
+  if (db === 'mysql') return `${cond} LIMIT 1`;
+  const rid = db === 'pg' ? 'ctid' : 'rowid';
+  const one = ` ${rid} IN (SELECT ${rid} FROM ${table}${cond} LIMIT 1)`;
+  return cond ? `${cond} AND${one}` : ` WHERE${one}`;
+};

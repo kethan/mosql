@@ -14,12 +14,14 @@ export interface FindQuery {
 export interface CollectionApi {
   find(query?: Record<string, any>, projection?: Record<string, any> | string | string[]): FindQuery;
   findOne(query?: Record<string, any>, projection?: Record<string, any> | string | string[]): FindQuery;
-  insertOne(doc: Record<string, any>, opts?: { returning?: string[] | '*' }): string;
-  insertMany(docs: Record<string, any>[], opts?: { returning?: string[] | '*' }): string;
-  updateOne(query: Record<string, any>, update: Record<string, any>, opts?: { returning?: string[] | '*' }): string;
-  updateMany(query: Record<string, any>, update: Record<string, any>, opts?: { returning?: string[] | '*' }): string;
-  deleteOne(query: Record<string, any>, opts?: { allowDeleteAll?: boolean; returning?: string[] | '*' }): string;
-  deleteMany(query?: Record<string, any>, opts?: { allowDeleteAll?: boolean; returning?: string[] | '*' }): string;
+  insertOne(doc: Record<string, any>, opts?: CrudOptions): string;
+  insertMany(docs: Record<string, any>[], opts?: CrudOptions): string;
+  /** Rewrites at most one row on every dialect. */
+  updateOne(query: Record<string, any>, update: Record<string, any>, opts?: CrudOptions): string;
+  updateMany(query: Record<string, any>, update: Record<string, any>, opts?: CrudOptions): string;
+  /** Deletes at most one row on every dialect. */
+  deleteOne(query: Record<string, any>, opts?: CrudOptions): string;
+  deleteMany(query?: Record<string, any>, opts?: CrudOptions): string;
   countDocuments(query?: Record<string, any>): string;
   distinct(field: string, query?: Record<string, any>): string;
   aggregate(pipeline: any[]): (table: string, db?: DBType) => string;
@@ -36,9 +38,9 @@ export interface QueryBuilderApi {
   filter(q: Record<string, any>, db?: DBType): string;
   expression(x: any, db?: DBType): string;
   aggregate(pipeline: any[]): (table: string, db?: DBType) => string;
-  insertMany(table: string, docs: Record<string, any>[], db?: DBType, opts?: { returning?: string[] | '*' }): string;
-  updateMany(table: string, query: Record<string, any>, update: Record<string, any>, db?: DBType, opts?: { returning?: string[] | '*' }): string;
-  deleteMany(table: string, query: Record<string, any>, db?: DBType, opts?: { allowDeleteAll?: boolean; returning?: string[] | '*' }): string;
+  insertMany(table: string, docs: Record<string, any>[], db?: DBType, opts?: CrudOptions): string;
+  updateMany(table: string, query: Record<string, any>, update: Record<string, any>, db?: DBType, opts?: CrudOptions): string;
+  deleteMany(table: string, query: Record<string, any>, db?: DBType, opts?: CrudOptions): string;
   collection(name: string, db?: DBType): CollectionApi;
   FindQuery: new (table: string, query: Record<string, any>, projection?: any, db?: DBType) => FindQuery;
   extend: ExtendApi;
@@ -58,6 +60,20 @@ export interface ValidateApi {
   alias(str: any): string;
   arr(value: any, op: string): any[];
   int(value: any, op: string): number;
+  /** Numbers used as bare SQL literals (`$mod`); rejects anything not finite. */
+  num(value: any, op: string): number | bigint;
+}
+
+/** Options shared by the CRUD builders. */
+export interface CrudOptions {
+  returning?: string[] | '*';
+  allowDeleteAll?: boolean;
+  /**
+   * Restrict the statement to a single row. `updateOne`/`deleteOne` set it;
+   * MySQL uses `LIMIT 1`, SQLite/PostgreSQL a `rowid`/`ctid` sub-select, since
+   * neither dialect supports LIMIT on DML.
+   */
+  limitOne?: boolean;
 }
 
 /** Operator tables, usable as-is or as a base for a custom build. */

@@ -1,5 +1,5 @@
 import { createQueryBuilder, filterOps, exprOps, updateOps, stageHandlers } from '../index.js';
-import { runStringTest } from './common.js';
+import { runStringTest, oneRow } from './common.js';
 
 const qb = createQueryBuilder({ filterOps, exprOps, updateOps, stageHandlers });
 
@@ -35,11 +35,13 @@ for (const db of DBs) {
   runStringTest(`ops/${db} stage set`, () => qb.aggregate([ { $set: { cityUpper: { $upper: '$city' }, next: { $add: ['$age', 1] } } } ])('users', db), `SELECT *, UPPER(${db === 'sqlite' ? 'city' : 'city'}) AS cityUpper, (age + 1) AS next FROM (SELECT * FROM users) AS t1`);
 
   // UPDATES
-  runStringTest(`ops/${db} updateOne set`, () => qb.collection('users', db).updateOne({ name: 'Alice' }, { $set: { age: 26, 'profile.country': 'FR' } }), db === 'pg'
-    ? `UPDATE users SET age = 26, profile = jsonb_set(COALESCE(profile::jsonb, '{}'::jsonb), '{country}', to_jsonb('FR'), true) WHERE name = 'Alice'`
-    : db === 'mysql'
-      ? `UPDATE users SET age = 26, profile = JSON_SET(COALESCE(profile, '{}'), '$.country', 'FR') WHERE name = 'Alice' LIMIT 1`
-      : `UPDATE users SET age = 26, profile = json_set(COALESCE(profile, '{}'), '$.country', 'FR') WHERE name = 'Alice' LIMIT 1`
+  // updateOne is narrowed to a single row per dialect (see `oneRow`).
+  runStringTest(`ops/${db} updateOne set`, () => qb.collection('users', db).updateOne({ name: 'Alice' }, { $set: { age: 26, 'profile.country': 'FR' } }),
+    `UPDATE users SET age = 26, profile = ${db === 'pg'
+      ? `jsonb_set(COALESCE(profile::jsonb, '{}'::jsonb), '{country}', to_jsonb('FR'), true)`
+      : db === 'mysql'
+        ? `JSON_SET(COALESCE(profile, '{}'), '$.country', 'FR')`
+        : `json_set(COALESCE(profile, '{}'), '$.country', 'FR')`}${oneRow(db, 'users', `name = 'Alice'`)}`
   );
 
   runStringTest(`ops/${db} updateMany inc/mul`, () => qb.collection('users', db).updateMany({ active: true }, { $inc: { age: 1 }, $mul: { score: 2 } }), db === 'pg'

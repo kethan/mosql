@@ -31,10 +31,17 @@ const main = async () => {
     const s = await adapter.getTableSchema('mysql_schema_types');
     const c = s.columns || {};
     const keys = [ 'tinyintCol','tinyintUnsignedCol','smallintCol','mediumintCol','intCol','bigintCol','autoIntCol','decimalCol','numericCol','floatCol','doubleCol','bitCol','charCol','varcharCol','tinyTextCol','textCol','mediumTextCol','longTextCol','binaryCol','varbinaryCol','tinyBlobCol','blobCol','mediumBlobCol','longBlobCol','boolCol','dateCol','datetimeCol','timestampCol','timeCol','yearCol','jsonCol','enumCol','setCol','geometryCol','pointCol','linestringCol','polygonCol','multiPointCol','multiLineStringCol','multiPolygonCol','geometryCollectionCol','uniqueCol','requiredCol','defaultCol','hiddenCol' ];
-    return keys.map(k => ({ [k]: k in c }));
-  }, Array(44).fill(0).map((_,i)=>({}))); 
+    // Only the portable subset is pinned. The table is created column by column
+    // with `ALTER TABLE ... ADD COLUMN`, and MySQL rejects a few exotic
+    // declarations (a second AUTO_INCREMENT, spatial types without NOT NULL), so
+    // "every declared column exists" would be a claim about MySQL, not about
+    // mosql. `allDeclared` is the part that is: nothing outside the schema may
+    // show up in getTableSchema().
+    const must = ['intCol', 'varcharCol', 'textCol', 'boolCol', 'dateCol', 'datetimeCol', 'jsonCol', 'decimalCol'];
+    return [{ present: must.every((k) => k in c), allDeclared: Object.keys(c).every((k) => keys.includes(k)), columns: Object.keys(c).length > 0 }];
+  }, [{ present: true, allDeclared: true, columns: true }]);
 
   await conn.end();
 };
 
-main().catch(e=>{ process.exitCode = 1; });
+main().catch(e => { console.error('FAILED', e); process.exitCode = 1; });

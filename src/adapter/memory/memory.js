@@ -118,6 +118,18 @@ export const filterOps = {
 // EXPRESSION OPERATORS (~2.5 KB)
 // ============================================
 
+const asDate = (v) => {
+    if (v instanceof Date) return isNaN(v) ? null : v;
+    if (typeof v === 'number' && isFinite(v)) return new Date(v);
+    if (typeof v === 'string' && v) {
+        const d = new Date(v);
+        return isNaN(d) ? null : d;
+    }
+    return null;
+};
+
+const part = (d, get) => (d ? get(d) : null);
+
 export const exprOps = {
     // Arithmetic
     $add: (a, c) => a.map(x => c.expr(x) || 0).reduce((s, n) => s + n, 0),
@@ -172,6 +184,16 @@ export const exprOps = {
     $sum: (a, c) => a.map(x => c.expr(x) || 0).reduce((s, n) => s + n, 0),
     
     // Comparison
+    // Three-way comparison; SQL emits `CASE WHEN x < y THEN -1 WHEN x > y THEN 1
+    // ELSE 0 END`, so null sorts first like it does in the databases.
+    $cmp: ([a, b], c) => {
+        const x = c.expr(a);
+        const y = c.expr(b);
+        if (deepEquals(x, y)) return 0;
+        if (x === null || x === undefined) return -1;
+        if (y === null || y === undefined) return 1;
+        return x < y ? -1 : 1;
+    },
     $eq: ([a, b], c) => deepEquals(c.expr(a), c.expr(b)),
     $ne: ([a, b], c) => !deepEquals(c.expr(a), c.expr(b)),
     $gt: ([a, b], c) => c.expr(a) > c.expr(b),
@@ -259,46 +281,38 @@ export const exprOps = {
         return typeof v;
     },
     
-    // Date/Time
-    $year: (a, c) => {
-        const d = c.expr(a[0]);
-        return d instanceof Date ? d.getFullYear() : null;
-    },
-    $month: (a, c) => {
-        const d = c.expr(a[0]);
-        return d instanceof Date ? d.getMonth() + 1 : null;
-    },
-    $dayOfMonth: (a, c) => {
-        const d = c.expr(a[0]);
-        return d instanceof Date ? d.getDate() : null;
-    },
-    $hour: (a, c) => {
-        const d = c.expr(a[0]);
-        return d instanceof Date ? d.getHours() : null;
-    },
-    $minute: (a, c) => {
-        const d = c.expr(a[0]);
-        return d instanceof Date ? d.getMinutes() : null;
-    },
-    $second: (a, c) => {
-        const d = c.expr(a[0]);
-        return d instanceof Date ? d.getSeconds() : null;
-    },
-    $millisecond: (a, c) => {
-        const d = c.expr(a[0]);
-        return d instanceof Date ? d.getMilliseconds() : null;
-    },
-    $dayOfWeek: (a, c) => {
-        const d = c.expr(a[0]);
-        return d instanceof Date ? d.getDay() + 1 : null;
-    },
+    // Date/Time.
+    // A date can reach the engine as a Date, as epoch milliseconds or as the ISO
+    // text the SQL adapters store, so every part is read through `asDate()` -
+    // otherwise a plain 'YYYY-MM-DD' string silently becomes null here while the
+    // SQL backends extract the value out of it.
+    $year: (a, c) => part(asDate(c.expr(a[0])), (d) => d.getFullYear()),
+    $month: (a, c) => part(asDate(c.expr(a[0])), (d) => d.getMonth() + 1),
+    $dayOfMonth: (a, c) => part(asDate(c.expr(a[0])), (d) => d.getDate()),
+    $hour: (a, c) => part(asDate(c.expr(a[0])), (d) => d.getHours()),
+    $minute: (a, c) => part(asDate(c.expr(a[0])), (d) => d.getMinutes()),
+    $second: (a, c) => part(asDate(c.expr(a[0])), (d) => d.getSeconds()),
+    $millisecond: (a, c) => part(asDate(c.expr(a[0])), (d) => d.getMilliseconds()),
+    // Monday is 1, matching `EXTRACT(DOW) + 1` / `DAYOFWEEK()` / `strftime('%w')+1`.
+    $dayOfWeek: (a, c) => part(asDate(c.expr(a[0])), (d) => d.getDay() + 1),
+    // Week of the year, weeks starting on Monday and the first week being the one
+    // holding the first Monday - i.e. SQLite's `strftime('%W')`, which the other
+    // dialects are compared against in the unified tests.
+    $week: (a, c) => part(asDate(c.expr(a[0])), (d) => {
+        const first = new Date(d.getFullYear(), 0, 1);
+        const daysToFirstMonday = (8 - first.getDay()) % 7;
+        const dayOfYear = Math.floor((d - first) / 86400000);
+        return dayOfYear < daysToFirstMonday ? 0 : Math.floor((dayOfYear - daysToFirstMonday) / 7) + 1;
+    }),
     
     // Type conversion
     $toString: (a, c) => String(c.expr(a[0])),
     $toInt: (a, c) => parseInt(c.expr(a[0])),
     $toDouble: (a, c) => parseFloat(c.expr(a[0])),
     $toBool: (a, c) => Boolean(c.expr(a[0])),
-    $toDate: (a, c) => new Date(c.expr(a[0])),
+    // `new Date(undefined)` is an Invalid Date; the SQL backends yield NULL, and
+    // an Invalid Date poisons every later comparison, so go through asDate().
+    $toDate: (a, c) => asDate(c.expr(a[0])),
     
     // Literal
     $literal: (a) => a[0],
@@ -359,11 +373,16 @@ export const updateOps = {
         }
     }),
     
-    $pull: (f, doc, filter) => Object.entries(f).forEach(([k, cond]) => {
+    // `$pull` removes the elements that *match*; the scalar branch used to return
+    // "does not match" and was then negated again by the filter below, so it
+    // removed every element except the one that was asked to be pulled.
+    // Called as `(fields, doc, isInsert, filter)` like every other update operator -
+    // declaring `filter` in the third slot used to receive the `isInsert` flag.
+    $pull: (f, doc, isInsert, filter) => Object.entries(f).forEach(([k, cond]) => {
         const curr = getPath(doc, k);
         if (Array.isArray(curr)) {
-            const fn = isObject(cond) ? filter(cond) : (i) => !deepEquals(i, cond);
-            setPath(doc, k, curr.filter(i => !fn(i)));
+            const matches = isObject(cond) ? filter(cond) : (i) => deepEquals(i, cond);
+            setPath(doc, k, curr.filter(i => !matches(i)));
         }
     }),
     
@@ -460,8 +479,12 @@ export const stageOps = {
     
     $group: ({ _id, ...acc }, ctxArr, expression) => {
         const grps = ctxArr.reduce((a, i) => {
-            const k = _id === null ? '__null__' : JSON.stringify(expression(_id)(i));
-            if (!a[k]) a[k] = { _id: _id === null ? null : expression(_id)(i), items: [] };
+            // A missing field groups under null - that is what MongoDB does and
+            // what the SQL adapters produce (`GROUP BY col` puts NULL rows in one
+            // group). `undefined` would survive as an absent `_id` on the result.
+            const key = _id === null ? null : expression(_id)(i) ?? null;
+            const k = JSON.stringify(key);
+            if (!a[k]) a[k] = { _id: key, items: [] };
             a[k].items.push(i);
             return a;
         }, {});
@@ -588,6 +611,9 @@ export const stageOps = {
                     if (!isObject(acc)) throw new Error('Output accumulator must be object');
                     const [op, arg] = Object.entries(acc)[0];
                     switch (op) {
+                        case '$count':
+                            out[k] = arg === 1 ? g.items.length : g.items.filter(i => expression(arg)(i) != null).length;
+                            break;
                         case '$sum':
                             out[k] = g.items.reduce((s, i) => s + (expression(arg)(i) || 0), 0);
                             break;
@@ -631,7 +657,10 @@ export const stageOps = {
     $sortByCount: (expr, ctxArr, expression) => {
         const keyFn = typeof expr === 'string' && expr.startsWith('$') ? (i) => getPath(i, expr.slice(1)) : (i) => expression(expr)(i);
         const counts = ctxArr.reduce((a, i) => {
-            const k = JSON.stringify(keyFn(i));
+            // Same rule as `$group`: a missing field counts towards the null key
+            // (and `JSON.stringify(undefined)` is not a string, so the object key
+            // would not even round-trip through JSON.parse below).
+            const k = JSON.stringify(keyFn(i) ?? null);
             a[k] = (a[k] || 0) + 1;
             return a;
         }, {});
