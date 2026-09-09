@@ -22,7 +22,7 @@ Every entry point ships in that one package — import the ones you need:
 | -------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | **Full**       | `import { collection } from "umosql"`                      | MongoDB → SQL query builder (SQL strings, no driver)                          |
 | **Lite**       | `import lite from "umosql/lite"`                           | Smaller builder: JSON paths + basic aggregation                               |
-| **Tiny**       | `import tiny from "umosql/tiny"`                           | Smallest builder: basic filters/expressions, `$set` only                      |
+| **Tiny**       | `import tiny from "umosql/tiny"`                           | Smallest builder: basic filters/expressions, `$set` only (dotted paths work)  |
 | **Schemaless** | `import { createSchemalessAdapter } from "umosql/schemaless"` | Executes queries: wraps a `better-sqlite3` / `pg` / `mysql2` handle        |
 | **Memory**     | `import { collection } from "umosql/memory"`               | In-memory MongoDB-style engine (no SQL, no driver)                            |
 | **Client**     | `import { createSchemalessClient } from "umosql/client"`   | One factory for `memory` / `sqlite` / `pg` / `mysql` / `mongodb` / any executor |
@@ -37,12 +37,12 @@ Every entry point ships in that one package — import the ones you need:
 | Feature                  | Full               | Lite               | Tiny               |
 | ------------------------ | ------------------ | ------------------ | ------------------ |
 | **Size (gzip)**          | [![Full](https://deno.bundlejs.com/badge?q=umosql/lite&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql) | [![Lite](https://deno.bundlejs.com/badge?q=umosql/lite&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql/lite) | [![Tiny](https://deno.bundlejs.com/badge?q=umosql/tiny&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql/tiny) |
-| **JSON Paths**           | ✅                 | ✅                 | ❌                 |
-| **JSON Updates**         | ✅                 | ✅ Basic           | ❌                 |
-| **Aggregation**          | ✅                 | ✅ Basic           | ✅ Basic           |
-| **Filter Operators**     | ✅ All             | ✅ All             | ✅ Basic           |
-| **Expression Operators** | ✅ All             | ✅ Basic           | ✅ Basic           |
-| **Update Operators**     | ✅ All             | ✅ Basic           | ✅ $set            |
+| **JSON Paths**           | ✅                 | ✅                 | ✅ *             |
+| **JSON Updates**         | ✅ 8 ops           | ✅ 8 ops           | ✅ `$set` only * |
+| **Aggregation**          | ✅ 12 stages       | ✅ 7 stages        | ✅ 7 stages      |
+| **Filter Operators**     | ✅ All (16 + 5 structural) | ✅ All     | ✅ 10 + 5 structural |
+| **Expression Operators** | ✅ All (58)        | ✅ 42              | ✅ 13            |
+| **Update Operators**     | ✅ All (8)         | ✅ All (8)         | ✅ $set          |
 | **Collection API**       | ✅                 | ✅                 | ✅                 |
 | **FindQuery**            | ✅                 | ✅                 | ✅                 |
 | **Extend/Add**           | ✅                 | ✅                 | ✅                 |
@@ -58,17 +58,19 @@ Every entry point ships in that one package — import the ones you need:
 - Complex analytics queries
 - MongoDB-to-SQL migration
 
+* Tiny still resolves dotted paths (`profile.score`) in filters, `$set`, and sorting — path handling is core, not an operator. What tiny drops is operator breadth (no `$regex`/`$ilike`/`$between`/`$mod`, no `$inc`/`$mul`/…, 13 expression ops). See [Lite & Tiny operator lists](#-lite--tiny-operator-lists) for the exact sets.
+
 ### Use **LITE** when:
 
-- You need JSON fields but not aggregation
-- Medium complexity apps
-- REST APIs with JSON columns
+- You want every filter and update operator, but a trimmed expression set (no `$switch`, date parts, `$toBool`/`$toDate`, `$cmp`/`$size`/`$stdDev*`, `$literal`)
+- Basic 7-stage aggregation (`$match`/`$project`/`$group`/`$sort`/`$limit`/`$skip`/`$count`) is enough — no `$addFields`/`$set`, `$sample`, `$sortByCount`, `$bucket`
+- Medium complexity apps and REST APIs with JSON columns
 - Balance between features and size
 
 ### Use **TINY** when:
 
-- Simple CRUD operations only
-- No JSON columns needed
+- Simple CRUD operations with 10 filters, 13 expressions, `$set`, and the same basic 7 stages
+- Dotted JSON paths are fine, but you don't need JSON-adjacent operators
 - Smallest bundle size required
 - Simple web apps or microservices
 
@@ -99,9 +101,9 @@ Transform MongoDB queries into SQL (PostgreSQL, MySQL, SQLite) with a universal 
 
 | Version  | Size (gzip) | JSON Support | Aggregation | Use Case                        |
 | -------- | ----------- | ------------ | ----------- | ------------------------------- |
-| **Full** | ~6.61 kB    | ✅ Yes       | ✅ Yes      | Complete MongoDB compatibility  |
-| **Lite** | ~5.99 kB    | ✅ Yes       | ❌ No       | JSON without aggregation        |
-| **Tiny** | ~4.95 kB    | ❌ No        | ✅ Basic    | Minimal ops, smallest bundle    |
+| **Full** | ~6.61 kB    | ✅ Paths + all ops | ✅ 12 stages | Complete MongoDB compatibility |
+| **Lite** | ~5.99 kB    | ✅ Paths + all updates | ✅ Basic (7 stages) | Full filters/updates, trimmed expressions |
+| **Tiny** | ~4.95 kB    | ✅ Paths + `$set` | ✅ Basic (7 stages) | Minimal ops, smallest bundle   |
 
 ---
 
@@ -138,7 +140,8 @@ users.updateOne(
     { $set: { status: "active" }, $inc: { loginCount: 1 } }
 );
 // UPDATE users SET status = 'active', loginCount = loginCount + 1
-// WHERE email = 'alice@example.com' LIMIT 1
+// WHERE email = 'alice@example.com'
+// (MySQL/SQLite append `LIMIT 1`; PostgreSQL has no LIMIT on UPDATE)
 
 users.insertMany([
 	{ name: "Alice", age: 25 },
@@ -316,6 +319,16 @@ This approach lets you tailor the library to your use case and keep bundles extr
 - [Operator Support Matrix](#operator-support-matrix)
 - [Universal Adapters](#-universal-adapters)
 - [Schemaless Adapters](#schemaless-adapters)
+- [SQL Adapter Reference](#-sql-adapter-reference-createsqladapter)
+- [In-Memory Engine Reference](#-in-memory-engine-reference-umosqlmemory)
+- [MongoDB Adapter Reference](#-mongodb-adapter-reference)
+- [Builder Utilities](#-builder-utilities--standalone-functions-umosql)
+- [Lite & Tiny Lists](#-lite--tiny-operator-lists)
+- [Backend Quirks](#️-backend-quirks--differences)
+- [Connection Lifecycle](#-connection-lifecycle)
+- [Examples Tour](#-examples-tour-examples)
+- [Errors Reference](#-errors-reference)
+- [TypeScript Types](#-typescript-types)
 - [API Reference](#api-reference)
 
 ---
@@ -433,6 +446,22 @@ users
 	})
 	.toSQL();
 // SELECT * FROM users WHERE (age >= 18 AND (status = 'active' OR status = 'verified'))
+
+// $nor - None of the conditions may be true
+users.find({ $nor: [{ role: "admin" }, { role: "moderator" }] }).toSQL();
+// SELECT * FROM users WHERE NOT (role = 'admin' OR role = 'moderator')
+
+// $not on a single field - negate one operator
+users.find({ age: { $not: { $gte: 18 } } }).toSQL();
+// SELECT * FROM users WHERE NOT (age >= 18)
+
+// $between - inclusive range (SQL-side extension)
+users.find({ age: { $between: [18, 65] } }).toSQL();
+// SELECT * FROM users WHERE age BETWEEN 18 AND 65
+
+// $mod - divisor / remainder (SQL-side extension)
+users.find({ age: { $mod: [10, 0] } }).toSQL();
+// SELECT * FROM users WHERE age % 10 = 0
 ```
 
 ### Pattern Matching
@@ -632,7 +661,8 @@ users.updateOne(
 	{ $set: { status: "verified", verifiedAt: new Date() } }
 );
 // UPDATE users SET status = 'verified', verifiedAt = '2024-01-01 12:00:00'
-// WHERE email = 'alice@example.com' LIMIT 1
+// WHERE email = 'alice@example.com'
+// (MySQL/SQLite append `LIMIT 1`; PostgreSQL has no LIMIT on UPDATE)
 
 // Update many documents
 users.updateMany(
@@ -644,11 +674,11 @@ users.updateMany(
 // Increment values
 users.updateOne({ id: 1 }, { $inc: { loginCount: 1, points: 10 } });
 // UPDATE users SET loginCount = loginCount + 1, points = points + 10
-// WHERE id = 1 LIMIT 1
+// WHERE id = 1
 
 // Multiply values
 users.updateOne({ id: 1 }, { $mul: { score: 1.1 } });
-// UPDATE users SET score = score * 1.1 WHERE id = 1 LIMIT 1
+// UPDATE users SET score = score * 1.1 WHERE id = 1
 
 // Set to minimum
 users.updateMany({}, { $min: { minPrice: 10 } });
@@ -660,7 +690,7 @@ users.updateMany({}, { $max: { maxDiscount: 50 } });
 
 // Unset fields (set to NULL)
 users.updateOne({ id: 1 }, { $unset: { tempToken: "", tempData: "" } });
-// UPDATE users SET tempToken = NULL, tempData = NULL WHERE id = 1 LIMIT 1
+// UPDATE users SET tempToken = NULL, tempData = NULL WHERE id = 1
 
 // Rename fields
 users.updateMany({}, { $rename: { oldField: "newField" } });
@@ -671,7 +701,7 @@ users.updateOne(
 	{ id: 1 },
 	{ $currentDate: { lastLogin: true, updatedAt: true } }
 );
-// PostgreSQL: UPDATE users SET lastLogin = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP WHERE id = 1 LIMIT 1
+// PostgreSQL: UPDATE users SET lastLogin = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP WHERE id = 1
 // MySQL: UPDATE users SET lastLogin = NOW(), updatedAt = NOW() WHERE id = 1 LIMIT 1
 // SQLite: UPDATE users SET lastLogin = datetime('now'), updatedAt = datetime('now') WHERE id = 1 LIMIT 1
 
@@ -723,7 +753,8 @@ users.updateMany(
 ```javascript
 // Delete one document
 users.deleteOne({ email: "old@example.com" });
-// DELETE FROM users WHERE email = 'old@example.com' LIMIT 1
+// DELETE FROM users WHERE email = 'old@example.com'
+// (MySQL/SQLite append `LIMIT 1`; PostgreSQL has no LIMIT on DELETE)
 
 // Delete many documents
 users.deleteMany({ active: false });
@@ -753,7 +784,7 @@ users.deleteMany({ age: { $lt: 13 } }, { returning: ["id", "name", "email"] });
 // DELETE FROM users WHERE age < 13 RETURNING id, name, email
 
 users.deleteOne({ id: 123 }, { returning: "*" });
-// DELETE FROM users WHERE id = 123 LIMIT 1 RETURNING *
+// DELETE FROM users WHERE id = 123 RETURNING *
 ```
 
 ---
@@ -1011,7 +1042,68 @@ products.aggregate([
 			products: "$productCount",
 		},
 	},
+];
+```
+
+### More Stages ($addFields, $sample, $sortByCount, $bucket, composite _id)
+
+```javascript
+// $addFields / $set - keep every column, add computed ones
+orders.aggregate([
+	{ $match: { active: true } },
+	{ $addFields: { isAdult: { $gte: ["$age", 18] } } },
 ]);
+// SELECT *, (age >= 18) AS isAdult
+// FROM (SELECT * FROM orders WHERE active = TRUE) AS t1
+
+// $set is an alias of $addFields; later stages sort by the alias
+orders.aggregate([
+	{ $set: { next: { $add: ["$age", 1] } } },
+	{ $sort: { next: -1 } },
+]);
+// SELECT *, (age + 1) AS next FROM (SELECT * FROM orders) AS t1
+// ORDER BY next DESC
+
+// $sample - random rows: { size }
+orders.aggregate([{ $sample: { size: 5 } }]);
+// PostgreSQL/SQLite: ... ORDER BY RANDOM() LIMIT 5
+// MySQL:             ... ORDER BY RAND() LIMIT 5
+
+// $sortByCount - group by an expression, ordered by frequency
+orders.aggregate([{ $sortByCount: "$city" }]);
+// SELECT city AS _id, COUNT(*) AS count
+// FROM (SELECT * FROM orders) AS t1 GROUP BY city ORDER BY count DESC
+
+// $bucket - numeric ranges via CASE
+orders.aggregate([
+	{ $bucket: { groupBy: "$age", boundaries: [0, 18, 65], default: "senior" } },
+]);
+// SELECT CASE WHEN age >= 0 AND age < 18 THEN 0
+//            WHEN age >= 18 AND age < 65 THEN 18
+//            ELSE 'senior' END AS _id, COUNT(*) AS count ...
+// GROUP BY CASE WHEN ... END
+
+// $bucket with output accumulators
+orders.aggregate([
+	{
+		$bucket: {
+			groupBy: "$age",
+			boundaries: [0, 18, 65],
+			output: { n: { $sum: 1 }, avgSpent: { $avg: "$amount" } },
+		},
+	},
+]);
+
+// Composite _id - group by several expressions at once
+orders.aggregate([
+	{ $group: { _id: { city: "$city", year: "$year" }, n: { $sum: 1 } } },
+]);
+// SELECT city AS city, year AS year, COUNT(*) AS n
+// FROM (SELECT * FROM orders) AS t1 GROUP BY city, year
+
+// $group accumulators on SQL: $sum / $avg / $min / $max / $count
+// plus any scalar expression. ($push / $addToSet / $first / $last are
+// memory-only; $unset is a memory-only stage; $sample is SQL-only.)
 ```
 
 ---
@@ -1112,6 +1204,10 @@ products.updateOne(
 		$currentDate: { updatedAt: true },
 	}
 );
+
+// Plain keys (no `$`) work as `$set` - handy shorthand
+products.updateOne({ id: 1 }, { name: "New Name", stock: 100 });
+// UPDATE products SET name = 'New Name', stock = 100 WHERE id = 1
 ```
 
 ---
@@ -1248,10 +1344,81 @@ orders.aggregate([
 			count: { $sum: 1 },
 		},
 	},
-]);
+];
+```
+
+### More Expression Operators
+
+```javascript
+import { expression } from "umosql";
+
+// Three-way comparison -> -1 / 0 / 1
+expression({ $cmp: ["$price", "$msrp"] }, "pg");
+// CASE WHEN price < msrp THEN -1 WHEN price > msrp THEN 1 ELSE 0 END
+
+// Length of a JSON array column
+expression({ $size: ["$tags"] }, "pg"); // jsonb_array_length(tags::jsonb)
+expression({ $size: ["$tags"] }, "mysql"); // JSON_LENGTH(tags)
+expression({ $size: ["$tags"] }, "sqlite"); // json_array_length(tags)
+
+// Null checks inside expressions: [$field, bool]
+expression({ $exists: ["$phone", true] }, "pg");
+// (phone IS NOT NULL)
+
+// Date parts (per-dialect functions)
+expression({ $year: "$createdAt" }, "mysql"); // YEAR(createdAt)
+expression({ $month: "$createdAt" }, "sqlite"); // CAST(strftime('%m', createdAt) AS INTEGER)
+expression({ $dayOfWeek: "$createdAt" }, "pg"); // EXTRACT(DOW FROM createdAt) + 1 (Sunday = 1)
+// Also: $dayOfMonth, $hour, $minute, $second, $week
+
+// Type casts (per-dialect CAST)
+expression({ $toInt: "$age" }, "mysql"); // CAST(age AS SIGNED)
+expression({ $toInt: "$age" }, "pg"); // CAST(age AS INTEGER)
+expression({ $toBool: "$age" }, "mysql"); // IF(age, 1, 0)
+expression({ $toString: "$age" }, "pg"); // CAST(age AS TEXT)
+expression({ $toDouble: "$age" }, "sqlite"); // CAST(age AS REAL)
+expression({ $toDate: "$createdAt" }, "sqlite"); // datetime(createdAt)
+
+// $literal escapes instead of resolving - "$notAField" stays a string
+expression({ $literal: ["$notAField"] }, "pg");
+// '$notAField'
+
+// String helpers
+expression({ $strLen: "$name" }, "pg"); // LENGTH(name)
+expression({ $replace: ["$name", "a", "o"] }, "pg"); // REPLACE(name, 'a', 'o')
+expression({ $trim: "$name" }, "pg"); // TRIM(name) (also $ltrim / $rtrim)
+
+// $substr is 0-based like MongoDB; SQL is 1-based, so +1 is added
+expression({ $substr: ["$name", 0, 3] }, "pg");
+// SUBSTRING(name, (0 + 1), 3)
+
+// Statistics + safe division ($divide guards divide-by-zero with NULLIF)
+expression({ $stdDevPop: "$age" }, "pg"); // STDDEV_POP(age) (also $stdDevSamp)
+expression({ $divide: ["$total", "$count"] }, "pg");
+// (total * 1.0 / NULLIF(count, 0))
+
+// Rounding with optional precision, power/square-root, abs/ceil/floor
+expression({ $round: ["$price", 2] }, "pg"); // ROUND(price, 2)
+expression({ $pow: ["$age", 2] }, "pg"); // POWER(age, 2)
+expression({ $sqrt: "$age" }, "pg"); // SQRT(age)
 ```
 
 ---
+### Full REST API Example (Express + pg)
+
+A complete generic CRUD server — any collection, Mongo-style query strings:
+
+```javascript
+import express from "express";
+import pkg from "pg";
+import { collection } from "umosql";
+
+const app = express();
+app.use(express.json());
+const pool = new pkg.Pool({ connectionString: process.env.DATABASE_URL });
+
+// Parse ?q={...}&fields={...}&sort={...}&limit=&skip= into Mongo-style parts
+const parseQuery = (req, res, next) => {
 	try {
 		req.mongoQuery = req.query.q ? JSON.parse(req.query.q) : {};
 		req.queryOptions = {
@@ -1462,6 +1629,17 @@ app.use((err, req, res, next) => {
 		.json({ error: "Internal server error", details: err.message });
 });
 
+// Start the server
+app.listen(3000, () => console.log("API on http://localhost:3000"));
+```
+
+Try it:
+
+```bash
+curl 'http://localhost:3000/users?q={"age":{"$gte":18}}&sort={"age":-1}&limit=5'
+curl -X POST http://localhost:3000/users -H 'Content-Type: application/json' -d '{"name":"Alice","age":25}'
+```
+
 ---
 
 ## 🔌 Universal Adapters
@@ -1547,8 +1725,8 @@ await users.insertMany([
 	{ name: "Charlie", age: 22, tags: ["premium", "vip"] },
 ]);
 
-const premium = await (await users.find({ tags: { $in: ["premium"] } })).toArray();
-await users.updateMany({ tags: { $in: ["premium"] } }, { $inc: { points: 100 } });
+const premium = await (await users.find({ tags: { $elemMatch: { $eq: "premium" } } })).toArray();
+await users.updateMany({ tags: { $elemMatch: { $eq: "premium" } } }, { $inc: { points: 100 } });
 const grouped = await users.aggregate([
 	{ $group: { _id: "$age", count: { $sum: 1 } } },
 ]);
@@ -1568,7 +1746,7 @@ const users = collection("users", [
 	{ name: "Bob", age: 30, tags: ["basic"] },
 ]);
 
-users.find({ tags: { $in: ["premium"] } }).toArray(); // no promises
+users.find({ age: { $in: [25, 30] } }).toArray(); // no promises
 users.updateMany({ age: { $gte: 18 } }, { $inc: { points: 100 } });
 users.aggregate([{ $group: { _id: "$age", count: { $sum: 1 } } }]);
 
@@ -1748,7 +1926,7 @@ users.updateOne(
 | `$ilike` | ✅ | ✅ | ✅ | ✅ | PG: `ILIKE`; others: `LOWER(field) LIKE LOWER(value)` |
 | `$nlike` | ✅ | ✅ | ✅ | ✅ | `NOT LIKE` |
 | `$nilike` | ✅ | ✅ | ✅ | ✅ | PG: `NOT ILIKE`; others: `NOT LIKE LOWER(...)` |
-| `$regex` | ✅ | ⚠️ | ✅ | ✅ | PG: `~`; MySQL: `REGEXP`; SQLite: needs `REGEXP` UDF |
+| `$regex` | ✅ | ✅ | ✅ | ✅ | PG: `~`; MySQL: `REGEXP`; SQLite: anchored patterns rewritten to `LIKE` (`^A` → `'A%'`, `x$` → `'%x'`, else `'%…%'`) |
 | `$exists` | ✅ | ✅ | ✅ | ✅ | `IS NULL` / `IS NOT NULL` |
 | `$between` | ✅ | ✅ | ✅ | ✅ | `BETWEEN a AND b` |
 | `$mod` | ✅ | ✅ | ✅ | ✅ | `field % m = r` |
@@ -1761,6 +1939,7 @@ users.updateOne(
 | `$elemMatch` | ✅ | — | — | — | Memory-only |
 | `$all` | ✅ | — | — | — | Memory-only |
 | `$size` | ✅ | — | — | — | Memory-only |
+| `$where` | ✅ | — | — | — | Memory-only (JS predicate `function () { … }`, `this` = doc) |
 
 ### Expression Operators
 
@@ -1788,8 +1967,8 @@ users.updateOne(
 | `$avg` | ✅ | ✅ | ✅ | ✅ | `AVG()` |
 | `$min` | ✅ | ✅ | ✅ | ✅ | Single: `MIN()`; multi: `LEAST()` |
 | `$max` | ✅ | ✅ | ✅ | ✅ | Single: `MAX()`; multi: `GREATEST()` |
-| `$count` | ✅ | ✅ | ✅ | ✅ | `COUNT(*)` |
-| `$stdDevPop`/`$stdDevSamp` | ✅ | ✅ | ✅ | ✅ | `STDDEV_*()` |
+| `$count` | ❌ | ✅ | ✅ | ✅ | SQL-only expression (`COUNT(*)`); the `$count` *stage* works on memory |
+| `$stdDevPop`/`$stdDevSamp` | ❌ | ✅ | ✅ | ✅ | SQL-only (`STDDEV_POP` / `STDDEV_SAMP`) |
 | `$eq`,`$ne`,`$gt`,`$gte`,`$lt`,`$lte` | ✅ | ✅ | ✅ | ✅ | Comparison in expressions |
 | `$cmp` | ✅ | ✅ | ✅ | ✅ | Returns -1/0/1 |
 | `$in`/`$nin` | ✅ | ✅ | ✅ | ✅ | Expression `IN`/`NOT IN` |
@@ -1798,10 +1977,17 @@ users.updateOne(
 | `$cond` | ✅ | ✅ | ✅ | ✅ | `CASE WHEN ... THEN ... ELSE ... END` |
 | `$ifNull` | ✅ | ✅ | ✅ | ✅ | `COALESCE()` |
 | `$switch` | ✅ | ✅ | ✅ | ✅ | `CASE` branches |
-| `$exists` | ✅ | ✅ | ✅ | ✅ | `IS NULL` / `IS NOT NULL` |
+| `$exists` | ❌ | ✅ | ✅ | ✅ | SQL-only as an expression (`$exists: [field, bool]`); as a *filter* it works everywhere |
 | Date parts `$year`,`$month`,`$dayOfMonth`,`$dayOfWeek`,`$hour`,`$minute`,`$second`,`$week` | ✅ | ✅ | ✅ | ✅ | DB-specific functions (`EXTRACT`, `YEAR`, `strftime`) |
 | Cast `$toString`,`$toInt`,`$toDouble`,`$toBool`,`$toDate` | ✅ | ✅ | ✅ | ✅ | DB-specific `CAST` |
 | `$literal` | ✅ | ✅ | ✅ | ✅ | Escaped literal |
+| `$split` | ✅ | — | — | — | Memory-only (`[str, separator]` → array) |
+| `$arrayElemAt` | ✅ | — | — | — | Memory-only (`[array, index]`, negatives from end) |
+| `$slice` | ✅ | — | — | — | Memory-only (`[array, n]` / `[array, skip, limit]`) |
+| `$map` / `$filter` | ✅ | — | — | — | Memory-only (`[array, var, expr]`, `$$var` in expr) |
+| `$reduce` | ✅ | — | — | — | Memory-only (`[array, initial, expr]`, `$$value` / `$$this`) |
+| `$type` (expression) | ✅ | — | — | — | Memory-only (returns `'string'`/`'number'`/…; filter `$type` also memory-only) |
+| `$millisecond` | ✅ | — | — | — | Memory-only (SQL has `$year`…`$week` but no `$millisecond`) |
 
 ### Update Operators
 
@@ -1815,7 +2001,10 @@ users.updateOne(
 | `$unset` | ✅ | ✅ | ✅ | ✅ | JSON path remove or `NULL` for scalars |
 | `$currentDate` | ✅ | ✅ | ✅ | ✅ | PG: `CURRENT_TIMESTAMP`; MySQL: `NOW()`; SQLite: `datetime('now')` |
 | `$rename` | ✅ | ✅ | ✅ | ✅ | Non-JSON fields; sets new = old, old = NULL |
-| `$push`/`$pull`/`$addToSet` | ✅ | — | — | — | Memory-only array mutations |
+| `$push`/`$pull`/`$addToSet` | ✅ | — | — | — | Memory-only array mutations (`$push` supports `$each`/`$slice`/`$sort`/`$position`) |
+| `$pullAll` | ✅ | — | — | — | Memory-only (remove every listed value) |
+| `$pop` | ✅ | — | — | — | Memory-only (`1` = last, `-1` = first) |
+| `$setOnInsert` | ✅ | — | — | — | Memory-only (with `updateOne(q, u, { upsert: true })`) |
 
 ### Aggregation Stages
 
@@ -1829,10 +2018,12 @@ users.updateOne(
 | `$limit` | ✅ | ✅ | ✅ | ✅ | LIMIT |
 | `$skip` | ✅ | ✅ | ✅ | ✅ | OFFSET |
 | `$count` | ✅ | ✅ | ✅ | ✅ | Aggregates count |
-| `$sample` | ✅ | ✅ | ✅ | ✅ | Random ordering + LIMIT |
+| `$sample` | ❌ | ✅ | ✅ | ✅ | SQL-only (`{ size }` → random `ORDER BY` + `LIMIT`) |
+| `$unset` | ✅ | ❌ | ❌ | ❌ | Memory-only (remove fields, string or array) |
 | `$sortByCount` | ✅ | ✅ | ✅ | ✅ | GROUP BY expr, order by count desc |
 | `$bucket` | ✅ | ✅ | ✅ | ✅ | CASE-based bucketing |
-| `$unwind` | ✅ | — | — | — | Memory-only |
+| `$unwind` | ✅ | — | — | — | Memory-only (string or `{ path, preserveNullAndEmptyArrays, includeArrayIndex }`) |
+| `$group` accumulators `$push`/`$addToSet`/`$first`/`$last` | ✅ | ❌ | ❌ | ❌ | Memory-only; SQL `$group` uses `$sum`/`$avg`/`$min`/`$max`/`$count` + scalar exprs |
 
 #### Code References
 
@@ -1848,7 +2039,7 @@ users.updateOne(
 
 - PostgreSQL: tested with 16; native `ILIKE` and regex `~` used.
 - MySQL: tested with 8.x; uses `REGEXP`, `LOWER(...) LIKE LOWER(...)` for case-insensitive like.
-- SQLite: tested with `better-sqlite3`; regex requires `REGEXP` extension/UDF.
+- SQLite: tested with `better-sqlite3`; `$regex` patterns are rewritten to `LIKE` (`^A` → `LIKE 'A%'`, `x$` → `LIKE '%x'`, `^A$` → `LIKE 'A'`, anything else → `LIKE '%…%'` with `.*` stripped), so complex patterns only approximate a real regex.
 - Memory: full operator coverage, including array and pipeline-only stages.
 - Unified suite covers filters, expressions, updates, and aggregation across adapters where applicable.
 
@@ -1980,7 +2171,7 @@ Passing `idGenerator` without `idStrategy` implies `custom` — under `auto` ada
 | `sort/skip/limit` in `find()` | ✅ | ✅ | ✅ | ✅ |
 | `updateOne` | ✅ | ✅ | ✅ | ✅ |
 | `updateMany` | ✅ | ✅ | ✅ | ✅ |
-| `upsertOne` | ✅ | ✅ | ✅ | ✅ |
+| `upsertOne` | ❌ | ✅ | ✅ | ✅ |
 | `deleteOne` | ✅ | ✅ | ✅ | ✅ |
 | `deleteMany` | ✅ | ✅ | ✅ | ✅ |
 | `countDocuments` | ✅ | ✅ | ✅ | ✅ |
@@ -2001,6 +2192,8 @@ Passing `idGenerator` without `idStrategy` implies `custom` — under `auto` ada
 Notes:
 - Memory adapter is a drop-in for core CRUD, query, and aggregation. Administrative DDL is SQL-only.
 - `findMany` is a convenience on SQL adapters for pagination plus total count.
+- Memory has no `upsertOne` method — use `updateOne(query, update, { upsert: true })` (plus `$setOnInsert`) or `replaceOne(query, doc, { upsert: true })` on the memory engine.
+- The memory engine additionally exposes `findById`, `replaceOne`, `drop`, `getAll`, `size`, `stats`, `dropDatabase` and the standalone `project(doc, projection)` helper (see [In-memory engine](#-in-memory-engine-reference-umosqlmemory)).
 
 ## Caveats and Differences
 
@@ -2030,6 +2223,791 @@ Notes:
   - Query helpers: `countDocuments`, `distinct`, `aggregate`, projection and computed fields via `$project`, `$addFields`, `$set`.
   - SQL-only helpers: `findMany`, `createTableWithSchema`, `addColumn`, `renameColumn`, `modifyColumn`, `getTableSchema`, `listCollections`.
 - For pure MongoDB replacement needs (without DDL), memory and SQL adapters are compatible at the collection method level.
+---
+
+## 🧱 SQL Adapter Reference (`createSQLAdapter`)
+
+`createSQLAdapter` is the engine under every SQL backend: `createSchemalessAdapter`
+(better-sqlite3 / `pg` / `mysql2`), `createSchemalessClient('sql', …)` (serverless HTTP
+executors), and the runnable `examples/serverless-*.js`. Use it directly whenever you have
+*any* function that can run SQL.
+
+### Minimal setup
+
+```javascript
+import { createSQLAdapter } from "umosql/schemaless";
+import { createQueryBuilder, filterOps, exprOps, updateOps, stageHandlers } from "umosql";
+
+const qb = createQueryBuilder({ filterOps, exprOps, updateOps, stageHandlers });
+
+const adapter = createSQLAdapter({
+	database: "pg", // 'pg' | 'mysql' | 'sqlite'
+	execute: async (sql, params) => {
+		const res = await pool.query(sql, params);
+		return { rows: res.rows, rowCount: res.rowCount };
+	},
+	queryBuilder: qb, // required
+});
+
+const users = adapter.collection("users");
+await users.insertOne({ name: "Alice", age: 25 });
+console.log(await users.findOne({ name: "Alice" }));
+```
+
+### The `execute(sql, params)` contract
+
+Your function receives the generated SQL string (values are inlined; `params` is reserved)
+and may return any of these shapes — they are normalized internally:
+
+| Return shape | Example source |
+| ------------ | -------------- |
+| `{ rows, rowCount? }` | `pg`, Neon, any `{ rows }` HTTP API |
+| `[rows, fields]` tuple | `mysql2/promise` `.execute()` |
+| `{ affectedRows, insertId? }` | `mysql2` writes |
+| `{ changes, lastInsertRowid }` | better-sqlite3 `.run()` |
+| plain array of rows | Turso/libsql-style clients |
+
+After normalization the adapter reads `rows`, `rowCount`/`affectedRows`/`changes`,
+`insertId`/`lastInsertRowid`, and `fields`. DDL statements may return anything.
+
+### Raw SQL, introspection, and SQL builders on the adapter
+
+```javascript
+// Run anything yourself (still normalized)
+await adapter.execute("DELETE FROM users WHERE age < 18");
+
+// Does the table exist? (information_schema / sqlite_master)
+await adapter.tableExists("users"); // true / false
+
+// Live column map, e.g. { name: 'TEXT', age: 'INTEGER' }
+// (_id and created_*/updated_* bookkeeping columns are excluded;
+// types are upper-cased, MySQL lengths stripped: 'varchar' -> 'VARCHAR')
+await adapter.getTableSchema("users"); // { columns: { ... } }
+
+// Render SQL without running it - same strings the adapter executes
+adapter.buildInsert("users", [{ name: "Al" }]);
+adapter.buildFind("users", { age: { $gte: 18 } }, ["name"]);
+adapter.buildFindWithOptions("users", {}, null, { sort: { age: -1 }, limit: 10, skip: 5 });
+adapter.buildUpdateOne("users", { name: "Al" }, { $inc: { n: 1 } });
+adapter.buildUpdateMany("users", { active: true }, { $set: { v: 1 } });
+adapter.buildDeleteOne("users", { name: "Al" });
+adapter.buildDeleteMany("users", { active: false }); // allowDeleteAll: true inside
+adapter.buildCount("users", { age: { $gte: 18 } });
+adapter.buildDistinct("users", "city", { active: true });
+adapter.buildAggregate("users", [{ $group: { _id: "$city", n: { $sum: 1 } } }]);
+```
+
+### Collection options: `schema`, ids, `migrateOnUpdate`
+
+```javascript
+const users = adapter.collection("users", {
+	// Typed columns. String form = bare type; object form adds constraints.
+	schema: {
+		email: { type: "VARCHAR(255)", required: true, unique: true },
+		age: "INT",
+		role: { type: "VARCHAR(32)", default: "user" },
+		password: { type: "TEXT", hidden: true }, // stripped from every read
+		serialNo: "SERIAL", // pg: NULLs dropped on insert so the sequence applies
+	},
+	migrateOnUpdate: true, // $set/$rename may ADD COLUMN on update (default true)
+	idColumn: "_id", // custom id column name
+	idStrategy: "auto", // 'auto' | 'mongo' | 'custom'
+	idGenerator: () => crypto.randomUUID(), // required for 'custom'
+});
+```
+
+What each piece does:
+
+- `required: true` → `NOT NULL`, `unique: true` → `UNIQUE` in the generated DDL.
+- `default: value | () => value` → a SQL `DEFAULT` in DDL **and** a client-side default:
+  missing fields are filled before insert (functions run per document).
+- `hidden: true` → the field is stored but deleted from every returned document.
+- `SERIAL` (pg) / `AUTO_INCREMENT` (mysql) schema types: explicit `null` values are
+  stripped on insert so the sequence default applies.
+
+### Type inference (schemaless inserts)
+
+Values with no schema entry get a column type from this table:
+
+| JS value | PostgreSQL | MySQL | SQLite |
+| -------- | ---------- | ----- | ------ |
+| string ≤ 255 chars | `VARCHAR(255)` | `VARCHAR(255)` | `TEXT` |
+| string > 255 chars | `TEXT` | `TEXT` | `TEXT` |
+| integer | `INTEGER` | `INT` | `INTEGER` |
+| float | `DECIMAL(20,6)` | `DECIMAL(20,6)` | `REAL` |
+| boolean | `BOOLEAN` | `TINYINT(1)` | `INTEGER` |
+| Date | `TIMESTAMP` | `DATETIME` | `TEXT` |
+| object / array | `JSONB` | `JSON` | `TEXT` |
+| null / undefined | `VARCHAR(255)` | `VARCHAR(255)` | `TEXT` |
+
+If a later document needs a *wider* type, the column is widened automatically
+(`INT → DECIMAL → VARCHAR → TEXT` ranks; pg uses `ALTER COLUMN … TYPE`, mysql uses
+`MODIFY COLUMN`, sqlite keeps the original type since it is dynamically typed).
+
+### Lifecycle: tables and columns create themselves
+
+1. First touch calls `initialize()` → `tableExists()` + `getTableSchema()`.
+2. Missing table → `CREATE TABLE IF NOT EXISTS` with just `_id` + `created_at` /
+   `updated_at`; every other column is added with `ALTER TABLE … ADD COLUMN`.
+3. Every write runs `migrate(doc)`: unknown keys become new columns, narrow columns widen.
+4. If a statement still fails with *missing table/column*, it is classified by error
+   code and retried once after creating/migrating (`42P01`/`42703` on pg, `1146`/`1054`
+   on mysql, `no such table/column` on sqlite). Duplicate-column races are swallowed.
+
+`_id` per strategy: `auto` → `SERIAL` / `INT AUTO_INCREMENT` / `INTEGER AUTOINCREMENT`
+primary key; `mongo`/`custom` → `TEXT` / `VARCHAR(24)` / `TEXT` primary key, generated
+client-side (24-char hex for `mongo`). `insertedId` comes from `RETURNING` (pg),
+`insertId` (mysql), `lastInsertRowid` (sqlite), or the generated id.
+
+MySQL identifiers that collide with reserved words are backtick-quoted automatically
+(a column named `longText` is emitted as `` `longText` `` in DDL *and* DML); ordinary
+identifiers are left untouched.
+
+### `find()` cursor and options
+
+`find()` is async and returns a chainable cursor — `await` it first:
+
+```javascript
+const cursor = await users.find(
+	{ age: { $gte: 18 } }, // filter
+	["name", "age"], // projection (object / array / raw string)
+	{ sort: { age: -1 }, skip: 20, limit: 10 } // or { order, offset, select, distinct }
+);
+const rows = await cursor.sort({ name: 1 }).limit(5).toArray();
+const n = await cursor.count(); // runs the query, returns row count
+```
+
+`findOne(query, projection)` returns the first row or `null`. `distinct(field, query)`
+returns the raw values (`["Paris", "London"]`).
+
+### `findMany()` — pagination in one call
+
+```javascript
+const { items, total, page, pageSize } = await users.findMany({
+	filter: { active: true },
+	select: ["name", "age"], // or `projection`
+	sort: { age: -1 }, // or `order`
+	page: 2, // 1-based; computed as OFFSET (page - 1) * pageSize
+	pageSize: 10, // or `limit`; raw `skip`/`offset` also accepted
+	distinct: false,
+	includeTotal: true, // extra COUNT(*) query -> `total`
+});
+```
+
+### `upsertOne(query, update, insertDoc?)`
+
+Update-then-insert (not atomic — add a unique constraint for correctness):
+
+```javascript
+// If nobody named Henry exists, inserts { name: 'Henry', age: 45, city: 'Rome' }
+await users.upsertOne({ name: "Henry" }, { $set: { age: 45 } }, { city: "Rome" });
+// { acknowledged: true, upserted: true, insertedId: 12 }
+```
+
+Scalar equality parts of the query are merged into the inserted document automatically.
+
+### Index helpers
+
+```javascript
+await users.createIndex("email", { unique: true }); // idx_users_email
+await users.createIndex("email", { name: "by_email", unique: true });
+await users.createIndex("location", { type: "gist" }); // pg only: USING GIST
+await adapter.createIndex("users", "email", { unique: true }); // adapter-level twin
+await adapter.dropIndex("users", "by_email");
+```
+
+Defaults: `CREATE [UNIQUE] INDEX IF NOT EXISTS <name> ON <table> [USING <type>] (<field>)`
+on pg/sqlite (mysql checks `SHOW INDEX` first since it lacks `IF NOT EXISTS`).
+
+`dropColumn` works on pg/mysql only (`adapter.dropColumn(table, col)` delegates to it);
+sqlite throws — see [Caveats](#caveats-and-differences).
+
+### `createTableWithSchema(table, jsonSchema)`
+
+Accepts a JSON-Schema-ish `{ properties, required }` (with `default` passthrough) or an
+already-mapped `{ col: { type, required, default } }` object. Property mapping:
+
+| JSON Schema | PostgreSQL | MySQL | SQLite |
+| ----------- | ---------- | ----- | ------ |
+| `string` | `TEXT` | `VARCHAR(255)` | `TEXT` |
+| `string` + `maxLength: N` | `VARCHAR(N)` | `VARCHAR(N)` | `TEXT` |
+| `string` + `format: date-time` | `TIMESTAMP` | `DATETIME` | `TEXT` |
+| `integer` | `INTEGER` | `INT` | `INTEGER` |
+| `number` | `DECIMAL(20,6)` | `DECIMAL(20,6)` | `REAL` |
+| `boolean` | `BOOLEAN` | `TINYINT(1)` | `INTEGER` |
+| `array` / `object` | `JSONB` | `JSON` | `TEXT` |
+
+```javascript
+await adapter.createTableWithSchema("users", {
+	properties: {
+		name: { type: "string" },
+		age: { type: "integer" },
+		created: { type: "string", format: "date-time" },
+		active: { type: "boolean", default: true },
+		meta: { type: "object", default: {} },
+	},
+	required: ["name"],
+});
+// pg emits:    CREATE TABLE IF NOT EXISTS users (_id SERIAL PRIMARY KEY, ...)
+//              ALTER TABLE users ADD COLUMN name TEXT NOT NULL
+//              ALTER TABLE users ADD COLUMN age INTEGER
+//              ALTER TABLE users ADD COLUMN created TIMESTAMP
+//              ALTER TABLE users ADD COLUMN active BOOLEAN DEFAULT TRUE
+//              ALTER TABLE users ADD COLUMN meta JSONB DEFAULT '{}'
+```
+
+### DDL helpers
+
+```javascript
+await adapter.addColumn("users", "nickname", "VARCHAR(64)");
+await adapter.addColumn("users", "score", "INT", { default: 0 });
+await adapter.addColumn("users", "email", "TEXT", { required: true, unique: true });
+await adapter.renameColumn("users", "nickname", "handle");
+await adapter.modifyColumn("users", "score", "BIGINT"); // pg/mysql only
+await adapter.dropCollection("users"); // pg appends CASCADE
+await adapter.listCollections(); // ["users", "orders"]
+```
+
+Pass `createSchemalessAdapter(client, db, { debug: true })` (or `debug` on
+`createQueryBuilder` / the `'sql'` client) to log every generated statement.
+
+---
+
+## 🧠 In-Memory Engine Reference (`umosql/memory`)
+
+Fully synchronous — no promises, no SQL, no driver. Ideal for tests, caches, edge
+runtimes, and offline-first stores. Two layers: the **engine** (direct classes and
+functions) and the **schemaless adapter** (async-compatible wrapper used by
+`createSchemalessClient('memory')`).
+
+```javascript
+import { collection, db, Database, Collection } from "umosql/memory";
+
+// A collection with seed data (synchronous - results are returned directly)
+const users = collection("users", [
+	{ _id: 1, name: "Alice", age: 25, tags: ["x", "y"] },
+	{ _id: 2, name: "Bob", age: 30, tags: ["y"] },
+]);
+
+users.find({ age: { $in: [25, 30] } }).toArray(); // both docs
+// NOTE: memory $in/$eq compare whole values - match array ELEMENTS with $elemMatch:
+users.find({ tags: { $elemMatch: { $eq: "x" } } }).toArray(); // [{ Alice… }]
+users.findOne({ name: "Bob" }); // { Bob… } (or null)
+users.findById(1); // sugar for findOne({ _id: id })
+users.updateOne({ name: "Bob" }, { $inc: { age: 1 } });
+users.updateMany({ age: { $gte: 18 } }, { $set: { adult: true } });
+users.deleteOne({ name: "Bob" });
+users.countDocuments({ age: { $gte: 18 } }); // number
+users.estimatedDocumentCount(); // collection size
+users.distinct("age"); // [25, 30]
+users.aggregate([{ $group: { _id: "$age", n: { $sum: 1 } } }]);
+
+// Named databases isolate collections; seed data/options apply on first use
+const app = db("app");
+const logs = app.collection("logs", [], { idStrategy: "mongo" });
+app.listCollections(); // ["logs"]
+app.stats("logs"); // { name, count, size, avgObjSize }
+app.dropCollection("logs"); // true
+app.dropDatabase(); // { acknowledged: true }
+```
+
+### FindQuery, options, and `project()`
+
+```javascript
+users
+	.find({ age: { $gte: 18 } }, null, { sort: { age: -1 }, skip: 5, limit: 10 })
+	.sort({ name: 1 })
+	.skip(0)
+	.limit(5)
+	.distinct() // dedupe whole documents
+	.count() // toArray() then returns [{ count: n }]
+	.toArray();
+```
+
+Note: the memory `find()` projection argument is accepted but **not applied** — use the
+standalone `project(doc, projection)` (supports inclusion, exclusion, and computed
+fields) or an aggregate `$project` stage:
+
+```javascript
+import { project } from "umosql/memory";
+project({ name: "Bob", age: 30, _id: 2 }, { name: 1 }); // { name: 'Bob', _id: 2 }
+```
+
+`find()` returns live references to stored documents; `updateOne`/`updateMany` clone
+before writing, so concurrent reads never see half-applied updates.
+
+### Curried `filter` / `expression` / `aggregate`
+
+```javascript
+import { filter, expression, aggregate } from "umosql/memory";
+
+const isAdult = filter({ age: { $gte: 18 } }); // (doc) => boolean
+users.getAll().filter(isAdult);
+
+const nextAge = expression({ $add: ["$age", 1] }); // (doc) => value
+nextAge({ age: 30 }); // 31
+
+const pipeline = aggregate([{ $match: { age: { $gte: 18 } } }, { $count: "n" }]);
+pipeline(users.getAll()); // [{ n: 2 }]
+```
+
+### Memory-only operators
+
+Filters — `$type`, `$elemMatch`, `$all`, `$size`, `$where`:
+
+```javascript
+users.find({ age: { $type: "number" } }); // string|number|boolean|array|object|null|…
+users.find({ tags: { $elemMatch: { $eq: "x" } } }); // any element matches
+users.find({ tags: { $all: ["x", "y"] } }); // contains every value
+users.find({ tags: { $size: 2 } }); // array length
+users.find({ $where: function () { return this.age > 26; } }); // `this` = doc
+```
+
+Updates — `$push` modifiers, `$pull`/`$pullAll`, `$addToSet`, `$pop`, `$setOnInsert`:
+
+```javascript
+users.updateOne({ name: "Bob" }, { $push: { tags: "z" } });
+users.updateOne({ name: "Bob" }, { $push: { scores: { $each: [1, 2], $sort: -1, $slice: 5 } } });
+users.updateOne({ name: "Bob" }, { $addToSet: { tags: { $each: ["y", "z"] } } });
+users.updateOne({ name: "Al" }, { $pull: { tags: "x" } }); // or a filter object
+users.updateOne({ name: "Al" }, { $pullAll: { tags: ["x", "y"] } });
+users.updateOne({ name: "Al" }, { $pop: { tags: 1 } }); // 1 = last, -1 = first
+// $position inserts $each items at an index: { $each: [...], $position: 0 }
+
+// Upsert flavour: plain updateOne with { upsert: true } (+ $setOnInsert)
+users.updateOne({ name: "New" }, { $setOnInsert: { age: 9 } }, { upsert: true });
+// { modifiedCount: 0, upsertedCount: 1, acknowledged: true }
+users.replaceOne({ name: "Al" }, { name: "Al", age: 26 }); // keeps _id
+```
+
+Expressions — `$split`, `$arrayElemAt`, `$slice`, `$map`, `$filter`, `$reduce`, `$type`, `$millisecond`:
+
+```javascript
+users.aggregate([{ $project: { up: { $map: ["$tags", "t", { $upper: "$$t" }] } } }]);
+// [{ up: ['X', 'Y'], _id: 1 }, …]   ($$t reads the bound variable)
+users.aggregate([{ $project: { first: { $arrayElemAt: ["$tags", 0] } } }]);
+users.aggregate([{ $project: { parts: { $split: ["$name", ""] } } }]);
+```
+
+Stages — `$unwind` options, extra `$group`/`$bucket` accumulators, `$unset`:
+
+```javascript
+users.aggregate([{ $unwind: "$tags" }]); // one doc per element
+users.aggregate([
+	{ $unwind: { path: "$tags", preserveNullAndEmptyArrays: true, includeArrayIndex: "i" } },
+]);
+users.aggregate([{ $group: { _id: "$age", names: { $push: "$name" }, first: { $first: "$name" } } }]);
+// $group/$bucket accumulators: $sum $avg $min $max $push $addToSet $first $last ($count too in $bucket)
+users.aggregate([{ $unset: "password" }]); // or ["a", "b"]
+```
+
+### Custom engines and path utilities
+
+```javascript
+import {
+	createMemoryDB,
+	filterOps,
+	exprOps,
+	updateOps,
+	stageOps,
+	extend,
+	deepEquals,
+	getPath,
+	setPath,
+	deletePath,
+	clone,
+} from "umosql/memory";
+
+// Your own engine with hand-picked operators (same idea as createQueryBuilder)
+const mini = createMemoryDB({ filterOps, exprOps, updateOps, stageOps });
+mini.collection("t").insertOne({ a: 1 });
+
+// Or extend the shared one: filter / expression / update / stage
+extend.filter({ $even: (q, v) => v % 2 === 0 });
+
+getPath({ a: { b: 1 } }, "a.b"); // 1 (array paths accepted too)
+const o = {};
+setPath(o, "a.0.b", 5); // { a: [{ b: 5 }] } (numeric segments make arrays)
+deletePath(o, "a.0.b"); // { a: [{}] }
+clone(new Date(0)) instanceof Date; // true (Date/Array/Object aware)
+deepEquals({ a: 1 }, { a: 1 }); // true
+```
+
+`collection(name, initData?, { idColumn?, idStrategy?, idGenerator? })` honors
+`auto` (numeric counter, continues past seeded numeric `_id`s), `mongo` (24-char hex),
+and `custom` (`idGenerator()`; without one the id stays `undefined`).
+`drop()` empties a collection and resets its counter; `getAll()`/`size()` inspect it.
+
+The adapter wrapper — `createMemorySchemaless()` from `umosql/memory`,
+`umosql/schemaless`, or `umosql/client` — returns `{ adapter, database }` where
+`database` is a `Database('unified')`. Its `createIndex`/`dropIndex` simply acknowledge;
+there is no `upsertOne`/`findMany`/DDL (see the [methods matrix](#mongodb-compatible-methods-support-matrix)).
+
+---
+
+## 🍃 MongoDB Adapter Reference
+
+A thin native-driver pass-through — queries run through the real `mongodb` driver, so
+Mongo-only features (`$regex` with options, `ObjectId`, …) behave exactly like MongoDB.
+No DDL translation happens: `$rename`/`$currentDate`/array operators are sent natively.
+
+```javascript
+import { createMongoSchemaless } from "umosql/client"; // also via createSchemalessClient('mongodb', …)
+
+const { adapter, client } = await createMongoSchemaless({
+	host: "localhost", // default 'localhost' (+ MONGO_HOST/MONGO_PORT/MONGO_USER/…)
+	port: 27017,
+	user: "root",
+	password: "secret",
+	database: "testdb",
+	driverOptions: {}, // forwarded to `new MongoClient(uri, { serverSelectionTimeoutMS: 5000, … })`
+	// driver: mongoModule,  // inject instead of importing 'mongodb'
+	// client: mongoClient,  // adopt instead of connecting
+});
+
+const users = adapter.collection("users");
+await users.insertOne({ name: "Alice", profile: { score: 85 } });
+// { acknowledged: true, insertedId: ObjectId(...) }
+await users.updateOne({ name: "Alice" }, { $inc: { "profile.score": 5 } });
+// { acknowledged, matchedCount, modifiedCount, upsertedId, upsertedCount }
+await users.upsertOne({ name: "Bob" }, { $set: { age: 30 } }); // native upsert: true
+const cursor = users.find({ age: { $gte: 18 } }, null, { sort: { age: -1 }, limit: 5 });
+await cursor.sort({ name: 1 }).skip(0).limit(10).toArray();
+await users.createIndex("email", { unique: true });
+await adapter.listCollections(); // ["users", …]
+await adapter.dropCollection("users");
+await client.close();
+```
+
+Collection methods: `insertOne`/`insertMany`, `find` (sync cursor with
+`sort`/`skip`/`limit`/`toArray`/`count`), `findOne`, `updateOne`/`updateMany`,
+`upsertOne(filter, update)` (native `{ upsert: true }`, returns
+`{ acknowledged, upserted, upsertedId }`), `deleteOne`/`deleteMany`,
+`countDocuments`, `estimatedDocumentCount`, `distinct`, `aggregate` (native pipeline),
+`createIndex(field, options)`. Adapter-level: `listCollections`, `dropCollection`,
+`createIndex(table, field, options)`. Connection failures surface after the
+5s `serverSelectionTimeoutMS` (override via `driverOptions`).
+
+---
+
+## 🛠 Builder Utilities & Standalone Functions (`umosql`)
+
+Everything below is exported from the root entry point (and mirrored by `lite`/`tiny`
+with their smaller op sets). The builder only produces SQL strings — pair it with any
+driver, or hand it to `createSQLAdapter` as `queryBuilder`.
+
+```javascript
+import {
+	collection, // (name, db?) -> CollectionApi (also the default export)
+	db, // (name, db?) -> CollectionApi, alias of collection
+	filter, // (query, db?) -> WHERE fragment
+	expression, // (expr, db?) -> SQL expression
+	aggregate, // (pipeline) -> (table, db?) -> SELECT (curried!)
+	insertMany, // (table, docs, db?, opts?) -> INSERT
+	updateMany, // (table, query, update, db?, opts?) -> UPDATE
+	deleteMany, // (table, query, db?, opts?) -> DELETE
+	FindQuery, // class: new FindQuery(table, query, projection?, db?)
+	extend, // { filter, expression, update, stage }
+	createQueryBuilder, // (config) -> custom builder (see below)
+	filterOps, // the 16 SQL filter operators (shareable / pickable)
+	exprOps, // the 58 SQL expression operators
+	updateOps, // the 8 SQL update operators
+	stageHandlers, // the 12 SQL pipeline stages
+	escape, // (value, db?) -> SQL literal
+	jsonPath, // (path, db?, cast?) -> JSON read expression
+	validate, // { col, alias, arr, int }
+	isObject, // typeof obj === 'object' && non-null && non-array
+	is$, // string starts with '$'
+} from "umosql";
+```
+
+### Standalone fragments (no collection needed)
+
+```javascript
+filter({ age: { $gte: 18 }, status: "active" } }, "pg");
+// age >= 18 AND status = 'active'
+
+expression({ $add: ["$price", "$tax"] }, "sqlite");
+// (price + tax)
+
+aggregate([{ $match: { active: true } }, { $count: "n" }])("users", "pg");
+// SELECT COUNT(*) AS n FROM (SELECT * FROM users WHERE active = TRUE) AS t1
+
+insertMany("users", [{ name: "Al" }], "sqlite");
+// INSERT INTO users (name) VALUES ('Al')
+
+updateMany("users", { active: false }, { $set: { v: 1 } }, "pg");
+// UPDATE users SET v = 1 WHERE active = FALSE
+
+deleteMany("users", { active: false }, "pg");
+// DELETE FROM users WHERE active = FALSE
+
+db("users", "pg").findOne({ id: 1 }).toSQL();
+// SELECT * FROM users WHERE id = 1 LIMIT 1
+
+// FindQuery directly (table must already be a valid identifier)
+new FindQuery("users", { age: { $gte: 18 } }, ["name"], "pg")
+	.sort({ age: -1 })
+	.limit(5)
+	.toSQL();
+// SELECT name FROM users WHERE age >= 18 ORDER BY age DESC NULLS LAST LIMIT 5
+```
+
+`opts` on insert/update/delete: `{ returning: ["id", …] | "*" }` (pg only) and
+`{ allowDeleteAll: true }` for filter-less `deleteMany` (otherwise it throws).
+
+### `escape(value, db?)` — SQL literals per dialect
+
+```javascript
+escape("o'clock", "pg"); // 'o''clock' (quotes doubled)
+escape(true, "pg"); // TRUE      |  escape(true, "mysql"); // 1
+escape(new Date("2024-01-02T03:04:05Z"), "mysql"); // '2024-01-02 03:04:05' (UTC)
+escape(new Date("2024-01-02T03:04:05Z"), "pg"); // '…T…Z'::timestamp
+escape({ a: 1 }, "pg"); // '{"a":1}'::jsonb
+escape(null); // NULL
+escape(undefined); // throws 'Cannot escape undefined'
+escape(NaN); // throws 'Cannot escape non-finite number'
+```
+
+### `jsonPath(path, db?, cast?)` — JSON reads per dialect
+
+```javascript
+jsonPath("profile.score", "pg"); // (profile::jsonb #>> '{score}')
+jsonPath("profile.score", "pg", "numeric"); // ((profile::jsonb #>> '{score}'))::numeric
+jsonPath("profile.score", "mysql"); // JSON_UNQUOTE(JSON_EXTRACT(profile, '$.score'))
+jsonPath("profile.score", "mysql", "numeric"); // CAST(… AS DECIMAL(20,6))
+jsonPath("profile.score", "sqlite"); // json_extract(profile, '$.score')
+// casts: 'numeric' | 'int' | 'boolean' (pg); 'numeric' | 'int' (mysql)
+```
+
+Filters apply casts automatically for number/boolean comparisons; dotted segments that
+are numeric become array indexes (`orders.0.status` → `'$[0].status'`-style paths).
+
+### `validate` — the guards behind every builder
+
+```javascript
+validate.col("users", "mysql"); // 'users' (reserved words get backticks: `longText`)
+validate.col("a;b", "pg"); // throws 'Invalid column: a;b'
+validate.alias("a-b c"); // 'a_b_c' (non-word chars -> _)
+validate.arr([1], "$in"); // returns it; non-arrays throw '$in requires array'
+validate.int("5", "$limit"); // 5; negatives/fractions throw
+```
+
+### `extend` — custom operators (all four kinds)
+
+The README's [Custom Operators](#-custom-operators) section shows filter/expression/update
+extensions; `extend.stage` adds pipeline stages the same way:
+
+```javascript
+import { extend } from "umosql";
+
+// $limitOffset: { limit, offset } in one stage
+extend.stage({
+	$limitOffset: (a, s) => {
+		s.limit = ` LIMIT ${a.limit}`;
+		s.offset = ` OFFSET ${a.offset}`;
+	},
+});
+collection("users", "pg").aggregate([{ $limitOffset: { limit: 5, offset: 10 } }]);
+// SELECT * FROM users LIMIT 5 OFFSET 10
+```
+
+Each stage handler receives `(args, state, db, helpers)` where `helpers` exposes
+`{ wrap, applyWhere, replace, filter, expr }` — see `stageHandlers` in `src/index.js`.
+Note `extend` mutates the shared op maps, so custom operators are global to the process.
+
+### `createQueryBuilder(config)` — custom builds
+
+```javascript
+import { createQueryBuilder, filterOps, exprOps, updateOps } from "umosql";
+
+const custom = createQueryBuilder({
+	filterOps: { $eq: filterOps.$eq, $in: filterOps.$in }, // only what you ship
+	exprOps: { $add: exprOps.$add },
+	updateOps: { $set: updateOps.$set },
+	stageHandlers: {}, // no aggregation at all
+	debug: true, // log every generated statement
+});
+export const { collection, filter } = custom;
+```
+
+`lite` and `tiny` are exactly this pattern, prebuilt.
+
+---
+
+## 📦 Lite & Tiny Operator Lists
+
+Precise sets (structural pieces — `$and`/`$or`/`$nor`/`$not`/`$expr`, bare equality,
+dotted paths, sorting — work identically in all three):
+
+**Lite** (`umosql/lite`) — every filter op, every update op, basic stages, 42 expression ops:
+
+- Expressions kept: `$add $subtract $multiply $divide $mod $abs $ceil $floor $round
+  $pow $sqrt $concat $upper $lower $substr $trim $ltrim $rtrim $strLen $replace $eq $ne
+  $gt $gte $lt $lte $in $nin $and $or $not $cond $ifNull $exists $toString $toInt
+  $toDouble $sum $avg $min $max $count`
+- Expressions dropped: `$cmp $size $stdDevPop $stdDevSamp $switch`, all date parts
+  (`$year $month $dayOfMonth $dayOfWeek $hour $minute $second $week`), `$toBool $toDate`,
+  `$literal`
+- Stages kept: `$match $project $group $sort $limit $skip $count` (no `$addFields`/`$set`,
+  `$sample`, `$sortByCount`, `$bucket`)
+
+**Tiny** (`umosql/tiny`) — minimal everything, dotted JSON paths still resolve:
+
+- Filters: `$eq $ne $gt $gte $lt $lte $in $nin $like $exists`
+- Expressions: `$add $subtract $multiply $divide $concat $upper $lower $eq $cond $sum
+  $avg $min $max`
+- Updates: `$set` only (including dotted `$set: { "profile.score": 95 }`)
+- Stages: `$match $project $group $sort $limit $skip $count`
+
+```javascript
+import tiny from "umosql/tiny";
+import lite from "umosql/lite";
+
+tiny.filter({ age: { $eq: 25 } }, "sqlite"); // age = 25
+tiny.filter({ "profile.score": { $gte: 80 } }, "pg"); // ((profile::jsonb #>> '{score}'))::numeric >= 80
+lite.filter({ "profile.country": "FR" }, "pg");
+lite.collection("o", "pg").aggregate([{ $group: { _id: "$city", n: { $sum: 1 } } }]);
+```
+
+---
+
+## ⚠️ Backend Quirks & Differences
+
+Beyond [Caveats](#caveats-and-differences), these sharp edges are worth knowing up front:
+
+- **PostgreSQL lower-cases unquoted aliases.** `aggregate([{ $group: { _id: null, avgAge: { $avg: "$age" } } }])`
+  returns `{ avgage: … }` on pg but `{ avgAge: … }` elsewhere — read both
+  (`row.avgAge ?? row.avgage`). Same for `$project`/`$addFields` aliases.
+- **PostgreSQL has no `LIMIT` on `UPDATE`/`DELETE`.** `updateOne`/`deleteOne` append
+  `LIMIT 1` on mysql/sqlite only; on pg they rely on the filter. (The adapters compute
+  `matchedCount` with a pre-`COUNT(*)`, so the reported counts still match Mongo semantics.)
+- **Booleans differ on the wire:** `TRUE`/`FALSE` on pg, `1`/`0` on mysql (`TINYINT(1)`)
+  and sqlite (`INTEGER`). Returned rows may carry `1`/`0` — normalize at the boundary.
+- **Dates differ:** pg `TIMESTAMP` (`'iso'::timestamp`), mysql `DATETIME`
+  (`'YYYY-MM-DD HH:MM:SS'` UTC), sqlite `TEXT` (ISO string), memory/mongo native `Date`.
+- **JSON storage differs:** pg `JSONB` (`#>>`, `jsonb_set`, `@>`-family), mysql `JSON`
+  (`JSON_EXTRACT`/`JSON_SET`/`JSON_REMOVE`), sqlite `TEXT` (`json_extract`/`json_set`/
+  `json_remove` — needs the `json1` extension, bundled with modern sqlite).
+- **MySQL quoting:** identifiers equal to reserved words (`longText` = `LONGTEXT`, …)
+  are backtick-quoted in DDL *and* DML automatically; everything else is unquoted.
+- **MySQL `information_schema` reports `VARCHAR` without length** (`DATA_TYPE = 'varchar'`);
+  the adapter compares base types so `VARCHAR` ≡ `VARCHAR(255)`, and `$rename` pre-adds
+  the target with a valid `VARCHAR(255)` instead of copying the bare type.
+- **`SERIAL` reports as `integer`.** pg `SERIAL` / mysql `AUTO_INCREMENT` columns read
+  back as plain integers, so null-stripping consults your declared `schema`, not the
+  live introspection.
+- **Sort nulls:** pg sorts `ASC NULLS FIRST` / `DESC NULLS LAST`; mysql/sqlite emulate it
+  with `CASE WHEN <col> IS NULL …` (plain `ASC`/`DESC` when mysql meets `DISTINCT`).
+  Memory sorts nulls last in both directions.
+- **`$substr` is 0-based** (Mongo semantics) — `+1` is added for SQL automatically.
+- **Memory `find()` ignores its projection argument** — use `project(doc, proj)` or an
+  aggregate `$project`. Memory `$in`/`$eq` compare whole values; use `$elemMatch` for
+  array elements. Memory `find()` returns live references.
+- **Memory ids:** `auto` continues past the largest seeded numeric `_id`; `custom`
+  without an `idGenerator` leaves the id `undefined`.
+- **`upsertOne` is update-then-insert on SQL** (two round-trips, not atomic); native on
+  MongoDB (`{ upsert: true }`); `updateOne(…, { upsert: true })` on memory.
+
+---
+
+## 🔌 Connection Lifecycle
+
+Every example in this README follows the same discipline — connect, `try/finally`,
+release — because a leaked handle hangs the process:
+
+| Backend | Open | Close | Notes |
+| ------- | ---- | ----- | ----- |
+| memory | — (sync) | `client.close()` drops stores | per-`db(name)` isolation |
+| sqlite | `new Database(path?)` | `db.close()` | sync API, no sockets |
+| pg | `new Client(…)` → **`await client.connect()`** | `await client.end()` | never `connect()` twice — adopted clients are used as-is |
+| mysql | `await mysql.createConnection(…)` | `await conn.end()` | connects during creation |
+| mongodb | `await createMongoSchemaless(…)` (connects inside) | `await client.close()` | fails fast after 5s `serverSelectionTimeoutMS` |
+| `sql` executor | yours | `close` from config (or no-op) | `raw` is your `client` or `null` |
+
+```javascript
+import { createSchemalessClient } from "umosql/client";
+
+const client = await createSchemalessClient("pg", { host, database, user, password });
+try {
+	const users = client.db("app").collection("users");
+	await users.insertOne({ name: "Alice" });
+} finally {
+	await client.close(); // safe to call twice; never throws
+}
+```
+
+`CLIENT_TYPES` (`['memory', 'sqlite', 'pg', 'mysql', 'mongodb', 'sql']`) enumerates the
+valid `createSchemalessClient` types. `loadDriver(backend, specifier, () => import(…))`
+(re-exported from `umosql/client`) gives custom backends the same
+lazy-load-with-install-hint behavior, and every async factory calls `loadEnv()` first so
+a local `.env` is picked up when `dotenv` happens to be installed (quietly skipped when
+it is not). Pass `{ debug: true }` to log each generated statement.
+
+---
+
+## 📁 Examples Tour (`examples/`)
+
+Runnable end-to-end scripts (all guarded — they no-op without their env vars):
+
+| File | What it shows |
+| ---- | ------------- |
+| `client.js` | One API across every backend (`node examples/client.js` runs driver-free; `PG_*`/`MYSQL_*`/`MONGO_*` light up live backends) |
+| `sqlite.js` / `pg.js` / `mysql.js` / `mongo.js` / `memory.js` | Per-backend `createSchemalessClient` tours |
+| `lite.js` / `tiny.js` | The small builders (`lite` notes its 7 basic stages) |
+| `serverless-neon.js` | `createSQLAdapter({ database: 'pg', execute: fetch→Neon, queryBuilder })` (`NEON_HTTP_URL`, `NEON_API_KEY`) |
+| `serverless-turso.js` | Same pattern for Turso (`TURSO_HTTP_URL`, `TURSO_TOKEN`) |
+| `serverless-planetscale.js` | Same pattern for PlanetScale (`PSCALE_DATA_API_URL`, `PSCALE_TOKEN`) |
+| `serverless-neon-drizzle.js` | Drizzle `neon-http` (`drizzle-orm/neon-http` + `@neondatabase/serverless`) |
+| `serverless-turso-drizzle.js` | Drizzle libsql (`drizzle-orm/libsql` + `@libsql/client`) |
+| `dbdebug.pg.js` / `dbdebug.pg.insert.js` / `dbdebug.mysql.js` | Minimal live-DB probes used while developing the adapters |
+
+The serverless trio shares one shape: build a `qb`, wrap an HTTP `execute`, call
+`adapter.execute(sql)` / `adapter.collection(…)` exactly like a socketed backend.
+
+---
+
+## ❌ Errors Reference
+
+Fail-fast validation — every message below is thrown (not returned) at build time:
+
+| Trigger | Message |
+| ------- | ------- |
+| unknown `$op` in filter / expression / update / stage | `Unknown operator: $x` / `Unknown expression operator: $x` / `Unknown update operator: $x` / `Unknown pipeline operator: $x` |
+| unknown memory accumulator | `Unknown accumulator: $x` / `Unknown stage: $x` |
+| bad identifier | `Invalid column: …` (anything outside `[\w.]`, empty segments) |
+| `deleteMany({})` without opt-in | `deleteMany requires a filter or allowDeleteAll option` |
+| `insertMany([])` / field-less docs | `insertMany requires at least one document` / `Documents must have at least one field` |
+| non-object `insertOne` / update | `insertOne requires a document object` / `Update must be an object` |
+| `$in`/`$nin`/`aggregate` non-array | `$in requires array` (…), `aggregate` → `Stage N must be an object` / `Pipeline must be array` (memory) |
+| `$between` / `$mod` shape | `$between requires [min, max]` / `$mod requires [divisor, remainder]` |
+| `$cond` / `$switch` / `$exists`-expr shape | `$cond requires [condition, then, else]` / `$switch requires {branches: […], default: …}` (+ `Branch needs {case, then}`) / `$exists requires [field, boolean]` |
+| `$in`/`$nin` expr shape | `$in requires [value, array]` |
+| `$limit`/`$skip`/`$sample` shape | `$limit requires non-negative integer` (…`$skip`…) / `$sample` → size int / `$bucket requires boundaries array` |
+| `$rename` on `a.b` paths | `$rename for JSON fields not supported` |
+| `escape(undefined)` / `NaN` / `Infinity` | `Cannot escape undefined` / `Cannot escape non-finite number` |
+| regex > 1000 chars | `Regex pattern too long (max 1000 chars)` |
+| `createSQLAdapter` misconfig | `execute function is required` / `queryBuilder is required (pass createQueryBuilder({…}))` |
+| `createSchemalessClient('sql', …)` w/o executor | `createSchemalessClient('sql', { executor }) requires an executor(sql, params) function` |
+| unknown client type | `Unknown type: x. Expected one of: memory, sqlite, pg, mysql, mongodb, sql` |
+| missing driver | `umosql: the "pg" backend needs the "pg" driver…` (+ install hint; never a bare module error) |
+| sqlite DDL gaps | `SQLite does not support DROP COLUMN` / `SQLite does not support MODIFY COLUMN` |
+| memory `insertMany` non-array | `insertMany requires array` / `Query must be object` |
+
+---
+
+## 📝 TypeScript Types
+
+Each entry point ships a hand-written `.d.ts` next to its ESM/CJS/UMD/minified builds:
+
+| Entry | Types | Highlights |
+| ----- | ----- | ---------- |
+| `umosql` | `index.d.ts` | `DBType`, `FindQuery`, `CollectionApi`, `ExtendApi`, `QueryBuilderApi`, `QueryBuilderConfig` |
+| `umosql/schemaless` | `schemaless.d.ts` | `Schema`/`SchemaField`, `CollectionOptions`, `FindOptions`/`FindManyOptions` (+ `order` alias), `Cursor`, `WriteResult`, `SchemalessCollection`, `SchemalessAdapter` (incl. `build*`), `SQLAdapterConfig` |
+| `umosql/memory` | `memory.d.ts` | engine classes, curried `filter`/`expression`/`aggregate`, `project`, utils |
+| `umosql/client` | `client.d.ts` | `createSchemalessClient` config, `CLIENT_TYPES`, re-exported factories |
+| `umosql/lite`, `umosql/tiny` | `lite/index.d.ts`, `tiny/index.d.ts` | trimmed builder surfaces |
+
 ## API Reference
 
 ### Entry points

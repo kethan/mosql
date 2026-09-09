@@ -1083,7 +1083,7 @@ export const createQueryBuilder = (config = {}) => {
 // DEFAULT EXPORTS (Full Version)
 // ============================================
 
-const fullBuilder = createQueryBuilder();
+const fullBuilder = createQueryBuilder({ filterOps, exprOps, updateOps, stageHandlers });
 
 export const { filter, expression, aggregate, insertMany, updateMany, deleteMany, collection, FindQuery, extend, db } = fullBuilder;
 export default collection;
