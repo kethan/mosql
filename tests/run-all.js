@@ -38,7 +38,9 @@ for (const spec of specs) {
 
 const skipped = getSkipCount();
 console.log(`\n[run-all] ${specs.length} spec files, ${skipped} skipped tests${failed ? ', FAILURES' : ''}`);
-// Exit non-zero when any spec module throws during evaluation so CI catches it.
-if (failed && typeof process !== 'undefined' && process?.exit) {
-  process.exit(1);
+// Always exit explicitly: open DB driver handles (e.g. an unclosed mongodb
+// client's heartbeat timers) would otherwise keep the event loop alive and
+// hang CI until the 15m timeout, even after every spec has completed.
+if (typeof process !== 'undefined' && process?.exit) {
+  process.exit(failed ? 1 : 0);
 }
