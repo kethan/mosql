@@ -236,7 +236,7 @@ for (const s of setups) {
           abs: { $abs: { $subtract: ['$age', 30] } },
           ceil: { $ceil: { $divide: ['$age', 2] } },
           floor: { $floor: { $divide: ['$age', 2] } },
-          round: { $round: [{ $divide: ['$age', 2] }, 0] }
+          round: { $round: [{ $divide: [126, 10] }, 0] } // 12.6: avoids the 12.5 half-way tie (mongo $round is banker's)
         }
       }
     ]);
