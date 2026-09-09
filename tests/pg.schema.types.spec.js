@@ -11,6 +11,15 @@ const main = async () => {
 
   log('client ready:', label);
 
+  // The PGlite fallback connects lazily, but a real pg Client must be
+  // connected before use — otherwise every query hangs forever.
+  try {
+    await client.connect();
+  } catch (e) {
+    log('connect failed, skipping:', e?.message || e);
+    return;
+  }
+
   try {
     const { adapter } = createSchemalessAdapter(client, 'pg');
 
