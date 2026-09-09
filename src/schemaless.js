@@ -17,7 +17,7 @@ export { createMemorySchemaless };
 const inferSQLType = (value, database) => {
     const types = {
         pg: { string: (v) => v.length > 255 ? 'TEXT' : 'VARCHAR(255)', number: (v) => Number.isInteger(v) ? 'INTEGER' : 'DECIMAL(20,6)', boolean: 'BOOLEAN', date: 'TIMESTAMP', json: 'JSONB' },
-        mysql: { string: 'VARCHAR(255)', number: (v) => Number.isInteger(v) ? 'INT' : 'DECIMAL(20,6)', boolean: 'TINYINT(1)', date: 'DATETIME', json: 'JSON' },
+        mysql: { string: (v) => v.length > 255 ? 'TEXT' : 'VARCHAR(255)', number: (v) => Number.isInteger(v) ? 'INT' : 'DECIMAL(20,6)', boolean: 'TINYINT(1)', date: 'DATETIME', json: 'JSON' },
         sqlite: { string: 'TEXT', number: (v) => Number.isInteger(v) ? 'INTEGER' : 'REAL', boolean: 'INTEGER', date: 'TEXT', json: 'TEXT' },
     };
     const t = types[database];
