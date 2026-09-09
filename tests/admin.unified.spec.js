@@ -281,7 +281,7 @@ for (const db of dbs) {
   await runTest(`unified/${db.name} update matchedCount`, async () => {
     const res = await users.updateMany({ active: true }, { $set: { alias: 'alias2' } });
     return [{ matchedCount: res.matchedCount }];
-  }, db.name === 'pg' || db.name === 'sqlite' ? [{ matchedCount: 3 }] : db.name === 'mysql' ? [{ matchedCount: 1 }] : [{ matchedCount: 2 }]);
+  }, db.name === 'pg' || db.name === 'sqlite' || db.name === 'mysql' ? [{ matchedCount: 3 }] : [{ matchedCount: 2 }]);
 
   // Drop alias column only for PG/MySQL and verify absence
   if (db.name === 'pg' || db.name === 'mysql') {

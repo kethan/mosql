@@ -78,11 +78,17 @@ export async function createMySQLConn() {
         user: process.env.MYSQL_USER,
         password: process.env.MYSQL_PASS,
         database: process.env.MYSQL_DB,
-        // Bound every query so a wedged statement surfaces as an error
-        // (with its SQL) instead of hanging the whole test job forever.
-        timeout: 60000,
         connectTimeout: 10000,
       });
+      // Bound every query so a wedged statement surfaces as an error
+      // (with its SQL) instead of hanging the whole test job forever.
+      const timeout = Number(process.env.MYSQL_QUERY_TIMEOUT || 60000);
+      const withTimeout = (fn) => (sql, params = []) =>
+        typeof sql === 'string'
+          ? fn.call(conn, { sql, timeout }, params)
+          : fn.call(conn, sql, params);
+      conn.execute = withTimeout(conn.execute);
+      conn.query = withTimeout(conn.query);
       return { conn, label: `mysql-server:${host}`, stop: async () => {} };
     } catch (e) {
       log('MySQL server configured but unreachable, skipping mysql tests:', e?.message || e);
