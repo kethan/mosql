@@ -1,34 +1,47 @@
 import { createQueryBuilder, filterOps, exprOps, updateOps, stageHandlers } from '../index.js';
 import { createSchemalessAdapter } from '../src/schemaless.js';
-import { runTest } from './common.js';
+import { runTest, pgConfig, mysqlConfig, isConfigured, connectSkip } from './common.js';
+import { loadEnv } from '../src/env.js';
 import Database from 'better-sqlite3';
 import pkg from 'pg';
 import mysql from 'mysql2/promise';
-import dotenv from 'dotenv';
-dotenv.config();
+
+await loadEnv();
 
 const qb = createQueryBuilder({ filterOps, exprOps, updateOps, stageHandlers });
 
 const dbs = [];
+const label = 'qb.unified';
 
 (async () => {
   const { adapter: sqlite } = createSchemalessAdapter(new Database(':memory:'), 'sqlite');
   dbs.push({ name: 'sqlite', adapter: sqlite });
 
-  const pgCfg = { host: process.env.PG_HOST || process.env.PGHOST, port: process.env.PG_PORT || 5432, user: process.env.PG_USER || process.env.PGUSER, password: process.env.PG_PASSWORD || process.env.PGPASSWORD, database: process.env.PG_DB || process.env.PGDATABASE };
-  if (pgCfg.host && pgCfg.user && pgCfg.database) {
-    const { Client } = pkg;
-    const pgClient = new Client(pgCfg);
-    await pgClient.connect();
-    const pgInit = createSchemalessAdapter(pgClient, 'pg');
-    dbs.push({ name: 'pg', adapter: pgInit.adapter, client: pgClient });
+  // A dialect joins `dbs` only when it is configured *and* reachable: the unit job
+  // has no services at all, and these files also cover sqlite/memory, so a missing
+  // database must not fail the whole run. Skipping is always announced.
+  const pgCfg = pgConfig();
+  if (isConfigured(pgCfg)) {
+    try {
+      const { Client } = pkg;
+      const pgClient = new Client(pgCfg);
+      await pgClient.connect();
+      const pgInit = createSchemalessAdapter(pgClient, 'pg');
+      dbs.push({ name: 'pg', adapter: pgInit.adapter, client: pgClient });
+    } catch (e) {
+      console.log(connectSkip(`${label} pg`, pgCfg, e));
+    }
   }
 
-  const myCfg = { host: process.env.MYSQL_HOST || process.env.MYSQLHOST, user: process.env.MYSQL_USER || process.env.MYSQLUSER, password: process.env.MYSQL_PASS || process.env.MYSQLPASSWORD, database: process.env.MYSQL_DB || process.env.MYSQLDATABASE };
-  if (myCfg.host && myCfg.user && myCfg.database) {
-    const conn = await mysql.createConnection(myCfg);
-    const myInit = createSchemalessAdapter(conn, 'mysql');
-    dbs.push({ name: 'mysql', adapter: myInit.adapter, conn });
+  const myCfg = mysqlConfig();
+  if (isConfigured(myCfg)) {
+    try {
+      const conn = await mysql.createConnection(myCfg);
+      const myInit = createSchemalessAdapter(conn, 'mysql');
+      dbs.push({ name: 'mysql', adapter: myInit.adapter, conn });
+    } catch (e) {
+      console.log(connectSkip(`${label} mysql`, myCfg, e));
+    }
   }
 
   const setup = async (db) => {

@@ -318,6 +318,7 @@ This approach lets you tailor the library to your use case and keep bundles extr
 - [Universal Adapters](#-universal-adapters)
 - [Schemaless Adapters](#schemaless-adapters)
 - [API Reference](#api-reference)
+- [Tests & Database Environment](#-tests--database-environment)
 
 ---
 
@@ -2185,6 +2186,38 @@ await client.close();
 - [MongoDB](https://www.mongodb.com/) - The inspiration
 - [Mongoose](https://mongoosejs.com/) - MongoDB object modeling
 - [Knex.js](http://knexjs.org/) - SQL query builder
+
+---
+
+## 🧪 Tests & Database Environment
+
+```bash
+npm test                 # the whole suite, one process, no services needed
+docker compose up -d     # optional: postgres + mysql + mongo on localhost
+cp .env.example .env     # optional: lets `npm test` cover the live databases too
+node tests/pg.schema.types.spec.js   # a single spec file
+```
+
+`npm test` runs `tests/run-all.js`, which executes every `tests/*.spec.js` in one
+process. The suite is complete without any server: SQLite, memory and the query
+builders run everywhere, while the specs that need a live database **skip out loud**
+and say which variables are missing. A configured but unreachable server is reported
+the same way - environment problems and code problems look different.
+
+Every spec, example and adapter reads exactly one set of names, listed in
+`.env.example` and used by the CI services:
+
+| Backend      | Variables                                                                                          |
+| ------------ | ---------------------------------------------------------------------------------------------------- |
+| PostgreSQL   | `PG_HOST`, `PG_PORT`, `PG_USER`, `PG_PASSWORD`, `PG_DB`                                           |
+| MySQL        | `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASS`, `MYSQL_DB`                               |
+| MongoDB      | `MONGO_HOST`, `MONGO_PORT`, `MONGO_USER`, `MONGO_PASSWORD`, `MONGO_DB`, `MONGO_AUTH_SOURCE`      |
+
+Ports default to `5432` / `3306` / `27017`, so a host, a user and a database are all
+it takes to enable a backend. The prefixes are deliberately uniform rather than
+libpq-style (`PGHOST`) or Planetscale-style (`MYSQLHOST`): one `.env` has to configure
+the tests, the examples and every driver at once. `.env` is read through the optional
+`dotenv` dependency (`loadEnv()` in `src/env.js`) and is git-ignored.
 
 ---
 

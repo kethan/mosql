@@ -1,17 +1,17 @@
-import dotenv from 'dotenv';
+import { loadEnv } from '../src/env.js';
 import pkg from 'pg';
 import { createSchemalessAdapter } from '../src/schemaless.js';
-import { runTest } from './common.js';
-dotenv.config();
+import { runTest, pgConfig, isConfigured, skipMessage, connectSkip } from './common.js';
+await loadEnv();
 
-const config = { host: process.env.PG_HOST, port: process.env.PG_PORT || 5432, user: process.env.PG_USER, password: process.env.PG_PASSWORD, database: process.env.PG_DB };
+const config = pgConfig();
+const label = 'schemaless.pg';
 
 const main = async () => {
-  if (!config.host) {
-    // Consistent with the other database specs: without a configured server the
-    // file is a no-op, so `npm test` stays runnable offline (the unit CI job has
-    // no PostgreSQL) while the db job still executes it.
-    console.log('SKIP schemaless.pg - PG_HOST is not set');
+  // Without a configured server this file does nothing (the unit CI job has no
+  // PostgreSQL) - but it always says so, because a silent skip reads like a pass.
+  if (!isConfigured(config)) {
+    console.log(skipMessage(label, 'pg', config));
     return;
   }
 
@@ -59,6 +59,12 @@ const main = async () => {
 };
 
 main().catch(err => {
+  // A configured but unreachable server is an environment problem, not a code
+  // failure - report it as a skip so `npm test` stays meaningful offline.
+  if (/ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|getaddrinfo|authentication|pg_hba/i.test(String(err?.message || err))) {
+    console.log(connectSkip(label, config, err));
+    return;
+  }
   console.error(err);
   process.exitCode = 1;
 });

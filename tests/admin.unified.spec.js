@@ -2,11 +2,11 @@ import { createSchemalessAdapter } from '../src/schemaless.js';
 import Database from 'better-sqlite3';
 import mysql from 'mysql2/promise';
 import pkg from 'pg';
-import dotenv from 'dotenv';
-import { runTest } from './common.js';
+import { loadEnv } from '../src/env.js';
+import { runTest, pgConfig, mysqlConfig, mongoConfig, isConfigured, connectSkip } from './common.js';
 import { createMongoSchemaless } from '../src/adapter/mongodb/adapter.js';
 
-dotenv.config();
+await loadEnv();
 
 const schema = {
   properties: {
@@ -21,6 +21,7 @@ const schema = {
 };
 
 const dbs = [];
+const label = 'admin.unified';
 
 const { adapter: sqlite, client: sqliteClient } = createSchemalessAdapter(new Database(':memory:'), 'sqlite');
 dbs.push({ name: 'sqlite', adapter: sqlite, client: sqliteClient });
@@ -28,29 +29,38 @@ dbs.push({ name: 'sqlite', adapter: sqlite, client: sqliteClient });
 const { adapter: memory } = createSchemalessAdapter();
 dbs.push({ name: 'memory', adapter: memory });
 
-const pgCfg = { host: process.env.PGHOST || process.env.PG_HOST, user: process.env.PGUSER || process.env.PG_USER, password: process.env.PGPASSWORD || process.env.PG_PASSWORD, database: process.env.PGDATABASE || process.env.PG_DB };
-if (pgCfg.host && pgCfg.user && pgCfg.database) {
-  const { Client } = pkg; const pgClient = new Client(pgCfg); let ok = true; try { await pgClient.connect(); } catch { ok = false; }
-  if (ok) { const pgInit = createSchemalessAdapter(pgClient, 'pg'); dbs.push({ name: 'pg', adapter: pgInit.adapter, client: pgClient }); }
+// Configured *and* reachable decides the dialect list: the unit job in CI has no
+// services at all, so a missing database drops pg/mysql/mongo from `dbs` instead of
+// failing the sqlite/memory coverage. PG_PORT used to be ignored here entirely.
+const pgCfg = pgConfig();
+if (isConfigured(pgCfg)) {
+  const { Client } = pkg;
+  try {
+    const pgClient = new Client(pgCfg);
+    await pgClient.connect();
+    const pgInit = createSchemalessAdapter(pgClient, 'pg');
+    dbs.push({ name: 'pg', adapter: pgInit.adapter, client: pgClient });
+  } catch (e) {
+    console.log(connectSkip(`${label} pg`, pgCfg, e));
+  }
 }
 
-const myCfg = { host: process.env.MYSQLHOST || process.env.MYSQL_HOST, user: process.env.MYSQLUSER || process.env.MYSQL_USER, password: process.env.MYSQLPASSWORD || process.env.MYSQL_PASS, database: process.env.MYSQLDATABASE || process.env.MYSQL_DB, port: process.env.MYSQLPORT || process.env.MYSQL_PORT };
-if (myCfg.host && myCfg.user && myCfg.database) {
-  let myConn; let ok = true; try { myConn = await mysql.createConnection(myCfg); } catch { ok = false; }
-  if (ok) { const myInit = createSchemalessAdapter(myConn, 'mysql'); dbs.push({ name: 'mysql', adapter: myInit.adapter, conn: myConn }); }
+const myCfg = mysqlConfig();
+if (isConfigured(myCfg)) {
+  try {
+    const myConn = await mysql.createConnection(myCfg);
+    const myInit = createSchemalessAdapter(myConn, 'mysql');
+    dbs.push({ name: 'mysql', adapter: myInit.adapter, conn: myConn });
+  } catch (e) {
+    console.log(connectSkip(`${label} mysql`, myCfg, e));
+  }
 }
 
 // mongodb adapter removed/moved; unified tests target SQL
 try {
-  const mongoInit = await createMongoSchemaless({
-    host: process.env.MONGO_HOST,
-    port: process.env.MONGO_PORT ? parseInt(process.env.MONGO_PORT) : undefined,
-    user: process.env.MONGO_USER,
-    password: process.env.MONGO_PASSWORD,
-    database: process.env.MONGO_DB || 'test_database',
-  });
+  const mongoInit = await createMongoSchemaless(mongoConfig());
   dbs.push({ name: 'mongodb', adapter: mongoInit.adapter, client: mongoInit.client });
-} catch { }
+} catch (e) { console.log(`SKIP ${label} mongodb - ${e.message}`); }
 
 for (const db of dbs) {
   const tname = `studio_users_unified_${db.name}`;

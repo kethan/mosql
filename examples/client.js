@@ -72,6 +72,7 @@ if (process.env.PG_HOST) {
 if (process.env.MYSQL_HOST) {
   const mysql = await createSchemalessClient('mysql', {
     host: process.env.MYSQL_HOST,
+    port: Number(process.env.MYSQL_PORT || 3306),
     user: process.env.MYSQL_USER,
     password: process.env.MYSQL_PASS,
     database: process.env.MYSQL_DB,

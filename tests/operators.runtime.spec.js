@@ -1,13 +1,14 @@
-import dotenv from 'dotenv';
-dotenv.config();
+import { loadEnv } from '../src/env.js';
+await loadEnv();
 import Database from 'better-sqlite3';
 import mysql from 'mysql2/promise';
 import pkg from 'pg';
 import { createSchemalessAdapter } from '../src/schemaless.js';
 import { createMongoSchemaless } from '../src/adapter/mongodb/adapter.js';
-import { runTest } from './common.js';
+import { runTest, pgConfig, mysqlConfig, mongoConfig, isConfigured, connectSkip } from './common.js';
 
 const setups = [];
+const label = 'operators.runtime';
 
 // SQLite
 {
@@ -19,22 +20,33 @@ const setups = [];
 // Postgres
 {
   const { Client } = pkg;
-  const cfg = { host: process.env.PG_HOST || process.env.PGHOST, port: process.env.PG_PORT || 5432, user: process.env.PG_USER || process.env.PGUSER, password: process.env.PG_PASSWORD || process.env.PGPASSWORD, database: process.env.PG_DB || process.env.PGDATABASE };
-  if (cfg.host && cfg.user && cfg.database) {
-    const client = new Client(cfg);
-    await client.connect();
-    const { adapter } = createSchemalessAdapter(client, 'pg');
-    setups.push({ name: 'pg', adapter, users: adapter.collection('users'), client });
+  const cfg = pgConfig();
+  // Configured *and* reachable, otherwise the dialect is dropped from `setups` with
+  // a note: this file also covers sqlite/memory, so a server that is set but down
+  // must not turn the run red - and a silent skip must not look like a pass either.
+  if (isConfigured(cfg)) {
+    try {
+      const client = new Client(cfg);
+      await client.connect();
+      const { adapter } = createSchemalessAdapter(client, 'pg');
+      setups.push({ name: 'pg', adapter, users: adapter.collection('users'), client });
+    } catch (e) {
+      console.log(connectSkip(`${label} pg`, cfg, e));
+    }
   }
 }
 
 // MySQL
 {
-  const cfg = { host: process.env.MYSQL_HOST || process.env.MYSQLHOST, user: process.env.MYSQL_USER || process.env.MYSQLUSER, password: process.env.MYSQL_PASS || process.env.MYSQLPASSWORD, database: process.env.MYSQL_DB || process.env.MYSQLDATABASE, port: process.env.MYSQL_PORT || process.env.MYSQLPORT };
-  if (cfg.host && cfg.user && cfg.database) {
-    const conn = await mysql.createConnection(cfg);
-    const { adapter } = createSchemalessAdapter(conn, 'mysql');
-    setups.push({ name: 'mysql', adapter, users: adapter.collection('users'), conn });
+  const cfg = mysqlConfig();
+  if (isConfigured(cfg)) {
+    try {
+      const conn = await mysql.createConnection(cfg);
+      const { adapter } = createSchemalessAdapter(conn, 'mysql');
+      setups.push({ name: 'mysql', adapter, users: adapter.collection('users'), conn });
+    } catch (e) {
+      console.log(connectSkip(`${label} mysql`, cfg, e));
+    }
   }
 }
 
@@ -47,16 +59,13 @@ const setups = [];
 // MongoDB (env-guarded)
 {
   try {
-    const mongoInit = await createMongoSchemaless({
-      host: process.env.MONGO_HOST,
-      port: process.env.MONGO_PORT ? parseInt(process.env.MONGO_PORT) : undefined,
-      user: process.env.MONGO_USER,
-      password: process.env.MONGO_PASSWORD,
-      database: process.env.MONGO_DB || 'test_database',
-    });
+    // createMongoSchemaless resolves MONGO_* itself, so there is nothing to repeat here.
+    const mongoInit = await createMongoSchemaless(mongoConfig());
     const adapter = mongoInit.adapter;
     setups.push({ name: 'mongodb', adapter, users: adapter.collection('users'), client: mongoInit.client });
-  } catch { }
+  } catch (e) {
+    console.log(`SKIP ${label} mongodb - ${e.message}`);
+  }
 }
 
 // Memory and MongoDB setups removed

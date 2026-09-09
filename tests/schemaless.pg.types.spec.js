@@ -1,16 +1,24 @@
-import dotenv from 'dotenv';
-import { runTest } from './common.js';
+import { loadEnv } from '../src/env.js';
+import { runTest, pgConfig, isConfigured, skipMessage, connectSkip } from './common.js';
 import { createSchemalessAdapter } from '../src/schemaless.js';
-dotenv.config();
+await loadEnv();
 
-const config = { host: process.env.PG_HOST, port: process.env.PG_PORT || 5432, user: process.env.PG_USER, password: process.env.PG_PASSWORD, database: process.env.PG_DB };
+const config = pgConfig();
+const label = 'schemaless.pg.types';
 
 const main = async () => {
-  if (!config.host) return;
+  if (!isConfigured(config)) {
+    console.log(skipMessage(label, 'pg', config));
+    return;
+  }
   const pkg = await import('pg');
   const Client = pkg.Client || pkg.default?.Client;
   const client = new Client(config);
-  await client.connect();
+  try { await client.connect(); }
+  catch (e) {
+    console.log(connectSkip(label, config, e));
+    return;
+  }
   const { adapter } = createSchemalessAdapter(client, 'pg');
   const coll = adapter.collection('auto_types');
 

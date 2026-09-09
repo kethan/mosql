@@ -1,15 +1,23 @@
-import dotenv from 'dotenv';
-import { runTest } from './common.js';
+import { loadEnv } from '../src/env.js';
+import { runTest, mysqlConfig, isConfigured, skipMessage, connectSkip } from './common.js';
 import mysql from 'mysql2/promise';
 import { createSchemalessAdapter } from '../src/schemaless.js';
-dotenv.config();
+await loadEnv();
 
-const cfg = { host: process.env.MYSQL_HOST, user: process.env.MYSQL_USER, password: process.env.MYSQL_PASS, database: process.env.MYSQL_DB };
+const cfg = mysqlConfig();
+const label = 'mysql.schema.types';
 
 const main = async () => {
-  if (!cfg.host) return;
+  if (!isConfigured(cfg)) {
+    console.log(skipMessage(label, 'mysql', cfg));
+    return;
+  }
   let conn;
-  try { conn = await mysql.createConnection(cfg); } catch { return; }
+  try { conn = await mysql.createConnection(cfg); }
+  catch (e) {
+    console.log(connectSkip(label, cfg, e));
+    return;
+  }
   const { adapter } = createSchemalessAdapter(conn, 'mysql');
   const coll = adapter.collection('mysql_schema_types', {
     schema: {
