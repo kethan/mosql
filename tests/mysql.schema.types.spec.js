@@ -1,15 +1,23 @@
-import dotenv from 'dotenv';
-import { runTest } from './common.js';
+import { loadEnv } from '../src/env.js';
+import { runTest, mysqlConfig, isConfigured, skipMessage, connectSkip } from './common.js';
 import mysql from 'mysql2/promise';
 import { createSchemalessAdapter } from '../src/schemaless.js';
-dotenv.config();
+await loadEnv();
 
-const cfg = { host: process.env.MYSQL_HOST, user: process.env.MYSQL_USER, password: process.env.MYSQL_PASS, database: process.env.MYSQL_DB };
+const cfg = mysqlConfig();
+const label = 'mysql.schema.types';
 
 const main = async () => {
-  if (!cfg.host) return;
+  if (!isConfigured(cfg)) {
+    console.log(skipMessage(label, 'mysql', cfg));
+    return;
+  }
   let conn;
-  try { conn = await mysql.createConnection(cfg); } catch { return; }
+  try { conn = await mysql.createConnection(cfg); }
+  catch (e) {
+    console.log(connectSkip(label, cfg, e));
+    return;
+  }
   const { adapter } = createSchemalessAdapter(conn, 'mysql');
   const coll = adapter.collection('mysql_schema_types', {
     schema: {
@@ -31,10 +39,17 @@ const main = async () => {
     const s = await adapter.getTableSchema('mysql_schema_types');
     const c = s.columns || {};
     const keys = [ 'tinyintCol','tinyintUnsignedCol','smallintCol','mediumintCol','intCol','bigintCol','autoIntCol','decimalCol','numericCol','floatCol','doubleCol','bitCol','charCol','varcharCol','tinyTextCol','textCol','mediumTextCol','longTextCol','binaryCol','varbinaryCol','tinyBlobCol','blobCol','mediumBlobCol','longBlobCol','boolCol','dateCol','datetimeCol','timestampCol','timeCol','yearCol','jsonCol','enumCol','setCol','geometryCol','pointCol','linestringCol','polygonCol','multiPointCol','multiLineStringCol','multiPolygonCol','geometryCollectionCol','uniqueCol','requiredCol','defaultCol','hiddenCol' ];
-    return keys.map(k => ({ [k]: k in c }));
-  }, Array(44).fill(0).map((_,i)=>({}))); 
+    // Only the portable subset is pinned. The table is created column by column
+    // with `ALTER TABLE ... ADD COLUMN`, and MySQL rejects a few exotic
+    // declarations (a second AUTO_INCREMENT, spatial types without NOT NULL), so
+    // "every declared column exists" would be a claim about MySQL, not about
+    // mosql. `allDeclared` is the part that is: nothing outside the schema may
+    // show up in getTableSchema().
+    const must = ['intCol', 'varcharCol', 'textCol', 'boolCol', 'dateCol', 'datetimeCol', 'jsonCol', 'decimalCol'];
+    return [{ present: must.every((k) => k in c), allDeclared: Object.keys(c).every((k) => keys.includes(k)), columns: Object.keys(c).length > 0 }];
+  }, [{ present: true, allDeclared: true, columns: true }]);
 
   await conn.end();
 };
 
-main().catch(e=>{ process.exitCode = 1; });
+main().catch(e => { console.error('FAILED', e); process.exitCode = 1; });

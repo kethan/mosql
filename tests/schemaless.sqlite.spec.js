@@ -29,14 +29,21 @@ const main = async () => {
     return rows.map(x => ({ avgAge: Math.round(x.avgAge * 10) / 10 }));
   }, [ { avgAge: 25.7 } ]);
 
+  // distinct() resolves to the list of values (Mongo-style), not row objects.
   await runTest('Distinct names', async () => {
-    const rows = await users.distinct('name');
-    return rows.map(x => ({ name: x.name || x.NAME || x.table_name || x.TABLE_NAME })).sort((a,b)=>a.name.localeCompare(b.name));
+    const values = await users.distinct('name');
+    return values.map((v) => ({ name: typeof v === 'object' && v !== null ? (v.name ?? Object.values(v)[0]) : v }))
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
   }, [ { name: 'Alice' }, { name: 'Bob' }, { name: 'Charlie' } ]);
+
+  await runTest('Find cursor count uses COUNT(*)', async () => {
+    const cursor = await users.find({ age: { $gte: 18 } });
+    return [{ count: await cursor.count() }];
+  }, [ { count: 3 } ]);
 
   let dropErr = null;
   try { await users.dropColumn('age'); } catch (e) { dropErr = true; }
   await runTest('SQLite dropColumn throws', async () => [{ ok: !!dropErr }], [ { ok: true } ]);
 };
 
-main().catch(e => { process.exitCode = 1; });
+main().catch(e => { console.error('FAILED', e); process.exitCode = 1; });

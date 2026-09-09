@@ -42,3 +42,26 @@ await runTest('edge/sqlite modifyColumn not supported', async () => {
   try { await adapter.modifyColumn('edge_schema_table', 'name', 'TEXT'); } catch { threw = true; }
   return [{ threw }];
 }, [{ threw: true }]);
+// What each driver's message means for the DDL retry. PostgreSQL words a missing
+// column with "does not exist" as well (`column "x" of relation "y" does not exist`),
+// and reading that as a missing table makes the retry re-run the failing statement
+// after a no-op CREATE TABLE IF NOT EXISTS instead of adding the column - which is
+// how updating an unknown field came to fail on pg only.
+await runTest('edge/DDL retry separates a missing column from a missing table', async () => {
+  const of = (e) => { const { missingTable, missingColumn } = coll.classifyError(e); return { missingTable, missingColumn }; };
+  return [
+    of({ message: 'column "alias" of relation "users" does not exist' }),
+    of({ message: 'relation "users" does not exist' }),
+    of({ code: '42703' }),
+    of({ code: '42P01' }),
+    of({ message: "Unknown column 'alias' in 'field list'", errno: 1054 }),
+    of({ message: 'no such table: users' }),
+  ];
+}, [
+  { missingTable: false, missingColumn: true },
+  { missingTable: true, missingColumn: false },
+  { missingTable: false, missingColumn: true },
+  { missingTable: true, missingColumn: false },
+  { missingTable: false, missingColumn: true },
+  { missingTable: true, missingColumn: false },
+]);

@@ -1,32 +1,29 @@
-import dotenv from 'dotenv';
-import { runTest } from './common.js';
+import { loadEnv } from '../src/env.js';
+import { runTest, pgConfig, isConfigured, skipMessage, connectSkip, shapeOf, nullableColumns, fieldOf } from './common.js';
 import { createSchemalessAdapter } from '../src/schemaless.js';
 
-dotenv.config();
+await loadEnv();
 
+// The timeouts are what this file adds on top of the shared connection config: a
+// hung connection should show up as an error, not as a hung CI job.
 const cfg = {
-  host: process.env.PG_HOST,
-  port: Number(process.env.PG_PORT || 5432),
-  user: process.env.PG_USER,
-  password: process.env.PG_PASSWORD,
-  database: process.env.PG_DB,
-
-  // Important for CI diagnostics.
+  ...pgConfig(),
   connectionTimeoutMillis: 10_000,
   query_timeout: 30_000,
   statement_timeout: 30_000,
 };
+const label = 'pg.schema.types';
 
 const log = (...args) => {
   console.log(`[pg.schema.types]`, ...args);
 };
 
-const withTimeout = async (promise, ms, label) => {
+const withTimeout = async (promise, ms, what) => {
   let timer;
 
   const timeout = new Promise((_, reject) => {
     timer = setTimeout(() => {
-      reject(new Error(`${label} timed out after ${ms}ms`));
+      reject(new Error(`${what} timed out after ${ms}ms`));
     }, ms);
   });
 
@@ -40,8 +37,8 @@ const withTimeout = async (promise, ms, label) => {
 const main = async () => {
   log('1. starting');
 
-  if (!cfg.host) {
-    log('2. PG_HOST is missing - skipping');
+  if (!isConfigured(cfg)) {
+    log(`2. ${skipMessage(label, 'pg', cfg)}`);
     return;
   }
 
@@ -195,11 +192,37 @@ const main = async () => {
 
     log('14. building test document');
 
-    const doc = Object.fromEntries(
-      Object.keys(coll.schema).map((k) => [k, null])
+    // Postgres folds unquoted identifiers to lower case: information_schema reports
+    // `smallintcol`, and so does `SELECT *`. Both the column lookups and the row
+    // read-back have to fold, or every `columns[name]` returns undefined and a real
+    // run reads as "no column" / "no default" - which is what `defaultCol:
+    // undefined` was. Writes need no folding because they quote nothing either, so
+    // the server folds them the same way.
+    const fold = (source) => Object.fromEntries(
+      Object.entries(source || {}).map(([name, value]) => [name.toLowerCase(), value])
     );
 
-    log('15. inserting test document');
+    const shape = (k) => shapeOf(coll.schema[k]);
+    const required = Object.keys(coll.schema).filter((k) => shape(k).required);
+    const withDefault = Object.keys(coll.schema).filter((k) => shape(k).default !== undefined);
+
+    // NULL for every column that accepts it - `nullableColumns` is what decides
+    // which ones those are, and it is asserted on its own in util.spec.js.
+    const nullableKeys = nullableColumns(coll.schema);
+    const doc = Object.fromEntries(nullableKeys.map((k) => [k, null]));
+
+    // pg_schema_types outlives the process (indexes are only synced in CI), so
+    // "the first row" is whatever a previous run left behind. The marker pins the
+    // assertions below to the row this run inserted.
+    const marker = `pg_nullability_probe_${Date.now()}`;
+    if ('requiredCol' in coll.schema) doc.requiredCol = 'probe';
+    if ('uniqueCol' in coll.schema) doc.uniqueCol = marker;
+    const probeWhere = 'uniqueCol' in coll.schema ? { uniqueCol: marker } : {};
+
+    log('15. inserting test document', {
+      columns: Object.keys(doc).length,
+      skipped: Object.keys(coll.schema).filter((k) => !nullableKeys.includes(k)),
+    });
 
     await withTimeout(
       coll.insertOne(doc),
@@ -208,6 +231,27 @@ const main = async () => {
     );
 
     log('16. insert finished');
+
+    await runTest('pg schema defaults and NOT NULL', async () => {
+      // a column with a DEFAULT keeps it when the document omits the key
+      const row = await coll.findOne(probeWhere);
+      const defaults = {};
+      for (const k of withDefault) defaults[k] = fieldOf(row, k);
+
+      // a NOT NULL column rejects NULL - and it has to be that constraint
+      // complaining, naming that column: the row also carries a unique value, so a
+      // loose /violates/ test would accept a duplicate-key error as proof.
+      let rejected = false;
+      try {
+        await coll.insertOne({ ...doc, [required[0]]: null });
+      } catch (e) {
+        const msg = String(e?.message || e).toLowerCase();
+        rejected = /not-null/i.test(msg) && msg.includes(`"${required[0].toLowerCase()}"`);
+      }
+
+      return [{ defaults, rejected }];
+    }, [{ defaults: { defaultCol: 100 }, rejected: true }]);
+
 
     const ensure = async (name, typeSpec) => {
       log(`17.${name}.1 getTableSchema`);
@@ -218,7 +262,7 @@ const main = async () => {
         `${name}: getTableSchema #1`
       );
 
-      if (!s.columns[name]) {
+      if (!fold(s.columns)[name.toLowerCase()]) {
         const type =
           typeof typeSpec === 'string'
             ? typeSpec
@@ -257,7 +301,7 @@ const main = async () => {
         `${name}: getTableSchema #2`
       );
 
-      const exists = !!s2.columns[name];
+      const exists = !!fold(s2.columns)[name.toLowerCase()];
 
       log(`17.${name}.5 done`, { exists });
 
@@ -290,11 +334,11 @@ const main = async () => {
           'pg_schema_types'
         );
 
-        const c = s.columns || {};
+        const c = fold(s.columns);
         const keys = Object.keys(defs);
 
         return keys.map((k) => ({
-          [k]: !!c[k],
+          [k]: !!c[k.toLowerCase()],
         }));
       },
       Object.keys(defs).map((k) => ({
@@ -331,6 +375,13 @@ const main = async () => {
 };
 
 main().catch((error) => {
+  // A configured but unreachable server is an environment problem, not a code
+  // failure - report it as a skip so `npm test` stays meaningful offline.
+  if (/ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|getaddrinfo|authentication|pg_hba/i.test(String(error?.message || error))) {
+    console.log(connectSkip(label, cfg, error));
+    return;
+  }
+
   console.error('[pg.schema.types] FAILED');
   console.error(error);
   process.exitCode = 1;

@@ -26,6 +26,14 @@ const Validate = {
         if (!Number.isInteger(n) || n < 0) throw new Error(`${op} requires non-negative integer`);
         return n;
     },
+    // Operators that emit a bare numeric literal (no quotes, no escape()) must
+    // never interpolate untrusted input: anything that is not a finite number
+    // or bigint is rejected before it reaches the SQL string.
+    num: (v, op) => {
+        if (typeof v === 'bigint') return v;
+        if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error(`${op} requires finite numbers`);
+        return v;
+    },
 };
 
 // ============================================
@@ -107,8 +115,10 @@ const jsonUpdate = (path, value, db, operation = 'set') => {
         if (v === null) return 'NULL';
         if (typeof v === 'object') {
             const j = JSON.stringify(v).replace(/'/g, "''");
+            // The fragment has to arrive at the JSON function as JSON, not as a
+            // text literal, or MySQL/SQLite store it *as a string* under the path.
             return db === 'pg' ? `'${j}'::jsonb` :
-                db === 'mysql' ? `CAST('${j}' AS JSON)` : `'${j}'`;
+                db === 'mysql' ? `CAST('${j}' AS JSON)` : `json('${j}')`;
         }
         return db === 'pg' ? `to_jsonb(${escape(v, db)})` : escape(v, db);
     };
@@ -216,12 +226,14 @@ export const filterOps = {
 
     // String
     $like: (v, db) => `LIKE ${escape(v, db)}`,
-    $ilike: (v, db, f) => db === 'pg' ? `ILIKE ${escape(v, db)}` : `${f ? '' : ''}LIKE LOWER(${escape(v, db)})`,
-    $nilike: (v, db, f) => db === 'pg' ? `NOT ILIKE ${escape(v, db)}` : `${f ? '' : ''}NOT LIKE LOWER(${escape(v, db)})`,
-    // $ilike: (v, db, f) => db === 'pg' ? `ILIKE ${escape(v, db)}` : `LOWER(${f}) LIKE LOWER(${escape(v, db)})`,
+    // Case-insensitive matching. An operator only ever returns the fragment
+    // that follows the column, so lowering the column itself is `filter()`'s
+    // job (see the `$ilike`/`$nilike` branch there); PostgreSQL is the one
+    // dialect with a dedicated case-insensitive LIKE.
+    $ilike: (v, db) => db === 'pg' ? `ILIKE ${escape(v, db)}` : `LIKE LOWER(${escape(v, db)})`,
+    $nilike: (v, db) => db === 'pg' ? `NOT ILIKE ${escape(v, db)}` : `NOT LIKE LOWER(${escape(v, db)})`,
     $nlike: (v, db) => `NOT LIKE ${escape(v, db)}`,
-    // $nilike: (v, db, f) => db === 'pg' ? `NOT ILIKE ${escape(v, db)}` : `LOWER(${f}) NOT LIKE LOWER(${escape(v, db)})`,
-    $regex: (v, db, f) => {
+    $regex: (v, db) => {
         const p = v instanceof RegExp ? v.source : String(v);
         if (p.length > 1000) { throw new Error('Regex pattern too long (max 1000 chars)'); }
         if (db === 'sqlite') {
@@ -230,7 +242,6 @@ export const filterOps = {
             else if (p.startsWith('^')) like = p.slice(1) + '%';
             else if (p.endsWith('$')) like = '%' + p.slice(0, -1);
             else like = '%' + p.replace(/\.\*/g, '') + '%';
-            const lhs = f ? f : Validate.col('name', db);
             return `LIKE ${escape(like, db)}`;
         }
         return (db === 'pg' ? '~' : 'REGEXP') + ` ${escape(p, db)}`;
@@ -248,7 +259,9 @@ export const filterOps = {
     // Modulo
     $mod: (v, db) => {
         if (!Array.isArray(v) || v.length !== 2) throw new Error('$mod requires [divisor, remainder]');
-        return `% ${v[0]} = ${v[1]}`;
+        const divisor = Validate.num(v[0], '$mod');
+        if (Number(divisor) === 0) throw new Error('$mod divisor cannot be zero');
+        return `% ${divisor} = ${Validate.num(v[1], '$mod')}`;
     },
 };
 
@@ -261,7 +274,14 @@ export const exprOps = {
     $add: (a, c) => `(${a.map(x => c.expr(x)).join(' + ')})`,
     $subtract: (a, c) => `(${a.map(x => c.expr(x)).join(' - ')})`,
     $multiply: (a, c) => `(${a.map(x => c.expr(x)).join(' * ')})`,
-    $divide: (a, c) => `(${c.expr(a[0])} / NULLIF(${c.expr(a[1])}, 0))`,
+    // Division has to be real division: SQLite and PostgreSQL both truncate the
+    // result of `int / int`, which disagrees with the in-memory engine and with
+    // MongoDB, where every numeric division is a float.
+    $divide: (a, c) => {
+        const x = c.expr(a[0]);
+        const lhs = c.db === 'sqlite' ? `CAST(${x} AS REAL)` : c.db === 'pg' ? `CAST(${x} AS numeric)` : x;
+        return `(${lhs} / NULLIF(${c.expr(a[1])}, 0))`;
+    },
     $mod: (a, c) => `(${c.expr(a[0])} % ${c.expr(a[1])})`,
     $abs: (a, c) => `ABS(${c.expr(a[0])})`,
     $ceil: (a, c) => `CEIL(${c.expr(a[0])})`,
@@ -281,10 +301,13 @@ export const exprOps = {
     },
     $upper: (a, c) => `UPPER(${c.expr(a[0])})`,
     $lower: (a, c) => `LOWER(${c.expr(a[0])})`,
+    // MongoDB counts substr positions from 0, SUBSTRING() counts from 1 - shift
+    // so one pipeline returns the same text on every backend (and on the
+    // in-memory engine, which already follows the Mongo convention).
     $substr: (a, c) => {
         const s = c.expr(a[0]);
-        const st = c.expr(a[1]);
         const l = a[2] !== undefined ? c.expr(a[2]) : null;
+        const st = typeof a[1] === 'number' ? a[1] + 1 : `(${c.expr(a[1])}) + 1`;
         return l ? `SUBSTRING(${s}, ${st}, ${l})` : `SUBSTRING(${s}, ${st})`;
     },
     $trim: (a, c) => `TRIM(${c.expr(a[0])})`,
@@ -422,7 +445,11 @@ export const exprOps = {
                 `CAST(${x} AS REAL)`;
     },
     $toBool: (a, c) => `CAST(${c.expr(a[0])} AS BOOLEAN)`,
-    $toDate: (a, c) => `CAST(${c.expr(a[0])} AS TIMESTAMP)`,
+    // SQLite has no TIMESTAMP affinity: `CAST('2024-01-01' AS TIMESTAMP)` keeps
+    // the leading number (2024), which the date functions then read as a
+    // julianday. datetime() parses the ISO / 'YYYY-MM-DD HH:MM:SS' text this
+    // library stores, so conversion has to go through it.
+    $toDate: (a, c) => c.db === 'sqlite' ? `datetime(${c.expr(a[0])})` : `CAST(${c.expr(a[0])} AS TIMESTAMP)`,
 
     // Literal
     $literal: (a) => escape(a[0]),
@@ -686,9 +713,17 @@ export const createQueryBuilder = (config = {}) => {
                     const castType = typeof val === 'number' ? 'numeric'
                         : typeof val === 'boolean' ? 'boolean' : undefined;
                     const f2 = isJson && castType ? jsonPath(k, db, castType) : f;
+                    // Field level `$not` (`{ age: { $not: { $lt: 23 } } }`) negates the
+                    // conditions nested in it. It cannot live in `filterOps`, because an
+                    // operator only sees its value - not the column it applies to - while
+                    // the nested conditions have to be rendered against that column.
+                    if (op === '$not') return `NOT (${filter({ [k]: val }, db)})`;
                     if (!fOps[op]) throw new Error(`Unknown operator: ${op}`);
                     if (op === '$ilike' || op === '$nilike') {
-                        return db === 'pg' ? `${f} ${fOps[op](val, db)}` : `LOWER(${f}) ${fOps[op](val, db)}`;
+                        // The operator can only emit what comes *after* the column, so the
+                        // case folding of the left-hand side happens here. `f2` (not `f`) so
+                        // JSON paths keep their numeric/boolean cast.
+                        return db === 'pg' ? `${f2} ${fOps[op](val, db)}` : `LOWER(${f2}) ${fOps[op](val, db)}`;
                     }
                     return `${f2} ${fOps[op](val, db, f2)}`;
                 });
@@ -803,6 +838,24 @@ export const createQueryBuilder = (config = {}) => {
         return sql;
     };
 
+    // Shared WHERE builder for updateMany/deleteMany.
+    //
+    // `UPDATE ... LIMIT` / `DELETE ... LIMIT` are MySQL-only syntax: SQLite
+    // supports them solely when compiled with SQLITE_ENABLE_UPDATE_DELETE_LIMIT
+    // (better-sqlite3 is not) and PostgreSQL does not support them at all.
+    // Narrowing by the row identifier keeps updateOne/deleteOne to exactly one
+    // row on every dialect, which is also what the MongoDB contract promises -
+    // previously a PostgreSQL updateOne/deleteOne rewrote *every* matching row.
+    const whereClause = (table, query, db, options = {}) => {
+        const has = !!(query && Object.keys(query).length > 0);
+        const where = has ? ` WHERE ${filter(query, db)}` : '';
+        if (!options.limitOne) return where;
+        if (db === 'mysql') return `${where} LIMIT 1`;
+        const rid = db === 'pg' ? 'ctid' : 'rowid';
+        const one = `${rid} IN (SELECT ${rid} FROM ${Validate.col(table, db)}${where} LIMIT 1)`;
+        return where ? `${where} AND ${one}` : ` WHERE ${one}`;
+    };
+
     const updateMany = (table, query, update, db = 'sqlite', options = {}) => {
         if (!isObject(update)) throw new Error('Update must be an object');
 
@@ -825,10 +878,7 @@ export const createQueryBuilder = (config = {}) => {
         if (setClauses.length === 0) throw new Error('Update requires at least one operation');
 
         let sql = `UPDATE ${Validate.col(table, db)} SET ${setClauses.join(', ')}`;
-
-        if (query && Object.keys(query).length > 0) {
-            sql += ` WHERE ${filter(query, db)}`;
-        }
+        sql += whereClause(table, query, db, options);
 
         if (db === 'pg' && options.returning) {
             const ret = Array.isArray(options.returning) ? options.returning.map(Validate.col).join(', ') : '*';
@@ -843,11 +893,11 @@ export const createQueryBuilder = (config = {}) => {
     const deleteMany = (table, query, db = 'sqlite', options = {}) => {
         let sql = `DELETE FROM ${Validate.col(table, db)}`;
 
-        if (query && Object.keys(query).length > 0) {
-            sql += ` WHERE ${filter(query, db)}`;
-        } else if (!options.allowDeleteAll) {
+        const hasFilter = !!(query && Object.keys(query).length > 0);
+        if (!hasFilter && !options.limitOne && !options.allowDeleteAll) {
             throw new Error('deleteMany requires a filter or allowDeleteAll option');
         }
+        sql += whereClause(table, query, db, options);
 
         if (db === 'pg' && options.returning) {
             const ret = Array.isArray(options.returning) ? options.returning.map(Validate.col).join(', ') : '*';
@@ -879,7 +929,7 @@ export const createQueryBuilder = (config = {}) => {
             if (isObject(proj)) {
                 const inc = Object.entries(proj)
                     .filter(([_, v]) => v === 1 || v === true)
-                    .map(([k]) => k.includes('.') ? jsonPath(k, this.db) : Validate.col(k, db));
+                    .map(([k]) => k.includes('.') ? jsonPath(k, this.db) : Validate.col(k, this.db));
 
                 const comp = Object.entries(proj)
                     .filter(([_, v]) => isObject(v) || is$(v))
@@ -888,7 +938,7 @@ export const createQueryBuilder = (config = {}) => {
                 const all = [...inc, ...comp];
                 this._fields = all.length > 0 ? all.join(', ') : null;
             } else if (Array.isArray(proj)) {
-                this._fields = proj.map(f => f.includes('.') ? jsonPath(f, this.db) : Validate.col(f, db)).join(', ');
+                this._fields = proj.map(f => f.includes('.') ? jsonPath(f, this.db) : Validate.col(f, this.db)).join(', ');
             } else if (typeof proj === 'string') {
                 this._fields = proj;
             }
@@ -930,7 +980,7 @@ export const createQueryBuilder = (config = {}) => {
 
             if (this._sortObj) {
                 const clauses = Object.entries(this._sortObj).map(([k, ord]) => {
-                    const f = k.includes('.') ? jsonPath(k, this.db) : Validate.col(k, db);
+                    const f = k.includes('.') ? jsonPath(k, this.db) : Validate.col(k, this.db);
                     const asc = ord === 1 || ord === 'asc';
                     if (this.db === 'pg') return `${f} ${asc ? 'ASC NULLS FIRST' : 'DESC NULLS LAST'}`;
                     if (this.db === 'mysql' && this._distinct) return `${f} ${asc ? 'ASC' : 'DESC'}`;
@@ -965,16 +1015,14 @@ export const createQueryBuilder = (config = {}) => {
             insertMany: (docs, opts = {}) => insertMany(table, Validate.arr(docs, 'insertMany'), db, opts),
 
             updateOne: (query, update, opts = {}) => {
-                let sql = updateMany(table, query, update, db, opts);
-                if (db !== 'pg') sql += ' LIMIT 1';
+                const sql = updateMany(table, query, update, db, { ...opts, limitOne: true });
                 logQuery(sql, { table, db, query, update, opts });
                 return sql;
             },
             updateMany: (query, update, opts = {}) => updateMany(table, query, update, db, opts),
 
             deleteOne: (query, opts = {}) => {
-                let sql = deleteMany(table, query, db, opts);
-                if (db !== 'pg') sql += ' LIMIT 1';
+                const sql = deleteMany(table, query, db, { ...opts, limitOne: true });
                 logQuery(sql, { table, db, query, opts });
                 return sql;
             },
@@ -1033,7 +1081,11 @@ export const createQueryBuilder = (config = {}) => {
 // DEFAULT EXPORTS (Full Version)
 // ============================================
 
-const fullBuilder = createQueryBuilder();
+// The default builder is what every `import ... from "umosql"` gets, so it has
+// to be seeded with the full operator sets. Created without them it silently
+// rejected every `$`-operator (`Unknown operator: $gte`), which broke the
+// documented entry point while lite/tiny - which pass their own maps - worked.
+const fullBuilder = createQueryBuilder({ filterOps, exprOps, updateOps, stageHandlers });
 
 export const { filter, expression, aggregate, insertMany, updateMany, deleteMany, collection, FindQuery, extend, db } = fullBuilder;
 export default collection;

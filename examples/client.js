@@ -15,7 +15,13 @@ const demo = async (label, users) => {
   await users.updateOne({ name: 'Alice' }, { $inc: { 'profile.score': 5 } });
 
   const rows = await (await users.find({ age: { $gte: 18 } })).sort({ age: -1 }).toArray();
-  console.log(`[${label}] find  ->`, rows.map((r) => ({ name: r.name, age: r.age, score: r.profile?.score })));
+  // SQLite stores the JSON column as TEXT, so a nested field has to be parsed
+  // there; memory/pg/mysql hand back a value the driver already decoded.
+  const score = (r) => {
+    const p = typeof r.profile === 'string' ? JSON.parse(r.profile) : r.profile;
+    return p?.score;
+  };
+  console.log(`[${label}] find  ->`, rows.map((r) => ({ name: r.name, age: r.age, score: score(r) })));
   console.log(`[${label}] count ->`, await users.countDocuments({}));
   console.log(`[${label}] agg   ->`, await users.aggregate([
     { $group: { _id: null, avgAge: { $avg: '$age' } } },
@@ -66,6 +72,7 @@ if (process.env.PG_HOST) {
 if (process.env.MYSQL_HOST) {
   const mysql = await createSchemalessClient('mysql', {
     host: process.env.MYSQL_HOST,
+    port: Number(process.env.MYSQL_PORT || 3306),
     user: process.env.MYSQL_USER,
     password: process.env.MYSQL_PASS,
     database: process.env.MYSQL_DB,

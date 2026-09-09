@@ -107,7 +107,8 @@
 		"db:down": "docker compose down",
 		"coverage:db": "npm run db:up && node -e \"setTimeout(()=>process.exit(0), 15000)\" && npm run coverage && npm run db:down",
 		"prepare": "husky install",
-		"copy:types": "echo 'types copied by rollup plugin'"
+		"copy:types": "echo 'types copied by rollup plugin'",
+		"db:memory": "node ./tests/memory-db.js"
 	},
 	"devDependencies": {
 		"@libsql/client": "^0.15.15",
@@ -119,6 +120,7 @@
 		"drizzle-orm": "^0.44.7",
 		"husky": "^9.1.4",
 		"mongodb": "^6.10.0",
+		"mysql-memory-server": "^1.16.0",
 		"mysql2": "^3.15.3",
 		"pg": "^8.16.3",
 		"rollup": "^4.20.0",

@@ -14,6 +14,8 @@ export { createMemorySchemaless };
 // TYPE INFERENCE
 // ============================================
 
+const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
+
 const inferSQLType = (value, database) => {
     const types = {
         pg: { string: (v) => v.length > 255 ? 'TEXT' : 'VARCHAR(255)', number: (v) => Number.isInteger(v) ? 'INTEGER' : 'DECIMAL(20,6)', boolean: 'BOOLEAN', date: 'TIMESTAMP', json: 'JSONB' },
@@ -97,8 +99,63 @@ class SQLCollection {
         Object.entries(document).forEach(([key, value]) => { if (key === '_id') return; const schemaDef = this.schema[key]; if (!currentSchema.columns[key]) { const type = (typeof schemaDef === 'string' ? schemaDef : schemaDef?.type) || inferSQLType(value, this.database); const nullable = schemaDef?.required ? ' NOT NULL' : ''; const unique = schemaDef?.unique ? ' UNIQUE' : ''; const defaultValue = schemaDef?.default !== undefined ? ` DEFAULT ${typeof schemaDef.default === 'function' ? escapeValue(schemaDef.default(), this.database) : escapeValue(schemaDef.default, this.database)}` : ''; const addKw = this.database === 'mysql' ? 'ADD' : 'ADD COLUMN'; migrations.push(`ALTER TABLE ${this.name} ${addKw} ${key} ${type}${nullable}${unique}${defaultValue}`); this.tableSchema.columns[key] = type; } else { const currentType = currentSchema.columns[key]; const newType = (typeof schemaDef === 'string' ? schemaDef : schemaDef?.type) || inferSQLType(value, this.database); const widened = widenType(currentType, newType); if (widened !== currentType && this.database !== 'sqlite') { const alterSQL = this.database === 'pg' ? `ALTER TABLE ${this.name} ALTER COLUMN ${key} TYPE ${widened}` : `ALTER TABLE ${this.name} MODIFY COLUMN ${key} ${widened}`; migrations.push(alterSQL); this.tableSchema.columns[key] = widened; } } });
         for (const sql of migrations) { try { await this.adapter.execute(sql); } catch (e) { const msg = String(e?.message || e).toLowerCase(); if (!(msg.includes('already exists') || msg.includes('duplicate') || msg.includes('exists'))) throw e; } } this.tableSchema = currentSchema;
     }
-    classifyError(e) { const code = e?.code; const errno = e?.errno; const msg = String(e?.message || '').toLowerCase(); const missingTable = code === '42P01' || errno === 1146 || msg.includes('no such table') || msg.includes('does not exist') || msg.includes('unknown table'); const missingColumn = code === '42703' || errno === 1054 || msg.includes('no such column') || msg.includes('unknown column'); return { missingTable, missingColumn }; }
-    async execWithDDLRetry(sql, opts = {}) { try { return await this.adapter.execute(sql); } catch (e) { const { missingTable, missingColumn } = this.classifyError(e); if (missingTable) { await this.createTable(opts.docForCreate || {}); return await this.adapter.execute(sql); } if (missingColumn && opts.allowColumnMigrate) { await this.migrate(opts.docForMigrate || {}); return await this.adapter.execute(sql); } throw e; } }
+    // A missing column and a missing table must not be confused. SQLSTATE and errno
+    // are exact, so they settle it whenever the driver reports them; the message
+    // patterns only back up the drivers that do not, and they have to decide the
+    // column case first: PostgreSQL words a missing column as
+    // `column "alias" of relation "users" does not exist`, which contains the same
+    // "does not exist" that identifies a missing table. Reading that as "the table is
+    // gone" runs a no-op CREATE TABLE IF NOT EXISTS and then re-runs the very
+    // statement that just failed, so migrateOnUpdate never gets to add the column -
+    // which is why updating a field the table did not have yet failed on pg only.
+    classifyError(e) { const code = e?.code; const errno = e?.errno; const msg = String(e?.message || '').toLowerCase(); const missingColumn = code === '42703' || errno === 1054 || msg.includes('no such column') || msg.includes('unknown column') || (msg.includes('does not exist') && msg.includes('column')); const missingTable = !missingColumn && (code === '42P01' || errno === 1146 || msg.includes('no such table') || msg.includes('unknown table') || (msg.includes('does not exist') && !msg.includes('column'))); return { missingTable, missingColumn }; }
+    // Order matters: migrate the column before considering a CREATE TABLE, because
+    // only the migration can fix `column ... does not exist`, and the retry has to
+    // be a statement that can actually succeed.
+    async execWithDDLRetry(sql, opts = {}) { try { return await this.adapter.execute(sql); } catch (e) { const { missingTable, missingColumn } = this.classifyError(e); if (missingColumn && opts.allowColumnMigrate) { await this.migrate(opts.docForMigrate || {}); return await this.adapter.execute(sql); } if (missingTable) { await this.createTable(opts.docForCreate || {}); return await this.adapter.execute(sql); } throw e; } }
+    // Fields an update statement writes to. `migrateOnUpdate` only fires after the
+    // database reports a missing column, and it can only add columns it knows
+    // about - so the target of `$rename` (and `$inc`/`$mul`/`$min`/`$max` on a
+    // field that does not exist yet) has to be part of that document, otherwise
+    // the retry re-runs the very same failing statement.
+    updateTargets(update) {
+        const targets = {};
+        if (!isObject(update)) return targets;
+        Object.assign(targets, update.$set || {});
+        if (isObject(update.$currentDate)) for (const k of Object.keys(update.$currentDate)) targets[k] = new Date();
+        // Arithmetic operators may hit a field the table does not have yet, and
+        // the target of `$rename` is by definition a column that does not exist
+        // until this statement runs. Only unknown columns are described here: an
+        // existing one must keep its own type.
+        const missing = (k) => k && !k.includes('.') && !this.tableSchema?.columns?.[k];
+        for (const op of ['$inc', '$mul', '$min', '$max']) {
+            if (!isObject(update[op])) continue;
+            for (const [k, v] of Object.entries(update[op])) {
+                if (missing(k)) targets[k] = typeof v === 'number' ? v : this.sampleFor(k);
+            }
+        }
+        if (isObject(update.$rename)) {
+            for (const [from, to] of Object.entries(update.$rename)) {
+                if (missing(to)) targets[to] = this.sampleFor(from);
+            }
+        }
+        for (const [key, val] of Object.entries(update)) {
+            if (key && !key.startsWith('$')) targets[key] = val;
+        }
+        for (const k of Object.keys(targets)) if (k.includes('.')) delete targets[k];
+        return targets;
+    }
+
+    // Representative JS value for an existing column, used to pick the type of a
+    // column that has to be created for it.
+    sampleFor(column) {
+        const type = String(this.tableSchema?.columns?.[column] || '');
+        if (/INT|NUMERIC|DECIMAL|REAL|DOUBLE|FLOAT|MONEY|SERIAL/.test(type)) return 0;
+        if (/BOOL/.test(type)) return false;
+        if (/TIMESTAMP|DATE|TIME|YEAR/.test(type)) return new Date();
+        if (/JSON/.test(type)) return {};
+        return '';
+    }
     applyDefaults(document) { const result = { ...document }; Object.entries(this.schema).forEach(([key, def]) => { if (result[key] === undefined && def.default !== undefined) { result[key] = typeof def.default === 'function' ? def.default() : def.default; } }); return result; }
     filterHidden(document) { if (!document) return document; const result = { ...document }; Object.entries(this.schema).forEach(([key, def]) => { if (def.hidden) delete result[key]; }); return result; }
     generateId() { if (this.options.idGenerator) return this.options.idGenerator(); if (this.options.idStrategy === 'mongo') { const ts = Math.floor(Date.now() / 1000).toString(16).padStart(8, '0'); const rand = Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join(''); return (ts + rand).slice(0, 24); } return null; }
@@ -112,10 +169,10 @@ class SQLCollection {
         return { insertedId, acknowledged: true };
     }
     async insertMany(documents) { const ids = []; for (const doc of documents) { const result = await this.insertOne(doc); ids.push(result.insertedId); } return { insertedIds: ids, acknowledged: true }; }
-    async find(query = {}, projection = null, options = {}) { const state = { query, projection: projection ?? options?.select ?? null, sort: options?.sort || options?.order, skip: options?.skip ?? options?.offset, limit: options?.limit, distinct: options?.distinct, }; const self = this; const cursor = { sort(obj) { state.sort = obj; return this; }, skip(n) { state.skip = n; return this; }, limit(n) { state.limit = n; return this; }, distinct() { state.distinct = true; return this; }, async toArray() { await self.initialize(); const hasOpts = !!(state.sort || state.distinct || state.limit != null || state.skip != null); const sql = hasOpts ? self.adapter.buildFindWithOptions(self.name, state.query, state.projection, { sort: state.sort, limit: state.limit, skip: state.skip, distinct: state.distinct }) : self.adapter.buildFind(self.name, state.query, state.projection); const result = await self.execWithDDLRetry(sql, { docForCreate: {}, allowColumnMigrate: false }); const rows = (result.rows || result).map(row => self.filterHidden(row)); return rows; }, async count() { const arr = await this.toArray(); return arr.length; } }; return cursor; }
+    async find(query = {}, projection = null, options = {}) { const state = { query, projection: projection ?? options?.select ?? null, sort: options?.sort || options?.order, skip: options?.skip ?? options?.offset, limit: options?.limit, distinct: options?.distinct, }; const self = this; const cursor = { sort(obj) { state.sort = obj; return this; }, skip(n) { state.skip = n; return this; }, limit(n) { state.limit = n; return this; }, distinct() { state.distinct = true; return this; }, async toArray() { await self.initialize(); const hasOpts = !!(state.sort || state.distinct || state.limit != null || state.skip != null); const sql = hasOpts ? self.adapter.buildFindWithOptions(self.name, state.query, state.projection, { sort: state.sort, limit: state.limit, skip: state.skip, distinct: state.distinct }) : self.adapter.buildFind(self.name, state.query, state.projection); const result = await self.execWithDDLRetry(sql, { docForCreate: {}, allowColumnMigrate: false }); const rows = (result.rows || result).map(row => self.filterHidden(row)); return rows; }, async count() { await self.initialize(); const sql = self.adapter.buildCount(self.name, state.query); const res = await self.execWithDDLRetry(sql, { docForCreate: {}, allowColumnMigrate: false }); const row = res.rows?.[0] || res[0]; let n = parseInt(row?.count || 0) || 0; if (state.skip != null) n = Math.max(0, n - state.skip); if (state.limit != null) n = Math.min(n, state.limit); return n; } }; return cursor; }
     async findOne(query = {}, projection = null) { await this.initialize(); const sql = this.adapter.buildFind(this.name, query, projection); const result = await this.execWithDDLRetry(sql, { docForCreate: {}, allowColumnMigrate: false }); const rows = result.rows || result; return rows[0] ? this.filterHidden(rows[0]) : null; }
-    async updateOne(query, update) { await this.initialize(); const preCountSQL = this.adapter.buildCount(this.name, query); const preCountRes = await this.execWithDDLRetry(preCountSQL, { docForCreate: {}, allowColumnMigrate: false }); const preRow = preCountRes.rows?.[0] || preCountRes[0]; const matchedCount = Math.min(1, parseInt(preRow?.count || 0)); const sql = this.adapter.buildUpdateOne(this.name, query, update); const updDoc = {}; Object.assign(updDoc, update?.$set || {}); if (update?.$currentDate && typeof update.$currentDate === 'object') { for (const k of Object.keys(update.$currentDate)) { updDoc[k] = new Date(); } } for (const [key, val] of Object.entries(update || {})) { if (key && !key.startsWith('$')) { updDoc[key] = val; } } const result = await this.execWithDDLRetry(sql, { docForCreate: {}, docForMigrate: updDoc, allowColumnMigrate: this.options.migrateOnUpdate }); return { matchedCount, modifiedCount: result.affectedRows || result.rowCount || result.changes || 0, acknowledged: true }; }
-    async updateMany(query, update) { await this.initialize(); const preCountSQL = this.adapter.buildCount(this.name, query); const preCountRes = await this.execWithDDLRetry(preCountSQL, { docForCreate: {}, allowColumnMigrate: false }); const preRow = preCountRes.rows?.[0] || preCountRes[0]; const matchedCount = parseInt(preRow?.count || 0); const sql = this.adapter.buildUpdateMany(this.name, query, update); const updDocMany = {}; Object.assign(updDocMany, update?.$set || {}); if (update?.$currentDate && typeof update.$currentDate === 'object') { for (const k of Object.keys(update.$currentDate)) { updDocMany[k] = new Date(); } } for (const [key, val] of Object.entries(update || {})) { if (key && !key.startsWith('$')) { updDocMany[key] = val; } } const result = await this.execWithDDLRetry(sql, { docForCreate: {}, docForMigrate: updDocMany, allowColumnMigrate: this.options.migrateOnUpdate }); return { matchedCount, modifiedCount: result.affectedRows || result.rowCount || result.changes || 0, acknowledged: true }; }
+    async updateOne(query, update) { await this.initialize(); const preCountSQL = this.adapter.buildCount(this.name, query); const preCountRes = await this.execWithDDLRetry(preCountSQL, { docForCreate: {}, allowColumnMigrate: false }); const preRow = preCountRes.rows?.[0] || preCountRes[0]; const matchedCount = Math.min(1, parseInt(preRow?.count || 0)); const sql = this.adapter.buildUpdateOne(this.name, query, update); const result = await this.execWithDDLRetry(sql, { docForCreate: {}, docForMigrate: this.updateTargets(update), allowColumnMigrate: this.options.migrateOnUpdate }); return { matchedCount, modifiedCount: result.affectedRows || result.rowCount || result.changes || 0, acknowledged: true }; }
+    async updateMany(query, update) { await this.initialize(); const preCountSQL = this.adapter.buildCount(this.name, query); const preCountRes = await this.execWithDDLRetry(preCountSQL, { docForCreate: {}, allowColumnMigrate: false }); const preRow = preCountRes.rows?.[0] || preCountRes[0]; const matchedCount = parseInt(preRow?.count || 0); const sql = this.adapter.buildUpdateMany(this.name, query, update); const result = await this.execWithDDLRetry(sql, { docForCreate: {}, docForMigrate: this.updateTargets(update), allowColumnMigrate: this.options.migrateOnUpdate }); return { matchedCount, modifiedCount: result.affectedRows || result.rowCount || result.changes || 0, acknowledged: true }; }
     async upsertOne(query, update, insertDoc = {}) { await this.initialize(); const res = await this.updateOne(query, update); if ((res.modifiedCount || 0) === 0) { const eqs = {}; for (const [k, v] of Object.entries(query || {})) { if (v && typeof v === 'object' && '$eq' in v) eqs[k] = v.$eq; else if (v === null || typeof v !== 'object') eqs[k] = v; } const base = Object.assign({}, eqs, insertDoc, update?.$set || {}); const r = await this.insertOne(base); return { upserted: true, insertedId: r.insertedId, acknowledged: true }; } return { upserted: false, acknowledged: true }; }
     async deleteOne(query) { await this.initialize(); const sql = this.adapter.buildDeleteOne(this.name, query); const result = await this.execWithDDLRetry(sql, { docForCreate: {}, allowColumnMigrate: false }); return { deletedCount: result.affectedRows || result.rowCount || result.changes || 0, acknowledged: true }; }
     async deleteMany(query = {}) { await this.initialize(); const sql = this.adapter.buildDeleteMany(this.name, query); const result = await this.execWithDDLRetry(sql, { docForCreate: {}, allowColumnMigrate: false }); return { deletedCount: result.affectedRows || result.rowCount || result.changes || 0, acknowledged: true }; }

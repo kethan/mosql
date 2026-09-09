@@ -1,10 +1,17 @@
 import { createQueryBuilder, filterOps, exprOps, updateOps, stageHandlers } from '../index.js';
 import { escape, jsonPath } from '../src/index.js';
-import { runStringTest } from './common.js';
+import { runStringTest, oneRow } from './common.js';
 
 const qb = createQueryBuilder({ filterOps, exprOps, updateOps, stageHandlers });
 
 const dbs = ['sqlite', 'pg', 'mysql'];
+
+// The projection `profile.score >= 80` per dialect, shared by the JSON cases.
+const jsonCmp = (db) => db === 'sqlite'
+  ? "json_extract(profile, '$.score') >= 80"
+  : db === 'pg'
+    ? "((profile::jsonb #>> '{score}'))::numeric >= 80"
+    : "CAST(JSON_UNQUOTE(JSON_EXTRACT(profile, '$.score')) AS DECIMAL(20,6)) >= 80";
 
 const filterCases = [
   { title: '$eq', make: (db) => qb.filter({ age: { $eq: 25 } }, db), expect: (db) => 'age = 25' },
@@ -30,7 +37,14 @@ const filterCases = [
   { title: '$or', make: (db) => qb.filter({ $or: [{ age: { $lt: 20 } }, { age: { $gte: 30 } }] }, db), expect: (db) => "(age < 20 OR age >= 30)" },
   { title: '$not', make: (db) => qb.filter({ $not: { age: { $gte: 25 } } }, db), expect: (db) => "NOT (age >= 25)" },
   { title: '$nor', make: (db) => qb.filter({ $nor: [{ age: { $lt: 20 } }, { age: { $gt: 30 } }] }, db), expect: (db) => "NOT (age < 20 OR age > 30)" },
-  { title: 'JSON path', make: (db) => qb.filter({ 'profile.score': { $gte: 80 } }, db), expect: (db) => db==='sqlite' ? "json_extract(profile, '$.score') >= 80" : db==='pg' ? "((profile::jsonb #>> '{score}'))::numeric >= 80" : "CAST(JSON_UNQUOTE(JSON_EXTRACT(profile, '$.score')) AS DECIMAL(20,6)) >= 80" },
+  { title: 'JSON path', make: (db) => qb.filter({ 'profile.score': { $gte: 80 } }, db), expect: (db) => jsonCmp(db) },
+  { title: '$not on a field', make: (db) => qb.filter({ age: { $not: { $lt: 23 } } }, db), expect: (db) => 'NOT (age < 23)' },
+  { title: '$not on a JSON path', make: (db) => qb.filter({ 'profile.score': { $not: { $gte: 80 } } }, db), expect: (db) => `NOT (${jsonCmp(db)})` },
+  { title: '$mod rejects injection', make: (db) => { try { return qb.filter({ age: { $mod: ["5 = 0 OR 1 = 1 --", 0] } }, db); } catch (e) { return e.message; } }, expect: (db) => '$mod requires finite numbers' },
+  { title: '$mod rejects non numbers', make: (db) => { try { return qb.filter({ age: { $mod: ['2', '0'] } }, db); } catch (e) { return e.message; } }, expect: (db) => '$mod requires finite numbers' },
+  { title: '$mod rejects a zero divisor', make: (db) => { try { return qb.filter({ age: { $mod: [0, 0] } }, db); } catch (e) { return e.message; } }, expect: (db) => '$mod divisor cannot be zero' },
+  { title: '$mod rejects NaN', make: (db) => { try { return qb.filter({ age: { $mod: [NaN, 0] } }, db); } catch (e) { return e.message; } }, expect: (db) => '$mod requires finite numbers' },
+  { title: '$mod accepts bigints', make: (db) => qb.filter({ age: { $mod: [10n, 0n] } }, db), expect: (db) => 'age % 10 = 0' },
   { title: '$expr arithmetic', make: (db) => qb.filter({ $expr: { $gt: [{ $add: ['$age', 5] }, 30] } }, db), expect: (db) => "((age + 5) > 30)" },
 ];
 
@@ -38,7 +52,7 @@ const exprCases = [
   { title: '$add', make: (db) => qb.expression({ $add: ['$age', 5] }, db), expect: (db) => '(age + 5)' },
   { title: '$subtract', make: (db) => qb.expression({ $subtract: ['$age', 5] }, db), expect: (db) => '(age - 5)' },
   { title: '$multiply', make: (db) => qb.expression({ $multiply: ['$age', 2] }, db), expect: (db) => '(age * 2)' },
-  { title: '$divide', make: (db) => qb.expression({ $divide: ['$age', 2] }, db), expect: (db) => '(age / NULLIF(2, 0))' },
+  { title: '$divide', make: (db) => qb.expression({ $divide: ['$age', 2] }, db), expect: (db) => db === 'sqlite' ? '(CAST(age AS REAL) / NULLIF(2, 0))' : db === 'pg' ? '(CAST(age AS numeric) / NULLIF(2, 0))' : '(age / NULLIF(2, 0))' },
   { title: '$mod', make: (db) => qb.expression({ $mod: ['$age', 2] }, db), expect: (db) => '(age % 2)' },
   { title: '$abs', make: (db) => qb.expression({ $abs: ['$age'] }, db), expect: (db) => 'ABS(age)' },
   { title: '$ceil', make: (db) => qb.expression({ $ceil: ['$age'] }, db), expect: (db) => 'CEIL(age)' },
@@ -49,7 +63,9 @@ const exprCases = [
   { title: '$concat', make: (db) => qb.expression({ $concat: ['$name', '!', '$city'] }, db), expect: (db) => db==='sqlite' ? "(name || '!' || city)" : `CONCAT(name, '!', city)` },
   { title: '$upper', make: (db) => qb.expression({ $upper: ['$name'] }, db), expect: (db) => 'UPPER(name)' },
   { title: '$lower', make: (db) => qb.expression({ $lower: ['$name'] }, db), expect: (db) => 'LOWER(name)' },
-  { title: '$substr', make: (db) => qb.expression({ $substr: ['$name', 1, 2] }, db), expect: (db) => 'SUBSTRING(name, 1, 2)' },
+  { title: '$substr', make: (db) => qb.expression({ $substr: ['$name', 1, 2] }, db), expect: (db) => 'SUBSTRING(name, 2, 2)' },
+  { title: '$substr zero based', make: (db) => qb.expression({ $substr: ['$name', 0, 3] }, db), expect: (db) => 'SUBSTRING(name, 1, 3)' },
+  { title: '$substr computed start', make: (db) => qb.expression({ $substr: ['$name', { $add: [1, 1] }, 2] }, db), expect: (db) => 'SUBSTRING(name, ((1 + 1)) + 1, 2)' },
   { title: '$strLen', make: (db) => qb.expression({ $strLen: ['$name'] }, db), expect: (db) => 'LENGTH(name)' },
   { title: '$replace', make: (db) => qb.expression({ $replace: ['$name', 'a', 'x'] }, db), expect: (db) => "REPLACE(name, 'a', 'x')" },
   { title: '$sum', make: (db) => qb.expression({ $sum: ['$age'] }, db), expect: (db) => 'SUM(age)' },
@@ -88,7 +104,7 @@ const exprCases = [
   { title: '$toInt', make: (db) => qb.expression({ $toInt: ['$age'] }, db), expect: (db) => 'CAST(age AS INTEGER)' },
   { title: '$toDouble', make: (db) => qb.expression({ $toDouble: ['$age'] }, db), expect: (db) => db==='pg' ? 'CAST(age AS DOUBLE PRECISION)' : db==='mysql' ? 'CAST(age AS DECIMAL(20,6))' : 'CAST(age AS REAL)' },
   { title: '$toBool', make: (db) => qb.expression({ $toBool: ['$age'] }, db), expect: (db) => 'CAST(age AS BOOLEAN)' },
-  { title: '$toDate', make: (db) => qb.expression({ $toDate: ['$age'] }, db), expect: (db) => 'CAST(age AS TIMESTAMP)' },
+  { title: '$toDate', make: (db) => qb.expression({ $toDate: '$age' }, db), expect: (db) => db === 'sqlite' ? 'datetime(age)' : 'CAST(age AS TIMESTAMP)' },
   { title: '$literal', make: (db) => qb.expression({ $literal: ['$x'] }, db), expect: (db) => "'$x'" },
   { title: '$trim', make: (db) => qb.expression({ $trim: ['$name'] }, db), expect: (db) => 'TRIM(name)' },
   { title: '$ltrim', make: (db) => qb.expression({ $ltrim: ['$name'] }, db), expect: (db) => 'LTRIM(name)' },
@@ -116,16 +132,24 @@ for (const db of dbs) {
 }
 
 // Update operator SQL cases
+// updateOne must touch a single row on every dialect (see `oneRow`); updateMany
+// and the unbounded cases must stay free of any narrowing.
+const U = (db, set, where) => `UPDATE users SET ${set}${oneRow(db, 'users', where)}`;
+
 const updateCases = [
-  { title: '$set scalar', make: (db) => qb.collection('users', db).updateOne({ name: 'Alice' }, { $set: { age: 26 } }), expect: (db) => db==='pg' ? "UPDATE users SET age = 26 WHERE name = 'Alice'" : "UPDATE users SET age = 26 WHERE name = 'Alice' LIMIT 1" },
-  { title: '$set JSON', make: (db) => qb.collection('users', db).updateOne({ name: 'Alice' }, { $set: { 'profile.score': 100 } }), expect: (db) => db==='pg' ? "UPDATE users SET profile = jsonb_set(COALESCE(profile::jsonb, '{}'::jsonb), '{score}', to_jsonb(100), true) WHERE name = 'Alice'" : db==='mysql' ? "UPDATE users SET profile = JSON_SET(COALESCE(profile, '{}'), '$.score', 100) WHERE name = 'Alice' LIMIT 1" : "UPDATE users SET profile = json_set(COALESCE(profile, '{}'), '$.score', 100) WHERE name = 'Alice' LIMIT 1" },
-  { title: '$inc JSON', make: (db) => qb.collection('users', db).updateOne({ name: 'Alice' }, { $inc: { 'profile.score': 1 } }), expect: (db) => db==='pg' ? "UPDATE users SET profile = jsonb_set(profile::jsonb, '{score}', to_jsonb(COALESCE((profile::jsonb #>> '{score}')::numeric, 0) + 1), true) WHERE name = 'Alice'" : db==='mysql' ? "UPDATE users SET profile = JSON_SET(profile, '$.score', COALESCE(JSON_EXTRACT(profile, '$.score'), 0) + 1) WHERE name = 'Alice' LIMIT 1" : "UPDATE users SET profile = json_set(profile, '$.score', COALESCE(json_extract(profile, '$.score'), 0) + 1) WHERE name = 'Alice' LIMIT 1" },
-  { title: '$mul JSON', make: (db) => qb.collection('users', db).updateOne({ name: 'Alice' }, { $mul: { 'profile.score': 2 } }), expect: (db) => db==='pg' ? "UPDATE users SET profile = jsonb_set(profile::jsonb, '{score}', to_jsonb(COALESCE((profile::jsonb #>> '{score}')::numeric, 1) * 2), true) WHERE name = 'Alice'" : db==='mysql' ? "UPDATE users SET profile = JSON_SET(profile, '$.score', COALESCE(JSON_EXTRACT(profile, '$.score'), 1) * 2) WHERE name = 'Alice' LIMIT 1" : "UPDATE users SET profile = json_set(profile, '$.score', COALESCE(json_extract(profile, '$.score'), 1) * 2) WHERE name = 'Alice' LIMIT 1" },
-  { title: '$min scalar', make: (db) => qb.collection('users', db).updateOne({ name: 'Alice' }, { $min: { age: 26 } }), expect: (db) => db==='sqlite' ? "UPDATE users SET age = MIN(age, 26) WHERE name = 'Alice' LIMIT 1" : db==='pg' ? "UPDATE users SET age = LEAST(age, 26) WHERE name = 'Alice'" : "UPDATE users SET age = LEAST(age, 26) WHERE name = 'Alice' LIMIT 1" },
-  { title: '$max scalar', make: (db) => qb.collection('users', db).updateOne({ name: 'Alice' }, { $max: { age: 26 } }), expect: (db) => db==='sqlite' ? "UPDATE users SET age = MAX(age, 26) WHERE name = 'Alice' LIMIT 1" : db==='pg' ? "UPDATE users SET age = GREATEST(age, 26) WHERE name = 'Alice'" : "UPDATE users SET age = GREATEST(age, 26) WHERE name = 'Alice' LIMIT 1" },
-  { title: '$unset JSON', make: (db) => qb.collection('users', db).updateOne({ name: 'Alice' }, { $unset: { 'profile.score': 0 } }), expect: (db) => db==='pg' ? "UPDATE users SET profile = profile::jsonb #- '{score}' WHERE name = 'Alice'" : db==='mysql' ? "UPDATE users SET profile = JSON_REMOVE(profile, '$.score') WHERE name = 'Alice' LIMIT 1" : "UPDATE users SET profile = json_remove(profile, '$.score') WHERE name = 'Alice' LIMIT 1" },
-  { title: '$currentDate', make: (db) => qb.collection('users', db).updateOne({ name: 'Alice' }, { $currentDate: { updatedAt: true } }), expect: (db) => db==='pg' ? "UPDATE users SET updatedAt = CURRENT_TIMESTAMP WHERE name = 'Alice'" : db==='mysql' ? "UPDATE users SET updatedAt = NOW() WHERE name = 'Alice' LIMIT 1" : "UPDATE users SET updatedAt = datetime('now') WHERE name = 'Alice' LIMIT 1" },
-  { title: '$rename', make: (db) => qb.collection('users', db).updateOne({ name: 'Alice' }, { $rename: { oldField: 'newField' } }), expect: (db) => db==='pg' ? "UPDATE users SET newField = oldField, oldField = NULL WHERE name = 'Alice'" : "UPDATE users SET newField = oldField, oldField = NULL WHERE name = 'Alice' LIMIT 1" },
+  { title: '$set scalar', make: (db) => qb.collection('users', db).updateOne({ name: 'Alice' }, { $set: { age: 26 } }), expect: (db) => U(db, "age = 26", "name = 'Alice'") },
+  { title: '$set JSON', make: (db) => qb.collection('users', db).updateOne({ name: 'Alice' }, { $set: { 'profile.score': 100 } }), expect: (db) => U(db, db === 'pg' ? "profile = jsonb_set(COALESCE(profile::jsonb, '{}'::jsonb), '{score}', to_jsonb(100), true)" : db === 'mysql' ? "profile = JSON_SET(COALESCE(profile, '{}'), '$.score', 100)" : "profile = json_set(COALESCE(profile, '{}'), '$.score', 100)", "name = 'Alice'") },
+  { title: '$inc JSON', make: (db) => qb.collection('users', db).updateOne({ name: 'Alice' }, { $inc: { 'profile.score': 1 } }), expect: (db) => U(db, db === 'pg' ? "profile = jsonb_set(profile::jsonb, '{score}', to_jsonb(COALESCE((profile::jsonb #>> '{score}')::numeric, 0) + 1), true)" : db === 'mysql' ? "profile = JSON_SET(profile, '$.score', COALESCE(JSON_EXTRACT(profile, '$.score'), 0) + 1)" : "profile = json_set(profile, '$.score', COALESCE(json_extract(profile, '$.score'), 0) + 1)", "name = 'Alice'") },
+  { title: '$mul JSON', make: (db) => qb.collection('users', db).updateOne({ name: 'Alice' }, { $mul: { 'profile.score': 2 } }), expect: (db) => U(db, db === 'pg' ? "profile = jsonb_set(profile::jsonb, '{score}', to_jsonb(COALESCE((profile::jsonb #>> '{score}')::numeric, 1) * 2), true)" : db === 'mysql' ? "profile = JSON_SET(profile, '$.score', COALESCE(JSON_EXTRACT(profile, '$.score'), 1) * 2)" : "profile = json_set(profile, '$.score', COALESCE(json_extract(profile, '$.score'), 1) * 2)", "name = 'Alice'") },
+  { title: '$min scalar', make: (db) => qb.collection('users', db).updateOne({ name: 'Alice' }, { $min: { age: 26 } }), expect: (db) => U(db, `age = ${db === 'sqlite' ? 'MIN' : 'LEAST'}(age, 26)`, "name = 'Alice'") },
+  { title: '$max scalar', make: (db) => qb.collection('users', db).updateOne({ name: 'Alice' }, { $max: { age: 26 } }), expect: (db) => U(db, `age = ${db === 'sqlite' ? 'MAX' : 'GREATEST'}(age, 26)`, "name = 'Alice'") },
+  { title: '$unset JSON', make: (db) => qb.collection('users', db).updateOne({ name: 'Alice' }, { $unset: { 'profile.score': 0 } }), expect: (db) => U(db, db === 'pg' ? "profile = profile::jsonb #- '{score}'" : db === 'mysql' ? "profile = JSON_REMOVE(profile, '$.score')" : "profile = json_remove(profile, '$.score')", "name = 'Alice'") },
+  { title: '$currentDate', make: (db) => qb.collection('users', db).updateOne({ name: 'Alice' }, { $currentDate: { updatedAt: true } }), expect: (db) => U(db, `updatedAt = ${db === 'pg' ? 'CURRENT_TIMESTAMP' : db === 'mysql' ? 'NOW()' : "datetime('now')"}`, "name = 'Alice'") },
+  { title: '$rename', make: (db) => qb.collection('users', db).updateOne({ name: 'Alice' }, { $rename: { oldField: 'newField' } }), expect: (db) => U(db, "newField = oldField, oldField = NULL", "name = 'Alice'") },
+  { title: 'updateMany is not narrowed', make: (db) => qb.collection('users', db).updateMany({ name: 'Alice' }, { $set: { age: 26 } }), expect: (db) => `UPDATE users SET age = 26 WHERE name = 'Alice'` },
+  { title: 'updateOne without a filter', make: (db) => qb.collection('users', db).updateOne({}, { $set: { age: 26 } }), expect: (db) => `UPDATE users SET age = 26${oneRow(db, 'users', '')}` },
+  { title: 'deleteOne without a filter', make: (db) => qb.collection('users', db).deleteOne({}), expect: (db) => `DELETE FROM users${oneRow(db, 'users', '')}` },
+  { title: 'deleteMany keeps the guard rail', make: (db) => { try { return qb.collection('users', db).deleteMany({}); } catch (e) { return e.message; } }, expect: () => 'deleteMany requires a filter or allowDeleteAll option' },
 ];
 
 for (const db of dbs) {

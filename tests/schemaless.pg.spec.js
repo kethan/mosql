@@ -1,14 +1,18 @@
-import dotenv from 'dotenv';
+import { loadEnv } from '../src/env.js';
 import pkg from 'pg';
 import { createSchemalessAdapter } from '../src/schemaless.js';
-import { runTest } from './common.js';
-dotenv.config();
+import { runTest, pgConfig, isConfigured, skipMessage, connectSkip } from './common.js';
+await loadEnv();
 
-const config = { host: process.env.PG_HOST, port: process.env.PG_PORT || 5432, user: process.env.PG_USER, password: process.env.PG_PASSWORD, database: process.env.PG_DB };
+const config = pgConfig();
+const label = 'schemaless.pg';
 
 const main = async () => {
-  if (!config.host) {
-    throw new Error('PG_HOST is not set');
+  // Without a configured server this file does nothing (the unit CI job has no
+  // PostgreSQL) - but it always says so, because a silent skip reads like a pass.
+  if (!isConfigured(config)) {
+    console.log(skipMessage(label, 'pg', config));
+    return;
   }
 
   const { Client } = pkg;
@@ -18,14 +22,18 @@ const main = async () => {
     await client.connect();
 
     const { adapter } = createSchemalessAdapter(client, 'pg');
-    const users = adapter.collection('users');
+    const users = adapter.collection('schemaless_pg_users');
 
     await runTest(
       'Insert and update JSON',
       async () => {
-        await client.query('DROP TABLE IF EXISTS users');
+    // Every live spec owns its table name: these files run against one shared
+    // database in CI, so a bare `users` would be dropped and reshaped by whichever
+    // spec happened to run first (and the CREATE below only applies if it is absent,
+    // so a leftover table from another file silently changes what is inserted).
+        await client.query('DROP TABLE IF EXISTS schemaless_pg_users');
         await client.query(
-          'CREATE TABLE users (_id SERIAL PRIMARY KEY, name TEXT, profile JSONB)'
+          'CREATE TABLE schemaless_pg_users (_id SERIAL PRIMARY KEY, name TEXT, profile JSONB)'
         );
 
         await users.insertOne({
@@ -40,7 +48,7 @@ const main = async () => {
         );
 
         const res = await client.query(
-          "SELECT profile->>'score' AS score FROM users WHERE name = 'Alice'"
+          "SELECT profile->>'score' AS score FROM schemaless_pg_users WHERE name = 'Alice'"
         );
 
         return res.rows.map(r => ({
@@ -55,6 +63,12 @@ const main = async () => {
 };
 
 main().catch(err => {
+  // A configured but unreachable server is an environment problem, not a code
+  // failure - report it as a skip so `npm test` stays meaningful offline.
+  if (/ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|getaddrinfo|authentication|pg_hba/i.test(String(err?.message || err))) {
+    console.log(connectSkip(label, config, err));
+    return;
+  }
   console.error(err);
   process.exitCode = 1;
 });

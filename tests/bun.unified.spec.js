@@ -1,15 +1,16 @@
 import { test } from 'bun:test';
-import dotenv from 'dotenv';
-import { runTest } from './common.js';
+import { runTest, pgConfig, mysqlConfig, isConfigured } from './common.js';
 import { createSQLiteSchemaless } from '../src/adapter/sqlite/adapter.js';
 import { createMySQLSchemaless } from '../src/adapter/mysql/adapter.js';
 import { createPostgresSchemaless } from '../src/adapter/pg/adapter.js';
 import { collection as memCollection } from '../src/adapter/memory/memory.js';
-dotenv.config();
-
+// NOTE: this file is not part of `npm test` - run-all.js skips `*.bun.*` specs, and
+// the createSQLite/MySQL/PostgresSchemaless factories it imports were removed when
+// the adapters were folded into src/schemaless.js. Kept as the bun:test entry point
+// if that harness comes back; the env names below are shared with the other specs.
 const configs = {
-  mysql: { host: process.env.MYSQL_HOST, user: process.env.MYSQL_USER, password: process.env.MYSQL_PASS, database: process.env.MYSQL_DB },
-  pg: { host: process.env.PG_HOST, port: process.env.PG_PORT || 5432, user: process.env.PG_USER, password: process.env.PG_PASSWORD, database: process.env.PG_DB },
+  mysql: mysqlConfig(),
+  pg: pgConfig(),
 };
 
 const createCtx = async (db) => {
@@ -19,13 +20,13 @@ const createCtx = async (db) => {
     return { db, coll, close: async () => {} };
   }
   if (db === 'mysql') {
-    const cfg = configs.mysql; if (!cfg.host) return null;
+    const cfg = configs.mysql; if (!isConfigured(cfg)) return null;
     const { adapter, conn } = await createMySQLSchemaless(cfg);
     const coll = adapter.collection('users');
     return { db, coll, close: async () => { await conn.end(); } };
   }
   if (db === 'pg') {
-    const cfg = configs.pg; if (!cfg.host) return null;
+    const cfg = configs.pg; if (!isConfigured(cfg)) return null;
     const { adapter, client } = await createPostgresSchemaless(cfg);
     const coll = adapter.collection('users');
     return { db, coll, close: async () => { await client.end(); } };

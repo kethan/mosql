@@ -1,34 +1,47 @@
 import { createQueryBuilder, filterOps, exprOps, updateOps, stageHandlers } from '../index.js';
 import { createSchemalessAdapter } from '../src/schemaless.js';
-import { runTest } from './common.js';
+import { runTest, pgConfig, mysqlConfig, isConfigured, connectSkip } from './common.js';
+import { loadEnv } from '../src/env.js';
 import Database from 'better-sqlite3';
 import pkg from 'pg';
 import mysql from 'mysql2/promise';
-import dotenv from 'dotenv';
-dotenv.config();
+
+await loadEnv();
 
 const qb = createQueryBuilder({ filterOps, exprOps, updateOps, stageHandlers });
 
 const dbs = [];
+const label = 'qb.unified';
 
 (async () => {
   const { adapter: sqlite } = createSchemalessAdapter(new Database(':memory:'), 'sqlite');
   dbs.push({ name: 'sqlite', adapter: sqlite });
 
-  const pgCfg = { host: process.env.PG_HOST || process.env.PGHOST, port: process.env.PG_PORT || 5432, user: process.env.PG_USER || process.env.PGUSER, password: process.env.PG_PASSWORD || process.env.PGPASSWORD, database: process.env.PG_DB || process.env.PGDATABASE };
-  if (pgCfg.host && pgCfg.user && pgCfg.database) {
-    const { Client } = pkg;
-    const pgClient = new Client(pgCfg);
-    await pgClient.connect();
-    const pgInit = createSchemalessAdapter(pgClient, 'pg');
-    dbs.push({ name: 'pg', adapter: pgInit.adapter, client: pgClient });
+  // A dialect joins `dbs` only when it is configured *and* reachable: the unit job
+  // has no services at all, and these files also cover sqlite/memory, so a missing
+  // database must not fail the whole run. Skipping is always announced.
+  const pgCfg = pgConfig();
+  if (isConfigured(pgCfg)) {
+    try {
+      const { Client } = pkg;
+      const pgClient = new Client(pgCfg);
+      await pgClient.connect();
+      const pgInit = createSchemalessAdapter(pgClient, 'pg');
+      dbs.push({ name: 'pg', adapter: pgInit.adapter, client: pgClient });
+    } catch (e) {
+      console.log(connectSkip(`${label} pg`, pgCfg, e));
+    }
   }
 
-  const myCfg = { host: process.env.MYSQL_HOST || process.env.MYSQLHOST, user: process.env.MYSQL_USER || process.env.MYSQLUSER, password: process.env.MYSQL_PASS || process.env.MYSQLPASSWORD, database: process.env.MYSQL_DB || process.env.MYSQLDATABASE };
-  if (myCfg.host && myCfg.user && myCfg.database) {
-    const conn = await mysql.createConnection(myCfg);
-    const myInit = createSchemalessAdapter(conn, 'mysql');
-    dbs.push({ name: 'mysql', adapter: myInit.adapter, conn });
+  const myCfg = mysqlConfig();
+  if (isConfigured(myCfg)) {
+    try {
+      const conn = await mysql.createConnection(myCfg);
+      const myInit = createSchemalessAdapter(conn, 'mysql');
+      dbs.push({ name: 'mysql', adapter: myInit.adapter, conn });
+    } catch (e) {
+      console.log(connectSkip(`${label} mysql`, myCfg, e));
+    }
   }
 
   const setup = async (db) => {
@@ -37,7 +50,11 @@ const dbs = [];
     await a.execute('DROP TABLE IF EXISTS orders');
     await a.execute('DROP TABLE IF EXISTS qb_users');
     await a.execute('CREATE TABLE qb_users (id SERIAL PRIMARY KEY, name TEXT, age INT, city TEXT, active BOOLEAN, profile JSONB, created_at TIMESTAMP, nullable TEXT)');
-    await a.execute('CREATE TABLE orders (id SERIAL PRIMARY KEY, user_id INT REFERENCES users(id), amount NUMERIC, status TEXT)');
+    // The key has to point at qb_users: PostgreSQL resolves a REFERENCES target while
+    // creating the table, so referencing a `users` table this file never makes fails
+    // there (SQLite and MySQL accept the dangling reference because they check it later
+    // or not at all, which is how it went unnoticed).
+    await a.execute('CREATE TABLE orders (id SERIAL PRIMARY KEY, user_id INT REFERENCES qb_users(id), amount NUMERIC, status TEXT)');
     const rows = [
       `INSERT INTO qb_users (name, age, city, active, profile, created_at, nullable) VALUES ('Alice',25,'Paris',TRUE,'{"country":"France","score":85}','2024-01-01 00:00:00',NULL)`,
       `INSERT INTO qb_users (name, age, city, active, profile, created_at, nullable) VALUES ('Bob',30,'London',TRUE,'{"country":"UK","score":90}','2024-06-01 00:00:00',NULL)`,

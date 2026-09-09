@@ -1,5 +1,5 @@
 import { escape, jsonPath, validate, isObject, is$ } from '../src/index.js';
-import { runStringTest, runTest } from './common.js';
+import { runStringTest, runTest, nullableColumns } from './common.js';
 
 const dbs = ['sqlite','pg','mysql'];
 
@@ -31,3 +31,24 @@ for (const db of dbs) {
   runStringTest(`jsonPath field ${db}`, () => jsonPath('profile', db), 'profile');
   runStringTest(`jsonPath nested ${db}`, () => jsonPath('profile.score', db), db==='pg' ? "(profile::jsonb #>> '{score}')" : db==='mysql' ? "JSON_UNQUOTE(JSON_EXTRACT(profile, '$.score'))" : "json_extract(profile, '$.score')" );
 }
+
+// Which columns a "set everything to NULL" document may write. The rule has to come
+// from the declared type, not from the schema's `required` list: sequence-backed and
+// explicitly non-null columns reject NULL, and a DEFAULT column has to stay omitted
+// for the default to be exercised at all.
+runStringTest('nullableColumns skips generated and constrained columns', () => JSON.stringify(nullableColumns({
+  id: { type: 'serial', primaryKey: true },
+  smallintCol: 'SMALLINT',
+  serialCol: 'SERIAL',
+  bigserialCol: 'BIGSERIAL',
+  autoIncCol: { type: 'INT AUTO_INCREMENT PRIMARY KEY' },
+  identityCol: { type: 'INT GENERATED ALWAYS AS IDENTITY' },
+  notNullCol: { type: 'TEXT NOT NULL' },
+  requiredCol: { type: 'TEXT', required: true },
+  defaultCol: { type: 'INTEGER', default: 100 },
+  textCol: 'TEXT',
+  jsonCol: { type: 'JSONB' },
+  timeCol: { type: 'TIMESTAMP WITH TIME ZONE' },
+})), JSON.stringify(['smallintCol', 'textCol', 'jsonCol', 'timeCol']));
+
+runStringTest('nullableColumns tolerates an empty schema', () => JSON.stringify(nullableColumns(undefined)), '[]');

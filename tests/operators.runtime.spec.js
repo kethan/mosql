@@ -1,68 +1,77 @@
-import dotenv from 'dotenv';
-dotenv.config();
+import { loadEnv } from '../src/env.js';
+await loadEnv();
 import Database from 'better-sqlite3';
 import mysql from 'mysql2/promise';
 import pkg from 'pg';
 import { createSchemalessAdapter } from '../src/schemaless.js';
 import { createMongoSchemaless } from '../src/adapter/mongodb/adapter.js';
-import { runTest } from './common.js';
+import { runTest, pgConfig, mysqlConfig, mongoConfig, isConfigured, connectSkip, fieldOf } from './common.js';
 
 const setups = [];
+const label = 'operators.runtime';
 
 // SQLite
 {
   const { adapter } = createSchemalessAdapter(new Database(':memory:'), 'sqlite');
-  const users = adapter.collection('users');
+  const users = adapter.collection('operators_users');
   setups.push({ name: 'sqlite', adapter, users });
 }
 
 // Postgres
 {
   const { Client } = pkg;
-  const cfg = { host: process.env.PG_HOST || process.env.PGHOST, port: process.env.PG_PORT || 5432, user: process.env.PG_USER || process.env.PGUSER, password: process.env.PG_PASSWORD || process.env.PGPASSWORD, database: process.env.PG_DB || process.env.PGDATABASE };
-  if (cfg.host && cfg.user && cfg.database) {
-    const client = new Client(cfg);
-    await client.connect();
-    const { adapter } = createSchemalessAdapter(client, 'pg');
-    setups.push({ name: 'pg', adapter, users: adapter.collection('users'), client });
+  const cfg = pgConfig();
+  // Configured *and* reachable, otherwise the dialect is dropped from `setups` with
+  // a note: this file also covers sqlite/memory, so a server that is set but down
+  // must not turn the run red - and a silent skip must not look like a pass either.
+  if (isConfigured(cfg)) {
+    try {
+      const client = new Client(cfg);
+      await client.connect();
+      const { adapter } = createSchemalessAdapter(client, 'pg');
+      setups.push({ name: 'pg', adapter, users: adapter.collection('operators_users'), client });
+    } catch (e) {
+      console.log(connectSkip(`${label} pg`, cfg, e));
+    }
   }
 }
 
 // MySQL
 {
-  const cfg = { host: process.env.MYSQL_HOST || process.env.MYSQLHOST, user: process.env.MYSQL_USER || process.env.MYSQLUSER, password: process.env.MYSQL_PASS || process.env.MYSQLPASSWORD, database: process.env.MYSQL_DB || process.env.MYSQLDATABASE, port: process.env.MYSQL_PORT || process.env.MYSQLPORT };
-  if (cfg.host && cfg.user && cfg.database) {
-    const conn = await mysql.createConnection(cfg);
-    const { adapter } = createSchemalessAdapter(conn, 'mysql');
-    setups.push({ name: 'mysql', adapter, users: adapter.collection('users'), conn });
+  const cfg = mysqlConfig();
+  if (isConfigured(cfg)) {
+    try {
+      const conn = await mysql.createConnection(cfg);
+      const { adapter } = createSchemalessAdapter(conn, 'mysql');
+      setups.push({ name: 'mysql', adapter, users: adapter.collection('operators_users'), conn });
+    } catch (e) {
+      console.log(connectSkip(`${label} mysql`, cfg, e));
+    }
   }
 }
 
 // Memory
 {
   const { adapter } = createSchemalessAdapter();
-  setups.push({ name: 'memory', adapter, users: adapter.collection('users') });
+  setups.push({ name: 'memory', adapter, users: adapter.collection('operators_users') });
 }
 
 // MongoDB (env-guarded)
 {
   try {
-    const mongoInit = await createMongoSchemaless({
-      host: process.env.MONGO_HOST,
-      port: process.env.MONGO_PORT ? parseInt(process.env.MONGO_PORT) : undefined,
-      user: process.env.MONGO_USER,
-      password: process.env.MONGO_PASSWORD,
-      database: process.env.MONGO_DB || 'test_database',
-    });
+    // createMongoSchemaless resolves MONGO_* itself, so there is nothing to repeat here.
+    const mongoInit = await createMongoSchemaless(mongoConfig());
     const adapter = mongoInit.adapter;
-    setups.push({ name: 'mongodb', adapter, users: adapter.collection('users'), client: mongoInit.client });
-  } catch { }
+    setups.push({ name: 'mongodb', adapter, users: adapter.collection('operators_users'), client: mongoInit.client });
+  } catch (e) {
+    console.log(`SKIP ${label} mongodb - ${e.message}`);
+  }
 }
 
 // Memory and MongoDB setups removed
 
 for (const s of setups) {
-  await s.adapter.dropCollection('users').catch(() => { });
+  await s.adapter.dropCollection('operators_users').catch(() => { });
   const u = s.users;
   await u.insertMany([
     { name: 'Alice', age: 25, city: 'Paris', active: true, profile: { score: 85, tags: ['x', 'y'] }, items: [1, 2, 3] },
@@ -170,7 +179,8 @@ for (const s of setups) {
   await runTest(`runtime/${s.name} currentDate`, async () => {
     await u.updateOne({ name: 'David' }, { $currentDate: { createdAt: { $type: 'timestamp' } } });
     const row = await u.findOne({ name: 'David' });
-    return [{ ok: !!row.createdAt }];
+    // `createdAt` comes back folded on pg, so read it the way either casing stores it.
+    return [{ ok: !!fieldOf(row, 'createdAt') }];
   }, [{ ok: true }]);
 
   await runTest(`runtime/${s.name} rename`, async () => {
@@ -179,35 +189,54 @@ for (const s of setups) {
     return [{ isCityNull: row?.city == null, hasTown: row?.town != null }];
   }, [{ isCityNull: true, hasTown: true }]);
 
+  // `$project` replaces the shape of a document, so a later stage can only read
+  // fields it kept - `age` is projected through explicitly here.
   await runTest(`runtime/${s.name} aggregate $project/$addFields`, async () => {
-    const rows = await u.aggregate([{ $project: { name: 1, nextAge: { $add: ['$age', 1] } } }, { $addFields: { isAdult: { $gte: ['$age', 18] } } }]).toArray();
-    return rows.map(r => ({ name: r.name, nextAge: r.nextAge, isAdult: r.isAdult })).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 2);
-  }, [{ name: 'Alice', nextAge: 26, isAdult: true }, { name: 'Bob', nextAge: 31, isAdult: true }]);
+    const rows = await u.aggregate([{ $project: { name: 1, age: 1, nextAge: { $add: ['$age', 1] } } }, { $addFields: { isAdult: { $gte: ['$age', 18] } } }]);
+    // SQLite reports booleans as 1/0, and Bob's age was rewritten by the
+    // $min/$max cases above, so the expectations follow the mutated data.
+    // The aliases come back folded on pg (`nextage`), so read them case-insensitively.
+    return rows.map(r => ({ name: r.name, nextAge: fieldOf(r, 'nextAge'), isAdult: !!fieldOf(r, 'isAdult') })).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 2);
+  }, [{ name: 'Alice', nextAge: 26, isAdult: true }, { name: 'Bob', nextAge: 32, isAdult: true }]);
 
+  // The updates above left Alice 25/Paris, Bob 31/London, Charlie 22 with no
+  // city ($unset) and David 40 with no city ($rename moved it to `town`), so the
+  // groups are Paris=25, London=31 and {null: 22,40}=31. The id tie-break keeps
+  // the ordering of the two 31s deterministic.
   await runTest(`runtime/${s.name} aggregate $group avg age by city`, async () => {
-    const rows = await u.aggregate([{ $group: { _id: '$city', avgAge: { $avg: '$age' } } }, { $sort: { avgAge: -1 } }]).toArray();
-    return rows.map(r => ({ id: r._id, avgAge: Math.round((r.avgAge || 0) * 100) / 100 }));
-  }, [{ id: 'Paris', avgAge: 32.5 }, { id: 'London', avgAge: 30 }, { id: 'Berlin', avgAge: 22 }]);
+    const rows = await u.aggregate([{ $group: { _id: '$city', avgAge: { $avg: '$age' } } }, { $sort: { avgAge: -1 } }]);
+    return rows.map(r => ({ id: r._id, avgAge: Math.round((fieldOf(r, 'avgAge') || 0) * 100) / 100 }))
+      .sort((a, b) => b.avgAge - a.avgAge || String(a.id).localeCompare(String(b.id)));
+  }, [{ id: 'London', avgAge: 31 }, { id: null, avgAge: 31 }, { id: 'Paris', avgAge: 25 }]);
 
+  // age desc is David 40, Bob 31 (bumped by $max above), Alice 25, Charlie 22,
+  // so skipping one row and taking one row lands on Bob.
   await runTest(`runtime/${s.name} aggregate $limit/$skip`, async () => {
-    const rows = await u.aggregate([{ $project: { name: 1, age: 1 } }, { $sort: { age: -1 } }, { $skip: 1 }, { $limit: 1 }]).toArray();
+    const rows = await u.aggregate([{ $project: { name: 1, age: 1 } }, { $sort: { age: -1 } }, { $skip: 1 }, { $limit: 1 }]);
     return rows.map(r => ({ name: r.name }));
-  }, [{ name: 'Alice' }]);
+  }, [{ name: 'Bob' }]);
 
   await runTest(`runtime/${s.name} aggregate $count`, async () => {
-    const rows = await u.aggregate([{ $match: { active: true } }, { $count: 'count' }]).toArray();
+    const rows = await u.aggregate([{ $match: { active: true } }, { $count: 'count' }]);
     return rows.map(r => ({ count: r.count }));
   }, [{ count: 3 }]);
 
+  // Charlie's and David's cities are gone ($unset / $rename), so NULL is the
+  // biggest group with 2 rows.
   await runTest(`runtime/${s.name} aggregate $sortByCount`, async () => {
-    const rows = await u.aggregate([{ $sortByCount: '$city' }]).toArray();
+    const rows = await u.aggregate([{ $sortByCount: '$city' }]);
     return rows.map(r => ({ id: r._id, count: r.count })).slice(0, 1);
-  }, [{ id: 'Paris', count: 2 }]);
+  }, [{ id: null, count: 2 }]);
 
+  // The default bucket is numeric on purpose: PostgreSQL types the whole CASE
+  // expression from its first branch, so `ELSE 'other'` against integer boundaries
+  // is `invalid input syntax for type integer`, where SQLite and MySQL happily mix
+  // the two. Documented as a caveat; a string default is only portable in the sense
+  // that it fails.
   await runTest(`runtime/${s.name} aggregate $bucket`, async () => {
-    const rows = await u.aggregate([{ $bucket: { groupBy: '$age', boundaries: [0, 25, 50], default: 'other', output: { count: { $count: 1 } } } }]).toArray();
+    const rows = await u.aggregate([{ $bucket: { groupBy: '$age', boundaries: [0, 25, 50], default: 99, output: { count: { $count: 1 } } } }]);
     return rows.map(r => ({ id: r._id, count: r.count })).sort((a, b) => String(a.id).localeCompare(String(b.id)));
-  }, [{ id: 0, count: 2 }, { id: 25, count: 2 }]);
+  }, [{ id: 0, count: 1 }, { id: 25, count: 3 }]);
 
   await runTest(`runtime/${s.name} expr arithmetic set`, async () => {
     const rows = await u.aggregate([
@@ -222,7 +251,7 @@ for (const s of setups) {
           round: { $round: [{ $divide: ['$age', 2] }, 0] }
         }
       }
-    ]).toArray();
+    ]);
     return rows.map(r => ({ d: r.d, half: r.half, abs: r.abs, ceil: r.ceil, floor: r.floor, round: r.round }));
   }, [{ d: 20, half: 12.5, abs: 5, ceil: 13, floor: 12, round: 13 }]);
 
@@ -230,7 +259,7 @@ for (const s of setups) {
     const rows = await u.aggregate([
       { $match: { name: 'Alice' } },
       { $project: { power: { $pow: ['$age', 2] }, sq: { $sqrt: '$age' } } }
-    ]).toArray();
+    ]);
     return rows.map(r => ({ power: r.power, sq: r.sq }));
   }, [{ power: 625, sq: 5 }]);
 
@@ -242,7 +271,7 @@ for (const s of setups) {
         $project: {
           up: { $upper: '$name' },
           low: { $lower: '$name' },
-          sub: { $substr: ['$name', 1, 3] },
+          sub: { $substr: ['$name', 1, 3] },// $substr is 0 based like MongoDB
           t: { $trim: '$alias' },
           lt: { $ltrim: '$alias' },
           rt: { $rtrim: '$alias' },
@@ -250,9 +279,9 @@ for (const s of setups) {
           rep: { $replace: ['$name', 'o', '0'] }
         }
       }
-    ]).toArray();
+    ]);
     return rows.map(r => ({ up: r.up, low: r.low, sub: r.sub, t: r.t, lt: r.lt, rt: r.rt, len: r.len, rep: r.rep }));
-  }, [{ up: 'BOB', low: 'bob', sub: 'Bob', t: 'hi', lt: 'hi  ', rt: '  hi', len: 3, rep: 'B0b' }]);
+  }, [{ up: 'BOB', low: 'bob', sub: 'ob', t: 'hi', lt: 'hi  ', rt: '  hi', len: 3, rep: 'B0b' }]);
 
   await u.updateOne({ name: 'Charlie' }, { $set: { createdAt: '2024-01-01' } });
   await runTest(`runtime/${s.name} expr date parts`, async () => {
@@ -270,7 +299,7 @@ for (const s of setups) {
           w: { $week: '$createdAt' }
         }
       }
-    ]).toArray();
+    ]);
     return rows.map(r => ({ y: r.y, m: r.m, d: r.d, dw: r.dw, h: r.h, mi: r.mi, s2: r.s2, w: r.w }));
   }, [{ y: 2024, m: 1, d: 1, dw: 2, h: 0, mi: 0, s2: 0, w: 1 }]);
 
@@ -279,12 +308,12 @@ for (const s of setups) {
       { $match: { name: 'Charlie' } },
       {
         $project: {
-          ystr: { $substr: [{ $toString: '$createdAt' }, 1, 4] },
+          ystr: { $substr: [{ $toString: '$createdAt' }, 0, 4] },
           intval: { $toInt: '$age' },
           dbl: { $toDouble: '$age' }
         }
       }
-    ]).toArray();
+    ]);
     return rows.map(r => ({ ystr: r.ystr, intval: r.intval, dbl: r.dbl }));
   }, [{ ystr: 2024, intval: 22, dbl: 22 }]);
 
@@ -297,7 +326,7 @@ for (const s of setups) {
           nick: { $ifNull: ['$alias', 'none'] }
         }
       }
-    ]).toArray();
+    ]);
     return rows.map(r => ({ code: r.code, nick: r.nick }));
   }, [{ code: 'FR', nick: 'none' }]);
 
@@ -313,7 +342,7 @@ for (const s of setups) {
     const rows = await u.aggregate([
       { $match: { name: 'Charlie' } },
       { $project: { cmp: { $cmp: ['$age', 25] } } }
-    ]).toArray();
+    ]);
     return rows.map(r => ({ cmp: r.cmp }));
   }, [{ cmp: -1 }]);
 
@@ -321,7 +350,7 @@ for (const s of setups) {
     const rows = await u.aggregate([
       { $match: { name: 'Bob' } },
       { $project: { b: { $toBool: '$age' }, lit: { $literal: ['X'] } } }
-    ]).toArray();
+    ]);
     return rows.map(r => ({ b: !!(r.b), lit: r.lit }));
   }, [{ b: true, lit: 'X' }]);
 
