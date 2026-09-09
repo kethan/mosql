@@ -1,12 +1,58 @@
-## UMoSQL
+# UMoSQL
 
-# Mongo To SQL Query
+**MongoDB-style queries for SQL databases (and memory, and MongoDB itself).**
 
-[![tests](https://github.com/kethan/mosql/actions/workflows/node.js.yml/badge.svg)](https://github.com/kethan/mosql/actions/workflows/node.js.yml) [![Version](https://img.shields.io/npm/v/umosql.svg?color=success&style=flat-square)](https://www.npmjs.com/package/umosql) [![Badge size](https://deno.bundlejs.com/badge?q=umosql&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql)
+Write MongoDB queries — `find({ age: { $gte: 18 } })`, `$group`, `$set`, JSON paths — and run them on **PostgreSQL, MySQL, SQLite**, a zero-driver **in-memory engine**, or real **MongoDB** with the same collection API.
 
-[![Version](https://img.shields.io/npm/v/umosql.svg?color=success&style=flat-square)](https://www.npmjs.com/package/umosql) [![Badge size](https://deno.bundlejs.com/badge?q=umosql/lite&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql/lite)
+[![tests](https://github.com/kethan/mosql/actions/workflows/node.js.yml/badge.svg)](https://github.com/kethan/mosql/actions/workflows/node.js.yml)
+[![Version](https://img.shields.io/npm/v/umosql.svg?color=success&style=flat-square)](https://www.npmjs.com/package/umosql)
+[![Full](https://deno.bundlejs.com/badge?q=umosql&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql)
+[![Lite](https://deno.bundlejs.com/badge?q=umosql/lite&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql/lite)
+[![Tiny](https://deno.bundlejs.com/badge?q=umosql/tiny&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql/tiny)
 
-[![Version](https://img.shields.io/npm/v/umosql.svg?color=success&style=flat-square)](https://www.npmjs.com/package/umosql) [![Badge size](https://deno.bundlejs.com/badge?q=umosql/tiny&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql/tiny)
+---
+
+## Table of Contents
+
+- [Install](#install)
+- [Entry points](#entry-points)
+- [Quick start](#quick-start)
+- [Choosing a version (Full / Lite / Tiny)](#choosing-a-version-full--lite--tiny)
+- [Query examples](#query-examples)
+  - [Basic queries](#basic-queries)
+  - [Array operators ($in, $nin)](#array-operators-in-nin)
+  - [Logical operators](#logical-operators)
+  - [Pattern matching](#pattern-matching)
+  - [JSON field queries](#json-field-queries)
+- [CRUD operations](#crud-operations)
+  - [Find operations](#find-operations)
+  - [Insert operations](#insert-operations)
+  - [Update operations](#update-operations)
+  - [Delete operations](#delete-operations)
+- [Aggregation pipeline](#aggregation-pipeline)
+- [Operator reference](#operator-reference)
+  - [Filter operators](#filter-operators)
+  - [Update operators](#update-operators)
+  - [Expression operators](#expression-operators)
+- [Custom operators (extend)](#custom-operators-extend)
+- [Custom builds (ultra-minimal)](#custom-builds-ultra-minimal)
+- [Schemaless adapters](#schemaless-adapters)
+  - [Unified client (memory / sqlite / pg / mysql / mongodb / sql)](#unified-client-memory--sqlite--pg--mysql--mongodb--sql)
+  - [Bring your own driver](#bring-your-own-driver)
+  - [Auto DDL, schema inference and migration](#auto-ddl-schema-inference-and-migration)
+  - [Schemas, defaults, hidden fields](#schemas-defaults-hidden-fields)
+  - [Auto ID creation](#auto-id-creation)
+  - [DDL helpers](#ddl-helpers)
+  - [Method support matrix](#method-support-matrix)
+- [Serverless (Neon, Turso, PlanetScale, Drizzle, Hyperdrive, ...)](#serverless-neon-turso-planetscale-drizzle-hyperdrive-)
+- [Express / REST integration](#express--rest-integration)
+- [In-memory engine](#in-memory-engine)
+- [Operator support matrix](#operator-support-matrix)
+- [Compatibility and caveats](#compatibility-and-caveats)
+- [Testing](#testing)
+- [API reference](#api-reference)
+- [Examples directory](#examples-directory)
+- [License](#license)
 
 ---
 
@@ -16,122 +62,53 @@
 npm i umosql
 ```
 
-Every entry point ships in that one package — import the ones you need:
+> **umosql has zero runtime dependencies.** No database driver is bundled, and none is declared as a
+> dependency or peer dependency — nothing gets auto-installed into your project. You install the driver
+> you want (`pg`, `mysql2`, `better-sqlite3`, `mongodb`), and it is loaded lazily only when you request
+> that backend. `dotenv` is optional the same way: `.env` is read when it is installed, silently skipped
+> when it is not.
+>
+> Requires Node.js ≥ 18. Each entry point ships as ESM, CommonJS, UMD, a minified IIFE, and a `.d.ts`.
 
-| Entry point    | Import                                                     | What you get                                                                  |
-| -------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| **Full**       | `import { collection } from "umosql"`                      | MongoDB → SQL query builder (SQL strings, no driver)                          |
-| **Lite**       | `import lite from "umosql/lite"`                           | Smaller builder: JSON paths + basic aggregation                               |
-| **Tiny**       | `import tiny from "umosql/tiny"`                           | Smallest builder: basic filters/expressions, `$set` only                      |
-| **Schemaless** | `import { createSchemalessAdapter } from "umosql/schemaless"` | Executes queries: wraps a `better-sqlite3` / `pg` / `mysql2` handle        |
-| **Memory**     | `import { collection } from "umosql/memory"`               | In-memory MongoDB-style engine (no SQL, no driver)                            |
-| **Client**     | `import { createSchemalessClient } from "umosql/client"`   | One factory for `memory` / `sqlite` / `pg` / `mysql` / `mongodb` / any executor |
+## Entry points
 
-> **umosql has zero runtime dependencies.** No driver is bundled, and none is declared as a
-> dependency or peer dependency — so nothing gets auto-installed into your project. You install
-> the driver you want, and it is loaded lazily only when you request that backend.
-> `dotenv` is optional in the same way: `.env` is read when it is installed, silently skipped when it is not.
+Everything below ships in the single `umosql` package — import only what you need:
 
-## 📊 Feature Comparison
+| Entry point | Import | Size (gzip) | What you get |
+| --- | --- | --- | --- |
+| **Full** | `import { createQueryBuilder, ... } from "umosql"` | ~8.6 kB | Complete operator packs + `createQueryBuilder` (SQL strings, no driver) |
+| **Lite** | `import lite from "umosql/lite"` | ~8.4 kB | Prebuilt builder: all filter ops, most expression ops, all update ops, basic stages |
+| **Tiny** | `import tiny from "umosql/tiny"` | ~6.6 kB | Prebuilt builder: 10 filter ops, 13 expression ops, `$set` only |
+| **Schemaless** | `import { createSchemalessAdapter } from "umosql/schemaless"` | ~22 kB | Executes queries: wraps a `better-sqlite3` / `pg` / `mysql2` handle, or any `execute(sql, params)` |
+| **Memory** | `import { collection } from "umosql/memory"` | ~8.3 kB | In-memory MongoDB-style engine (no SQL, no driver) |
+| **Client** | `import { createSchemalessClient } from "umosql/client"` | ~25.6 kB | One async factory for `memory` / `sqlite` / `pg` / `mysql` / `mongodb` / `sql` |
 
-| Feature                  | Full               | Lite               | Tiny               |
-| ------------------------ | ------------------ | ------------------ | ------------------ |
-| **Size (gzip)**          | [![Full](https://deno.bundlejs.com/badge?q=umosql/lite&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql) | [![Lite](https://deno.bundlejs.com/badge?q=umosql/lite&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql/lite) | [![Tiny](https://deno.bundlejs.com/badge?q=umosql/tiny&treeshake=[*]&config={"compression":"brotli"})](https://unpkg.com/umosql/tiny) |
-| **JSON Paths**           | ✅                 | ✅                 | ❌                 |
-| **JSON Updates**         | ✅                 | ✅ Basic           | ❌                 |
-| **Aggregation**          | ✅                 | ✅ Basic           | ✅ Basic           |
-| **Filter Operators**     | ✅ All             | ✅ All             | ✅ Basic           |
-| **Expression Operators** | ✅ All             | ✅ Basic           | ✅ Basic           |
-| **Update Operators**     | ✅ All             | ✅ Basic           | ✅ $set            |
-| **Collection API**       | ✅                 | ✅                 | ✅                 |
-| **FindQuery**            | ✅                 | ✅                 | ✅                 |
-| **Extend/Add**           | ✅                 | ✅                 | ✅                 |
-| **Multi-DB**             | ✅ PG/MySQL/SQLite | ✅ PG/MySQL/SQLite | ✅ PG/MySQL/SQLite |
+The query-builder entries (`umosql`, `/lite`, `/tiny`) only **produce SQL strings**. The adapter entries
+(`/schemaless`, `/memory`, `/client`) **execute** them against a database.
 
+> **Why is the full builder not pre-wired?** The `umosql` entry exports the raw operator packs
+> (`filterOps`, `exprOps`, `updateOps`, `stageHandlers`) plus `createQueryBuilder` so bundlers can
+> tree-shake every operator you don't use. `/lite` and `/tiny` are pre-wired convenience builds.
+> Calling `collection()` from the bare `umosql` entry throws `Unknown operator: …` by design —
+> see [Quick start](#quick-start) for the one-liner that wires it up.
 
-## 🎯 When to Use Which Version?
+## Quick start
 
-### Use **FULL** when:
-
-- You need JSON field support (`profile.score`)
-- You need aggregation pipelines ($group, $match, etc.)
-- Complex analytics queries
-- MongoDB-to-SQL migration
-
-### Use **LITE** when:
-
-- You need JSON fields but not aggregation
-- Medium complexity apps
-- REST APIs with JSON columns
-- Balance between features and size
-
-### Use **TINY** when:
-
-- Simple CRUD operations only
-- No JSON columns needed
-- Smallest bundle size required
-- Simple web apps or microservices
-
-All three versions are production-ready! 🚀
-
-# 📦 umosql
-
-> **MongoDB-style queries for SQL databases and more**
-
-Transform MongoDB queries into SQL (PostgreSQL, MySQL, SQLite) with a universal adapter system. Build REST APIs, serverless functions, or use in-memory storage with the same familiar MongoDB syntax.
-
----
-
-## 🌟 Features
-
-- ✅ **MongoDB-compatible query syntax**
-- ✅ **SQL generation** for PostgreSQL, MySQL, SQLite
-- ✅ **JSON field support** for nested objects (Full & Lite)
-- ✅ **Aggregation pipelines** ($group, $match, $project, etc. in Full)
-- ✅ **Schemaless adapters** for memory, MongoDB, SQLite, PostgreSQL, MySQL
-- ✅ **Auto ID creation strategies** (`auto`, `mongo`, `custom`) with default `_id`
-- ✅ **Serverless friendly** — works anywhere JavaScript runs
-- ✅ **Three versions** — choose your feature set and bundle size
-
----
-
-## 📦 Three Versions
-
-| Version  | Size (gzip) | JSON Support | Aggregation | Use Case                        |
-| -------- | ----------- | ------------ | ----------- | ------------------------------- |
-| **Full** | ~6.61 kB    | ✅ Yes       | ✅ Yes      | Complete MongoDB compatibility  |
-| **Lite** | ~5.99 kB    | ✅ Yes       | ❌ No       | JSON without aggregation        |
-| **Tiny** | ~4.95 kB    | ❌ No        | ✅ Basic    | Minimal ops, smallest bundle    |
-
----
-
-## 🚀 Quick Start
-
-### Installation
-
-```bash
-npm i umosql
-```
+### 1. Query builder → SQL strings (no database required)
 
 ```javascript
-import { collection } from "umosql";                         // query builder
-import lite from "umosql/lite";                              // smaller builder
-import tiny from "umosql/tiny";                              // smallest builder
-import { createSchemalessAdapter } from "umosql/schemaless"; // adapters
-import { collection as memCollection } from "umosql/memory"; // in-memory engine
-import { createSchemalessClient } from "umosql/client";      // unified client
-```
+import { createQueryBuilder, filterOps, exprOps, updateOps, stageHandlers } from "umosql";
 
-### Basic Usage
+// Wire up the full operator set once (tree-shakeable: pick only what you need)
+const qb = createQueryBuilder({ filterOps, exprOps, updateOps, stageHandlers });
 
-```javascript
-import { collection } from "umosql";
+const users = qb.collection("users", "pg"); // 'pg' | 'mysql' | 'sqlite'
 
-const users = collection("users", "pg"); // 'pg', 'mysql', or 'sqlite'
-
-// Generate SQL from MongoDB-style queries
 users.find({ age: { $gte: 18 } }).toSQL();
 // SELECT * FROM users WHERE age >= 18
+
+users.find({ status: "active" }, { name: 1, email: 1 }).sort({ age: -1 }).skip(10).limit(5).toSQL();
+// SELECT name, email FROM users WHERE status = 'active' ORDER BY age DESC LIMIT 5 OFFSET 10
 
 users.updateOne(
     { email: "alice@example.com" },
@@ -140,422 +117,228 @@ users.updateOne(
 // UPDATE users SET status = 'active', loginCount = loginCount + 1
 // WHERE email = 'alice@example.com' LIMIT 1
 
-users.insertMany([
-	{ name: "Alice", age: 25 },
-	{ name: "Bob", age: 30 },
-]);
+users.insertMany([{ name: "Alice", age: 25 }, { name: "Bob", age: 30 }]);
 // INSERT INTO users (name, age) VALUES ('Alice', 25), ('Bob', 30)
+
+// find/findOne return a chainable FindQuery; every other method returns the SQL string directly.
 ```
 
-### Small Examples
-
-PostgreSQL (JSON and estimated count):
+Or use a prebuilt variant:
 
 ```javascript
-import pkg from 'pg';
-import { createSchemalessAdapter } from 'umosql/schemaless';
-const client = new pkg.Client({ host, user, password, database });
-await client.connect();
-const { adapter } = createSchemalessAdapter(client, 'pg');
-const users = adapter.collection('users');
-await users.insertOne({ name: 'Alice', profile: { score: 85 } });
-await users.updateOne({ name: 'Alice' }, { $inc: { 'profile.score': 5 } });
-console.log(await users.estimatedDocumentCount());
-await client.end();
+import lite from "umosql/lite";
+import tiny from "umosql/tiny";
+
+lite.collection("users", "pg").find({ "profile.country": "FR" }).toSQL();
+tiny.collection("users", "sqlite").find({ age: { $gte: 18 } }).toSQL();
 ```
 
-MySQL (JSON update and count):
+### 2. Schemaless adapter — executes against a real database
+
+Tables, columns and JSON columns are created and evolved automatically from your documents:
 
 ```javascript
-import mysql from 'mysql2/promise';
-import { createSchemalessAdapter } from 'umosql/schemaless';
-const conn = await mysql.createConnection({ host, user, password, database });
-const { adapter } = createSchemalessAdapter(conn, 'mysql');
-const users = adapter.collection('users');
-await users.insertOne({ name: 'Alice', profile: { score: 85 } });
-await users.updateOne({ name: 'Alice' }, { $set: { 'profile.score': 90 } });
-console.log(await users.estimatedDocumentCount());
-await conn.end();
+import Database from "better-sqlite3";
+import { createSchemalessAdapter } from "umosql/schemaless";
+
+const { adapter } = createSchemalessAdapter(new Database(":memory:"), "sqlite");
+const users = adapter.collection("users");
+
+await users.insertOne({ name: "Alice", profile: { score: 85 } }); // creates table + columns
+await users.updateOne({ name: "Alice" }, { $inc: { "profile.score": 5 } });
+console.log(await users.estimatedDocumentCount()); // 1
 ```
 
-MongoDB (drop-in behavior):
+### 3. Unified client — one factory, every backend
 
 ```javascript
-import { createSchemalessClient } from 'umosql/client';
-const client = await createSchemalessClient('mongodb', { host, user, password, database });
-const users = client.db(database).collection('users');
-await users.insertOne({ name: 'Alice', profile: { score: 85 } });
-await users.updateOne({ name: 'Alice' }, { $inc: { 'profile.score': 5 } });
-console.log(await users.estimatedDocumentCount());
+import { createSchemalessClient } from "umosql/client";
+
+const client = await createSchemalessClient("memory"); // or 'sqlite' | 'pg' | 'mysql' | 'mongodb' | 'sql'
+const users = client.db("app").collection("users");
+
+await users.insertOne({ name: "Alice", age: 25 });
+const adults = await (await users.find({ age: { $gte: 18 } })).sort({ age: -1 }).toArray();
+console.log(adults, await users.countDocuments({}));
 await client.close();
 ```
 
-In-memory (no driver, great for tests and edge runtimes):
+Runnable tours: `node examples/client.js` (works with zero configuration — it falls back to memory/SQLite
+and exercises live backends only when their env vars are set).
+
+## Choosing a version (Full / Lite / Tiny)
+
+| Feature | Full | Lite | Tiny |
+| --- | --- | --- | --- |
+| **Filter operators** | ✅ All 16 | ✅ All 16 | ✅ 10 (`$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`, `$like`, `$exists`) |
+| **JSON paths** (`profile.score`) | ✅ | ✅ | ✅ |
+| **Update operators** | ✅ All 8 | ✅ All 8 | ✅ `$set` only |
+| **Expression operators** | ✅ All 50 | ✅ 36 | ✅ 13 |
+| **Aggregation stages** | ✅ All 12 | ✅ 7 basic | ✅ 7 basic |
+| **Custom operator packs** | ✅ `createQueryBuilder` | via `extend` | via `extend` |
+| **Size (gzip)** | ~8.6 kB | ~8.4 kB | ~6.6 kB |
+
+Stages included in Lite/Tiny: `$match`, `$project`, `$group`, `$sort`, `$limit`, `$skip`, `$count`.
+Full adds `$addFields`/`$set`, `$sample`, `$sortByCount`, `$bucket`, `$unwind` (memory).
+
+### Use **Full** when
+
+- You want every operator, including `$regex`, `$ilike`, `$between`, `$mod`, `$switch`, date parts and casts
+- You build custom bundles with only the operators you need (`createQueryBuilder`)
+- You are migrating from MongoDB to SQL
+
+### Use **Lite** when
+
+- You want the full filter/update surface with a smaller expression set
+- You need JSON columns and basic aggregation without the long tail of expression operators
+
+### Use **Tiny** when
+
+- Simple CRUD: equality/range/`$in`/`$like` filters and `$set` updates
+- Smallest bundle size matters (edge functions, embeds)
+
+All three produce SQL for PostgreSQL, MySQL and SQLite, and all three support JSON paths.
+
+## Query examples
+
+All examples below use the wired builder from [Quick start](#quick-start):
 
 ```javascript
-import { createSchemalessClient } from 'umosql/client';
-const client = await createSchemalessClient('memory');
-const users = client.db('app').collection('users');
-await users.insertOne({ name: 'Alice', profile: { score: 85 } });
-console.log(await (await users.find({ 'profile.score': { $gte: 80 } })).toArray());
-await client.close();
+const users = qb.collection("users", "pg");
 ```
 
-SQLite (in-memory):
+### Basic queries
 
 ```javascript
-import Database from 'better-sqlite3';
-import { createSchemalessAdapter } from 'umosql/schemaless';
-const { adapter } = createSchemalessAdapter(new Database(':memory:'), 'sqlite');
-const users = adapter.collection('users');
-await users.insertOne({ name: 'Alice', profile: { score: 85 } });
-await users.updateOne({ name: 'Alice' }, { $inc: { 'profile.score': 5 } });
-console.log(await users.estimatedDocumentCount());
-```
-
-### Non‑Mongo Methods (SQL adapter helpers)
-
-- `findMany({ filter, projection, sort, limit, skip, page, pageSize, includeTotal })`
-  - Returns `{ items, total?, page?, pageSize? }`
-  - Convenience pagination with optional total computation
-- `createTableWithSchema(tableName, jsonSchema)`
-  - Creates a table from JSON Schema properties and `required`
-- `getTableSchema(tableName)`
-  - Reads schema from information_schema / PRAGMA
-- `addColumn(table, name, type, { required, unique, default })`
-- `renameColumn(table, old, new)`
-- `modifyColumn(table, name, newType, { required, unique, default })`
-- `listCollections()`
-- `dropColumn(table, name)`
-- `dropIndex(table, indexName)`
-
-APIs above mirror common SQL DDL. See:
-- PostgreSQL: https://www.postgresql.org/docs/current/sql-commands.html
-- MySQL: https://dev.mysql.com/doc/refman/8.0/en/sql-statements.html
-- SQLite: https://sqlite.org/lang.html
-
-## Serverless Examples
-
-- Neon (Postgres over HTTP): `examples/serverless-neon.js`
-- Turso (SQLite over HTTP): `examples/serverless-turso.js`
-
-Env vars:
-- Neon: `NEON_HTTP_URL`, `NEON_API_KEY`
-- Turso: `TURSO_HTTP_URL`, `TURSO_TOKEN`
-
-Notes:
-- Uses `createSQLAdapter` with a custom `execute(sql, params)` that calls the provider’s HTTP API.
-- Compose queries using the QueryBuilder: `qb.collection('users', 'pg'|'mysql'|'sqlite')`.
-- DDL and JSON operators vary by backend; see vendor docs above.
-
-### Drizzle Serverless
-
-- Neon (drizzle‑orm/neon‑http): `examples/serverless-neon-drizzle.js`
-- Turso (drizzle‑orm/libsql/http): `examples/serverless-turso-drizzle.js`
-
-Examples mirror the provider docs; install drizzle adapters to run them.
-
-## Husky
-
-- Install: add dev dep `husky` and ensure `"prepare": "husky install"` in `package.json` (already set).
-- Initialize: run `npx husky init` or `npx husky install` after install.
-- Add a pre-commit hook:
-  - `npx husky add .husky/pre-commit "npm run test"`
-  - Optionally include lint/typecheck commands.
-- Windows PowerShell: if scripts are blocked, enable with `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` then rerun the Husky commands.
-Tiny/Lite usage:
-
-```javascript
-import tiny from 'umosql/tiny';
-import lite from 'umosql/lite';
-tiny.filter({ age: { $eq: 25 } }, 'sqlite');
-lite.filter({ 'profile.country': 'FR' }, 'pg');
-```
-
-## ⚙️ Custom Builds (Ultra-Minimal)
-
-- You can create your own builder with only the operators you need to reduce bundle size.
-- Example:
-
-```javascript
-import { createQueryBuilder, filterOps, exprOps, updateOps } from 'umosql';
-
-const custom = createQueryBuilder({
-  filterOps: { $eq: filterOps.$eq, $in: filterOps.$in },
-  exprOps: { $add: exprOps.$add, $upper: exprOps.$upper },
-  updateOps: { $set: updateOps.$set },
-  stageHandlers: {} // no aggregation
-});
-
-export const { collection, filter } = custom;
-```
-
-This approach lets you tailor the library to your use case and keep bundles extremely small.
-
----
-
-## 📖 Table of Contents
-
-- [Installation](#installation)
-- [Query Examples](#query-examples)
-  - [Basic Queries](#basic-queries)
-  - [Array Operators ($in, $nin)](#array-operators-in-nin)
-  - [Logical Operators](#logical-operators)
-  - [Pattern Matching](#pattern-matching)
-  - [JSON Field Queries](#json-field-queries)
-- [CRUD Operations](#crud-operations)
-  - [Find Operations](#find-operations)
-  - [Insert Operations](#insert-operations)
-  - [Update Operations](#update-operations)
-  - [Delete Operations](#delete-operations)
-- [Aggregation Pipeline](#aggregation-pipeline-full-version)
-- [Filter Operators](#filter-operators)
-- [Update Operators](#update-operators)
-- [Expression Operators](#expression-operators)
-- [Custom Operators](#custom-operators)
-- [Operator Support Matrix](#operator-support-matrix)
-- [Universal Adapters](#-universal-adapters)
-- [Schemaless Adapters](#schemaless-adapters)
-- [API Reference](#api-reference)
-
----
-
-## 🔍 Query Examples
-
-### Basic Queries
-
-```javascript
-import { collection } from "umosql";
-
-const users = collection("users", "pg");
-
 // Equality
 users.find({ status: "active" }).toSQL();
 // SELECT * FROM users WHERE status = 'active'
 
-// Greater than
-users.find({ age: { $gt: 18 } }).toSQL();
-// SELECT * FROM users WHERE age > 18
-
-// Greater than or equal
+// Range + comparison operators
 users.find({ age: { $gte: 18 } }).toSQL();
-// SELECT * FROM users WHERE age >= 18
-
-// Less than
-users.find({ age: { $lt: 65 } }).toSQL();
-// SELECT * FROM users WHERE age < 65
-
-// Less than or equal
-users.find({ age: { $lte: 65 } }).toSQL();
-// SELECT * FROM users WHERE age <= 65
-
-// Not equal
+users.find({ age: { $gt: 18, $lt: 65 } }).toSQL();
 users.find({ status: { $ne: "banned" } }).toSQL();
-// SELECT * FROM users WHERE status != 'banned'
 
 // Multiple conditions (implicit AND)
 users.find({ age: { $gte: 18 }, status: "active" }).toSQL();
 // SELECT * FROM users WHERE age >= 18 AND status = 'active'
+
+// Between and modulo (Full/Lite)
+users.find({ age: { $between: [18, 65] } }).toSQL();
+// age BETWEEN 18 AND 65
+users.find({ id: { $mod: [10, 0] } }).toSQL();
+// (id % 10) = 0
 ```
 
-### Array Operators ($in, $nin)
+### Array operators ($in, $nin)
 
 ```javascript
-// IN - Match any value in array
 users.find({ status: { $in: ["active", "pending", "verified"] } }).toSQL();
 // SELECT * FROM users WHERE status IN ('active', 'pending', 'verified')
 
-users.find({ age: { $in: [18, 21, 25, 30] } }).toSQL();
-// SELECT * FROM users WHERE age IN (18, 21, 25, 30)
-
-// NIN - Not in array
 users.find({ role: { $nin: ["admin", "moderator"] } }).toSQL();
 // SELECT * FROM users WHERE role NOT IN ('admin', 'moderator')
 
-users.find({ status: { $nin: ["banned", "suspended", "deleted"] } }).toSQL();
-// SELECT * FROM users WHERE status NOT IN ('banned', 'suspended', 'deleted')
-
-// Empty array edge cases
+// Empty-array edge cases are handled
 users.find({ status: { $in: [] } }).toSQL();
-// SELECT * FROM users WHERE status = 1 AND 1 = 0 (always false)
+// ... WHERE status = 1 AND 1 = 0 (always false)
 
 users.find({ status: { $nin: [] } }).toSQL();
-// SELECT * FROM users WHERE status = 1 OR 1 = 1 (always true)
-
-// Combined with other operators
-users
-	.find({
-		age: { $gte: 18 },
-		status: { $in: ["active", "verified"] },
-	})
-	.toSQL();
-// SELECT * FROM users WHERE age >= 18 AND status IN ('active', 'verified')
+// ... WHERE status = 1 OR 1 = 1 (always true)
 ```
 
-### Logical Operators
+### Logical operators
 
 ```javascript
-// $and - All conditions must be true
-users
-	.find({
-		$and: [{ age: { $gte: 18 } }, { age: { $lte: 65 } }, { status: "active" }],
-	})
-	.toSQL();
-// SELECT * FROM users WHERE (age >= 18 AND age <= 65 AND status = 'active')
+users.find({ $and: [{ age: { $gte: 18 } }, { status: "active" }] }).toSQL();
+// SELECT * FROM users WHERE (age >= 18 AND status = 'active')
 
-// $or - Any condition must be true
-users
-	.find({
-		$or: [
-			{ role: "admin" },
-			{ role: "moderator" },
-			{ permissions: { $in: ["write", "delete"] } },
-		],
-	})
-	.toSQL();
-// SELECT * FROM users WHERE (role = 'admin' OR role = 'moderator' OR permissions IN ('write', 'delete'))
+users.find({ $or: [{ role: "admin" }, { role: "moderator" }] }).toSQL();
+// SELECT * FROM users WHERE (role = 'admin' OR role = 'moderator')
 
-// $not - Negate condition
-users
-	.find({
-		$not: { status: "banned" },
-	})
-	.toSQL();
+users.find({ $not: { status: "banned" } }).toSQL();
 // SELECT * FROM users WHERE NOT (status = 'banned')
 
-// Complex nested logic
-users
-	.find({
-		$and: [
-			{ age: { $gte: 18 } },
-			{ $or: [{ status: "active" }, { status: "verified" }] },
-		],
-	})
-	.toSQL();
+// Nested logic
+users.find({
+    $and: [
+        { age: { $gte: 18 } },
+        { $or: [{ status: "active" }, { status: "verified" }] },
+    ],
+}).toSQL();
 // SELECT * FROM users WHERE (age >= 18 AND (status = 'active' OR status = 'verified'))
 ```
 
-### Pattern Matching
+### Pattern matching
 
 ```javascript
-// LIKE - Pattern matching
 users.find({ email: { $like: "%@gmail.com" } }).toSQL();
 // SELECT * FROM users WHERE email LIKE '%@gmail.com'
 
-users.find({ name: { $like: "John%" } }).toSQL();
-// SELECT * FROM users WHERE name LIKE 'John%'
-
-// ILIKE - Case-insensitive (PostgreSQL) / LOWER LIKE (others)
 users.find({ name: { $ilike: "alice" } }).toSQL();
 // PostgreSQL: SELECT * FROM users WHERE name ILIKE 'alice'
-// Others: SELECT * FROM users WHERE LOWER(name) LIKE LOWER('alice')
+// MySQL/SQLite: LOWER(name) LIKE LOWER('alice')
 
-// NOT LIKE
 users.find({ email: { $nlike: "%@temporary.com" } }).toSQL();
-// SELECT * FROM users WHERE email NOT LIKE '%@temporary.com'
-
-// NOT ILIKE
 users.find({ username: { $nilike: "admin%" } }).toSQL();
-// PostgreSQL: SELECT * FROM users WHERE username NOT ILIKE 'admin%'
 
-// REGEX - Regular expression matching
+// Regex: PG uses `~`, MySQL uses REGEXP, SQLite needs a REGEXP UDF (Full/Lite)
 users.find({ code: { $regex: /^[A-Z]{3}\d{3}$/ } }).toSQL();
 // PostgreSQL: SELECT * FROM users WHERE code ~ '^[A-Z]{3}\d{3}$'
 // MySQL: SELECT * FROM users WHERE code REGEXP '^[A-Z]{3}\d{3}$'
-
-users
-	.find({ email: { $regex: "^[a-z0-9._%+-]+@[a-z0-9.-]+.[a-z]{2,}$" } })
-	.toSQL();
 ```
 
-### JSON Field Queries (Full & Lite)
+### JSON field queries
+
+All three builders support dotted JSON paths; each dialect uses its native JSON functions:
 
 ```javascript
-// Query nested JSON fields
 users.find({ "profile.country": "France" }).toSQL();
-// PostgreSQL: SELECT * FROM users WHERE (profile::jsonb #>> '{country}') = 'France'
-// MySQL: SELECT * FROM users WHERE json_extract(profile, '$.country') = 'France'
-// SQLite: SELECT * FROM users WHERE json_extract(profile, '$.country') = 'France'
+// PostgreSQL: WHERE (profile::jsonb #>> '{country}') = 'France'
+// MySQL:      WHERE JSON_UNQUOTE(JSON_EXTRACT(profile, '$.country')) = 'France'
+// SQLite:     WHERE json_extract(profile, '$.country') = 'France'
 
-// Deep nested paths
-users.find({ "profile.address.city": "Paris" }).toSQL();
-// PostgreSQL: WHERE (profile::jsonb #>> '{address,city}') = 'Paris'
-// MySQL: WHERE json_extract(profile, '$.address.city') = 'Paris'
-// SQLite: WHERE json_extract(profile, '$.address.city') = 'Paris'
+users.find({ "profile.address.city": "Paris" }).toSQL(); // deep paths
+users.find({ "orders.0.status": "completed" }).toSQL();  // array index access
+users.find({ "profile.score": { $gte: 80 } }).toSQL();   // with operators
+// PostgreSQL: WHERE ((profile::jsonb #>> '{score}'))::numeric >= 80
 
-// Array index access
-users.find({ "orders.0.status": "completed" }).toSQL();
-// PostgreSQL: WHERE (orders::jsonb #>> '{0,status}') = 'completed'
-// MySQL: WHERE json_extract(orders, '$.0.status') = 'completed'
-// SQLite: WHERE json_extract(orders, '$.0.status') = 'completed'
-
-// JSON field with operators
-users.find({ "profile.score": { $gte: 80 } }).toSQL();
-// PostgreSQL: WHERE (profile::jsonb #>> '{score}')::numeric >= 80
-
-users.find({ "tags.0": { $in: ["featured", "premium"] } }).toSQL();
-
-// Multiple JSON conditions
-users
-	.find({
-		"profile.country": "USA",
-		"profile.age": { $gte: 18 },
-		"settings.notifications": true,
-	})
-	.toSQL();
+users.find({
+    "profile.country": "USA",
+    "profile.age": { $gte: 18 },
+}).toSQL();
 ```
 
 ---
 
-## 📝 CRUD Operations
+## CRUD operations
 
-### Find Operations
+### Find operations
 
 ```javascript
-const users = collection("users", "pg");
-
-// Simple find
-users.find({ city: "Paris" }).toSQL();
-// SELECT * FROM users WHERE city = 'Paris'
-
-// With projection (select specific fields)
-users.find({ active: true }, { name: 1, email: 1, age: 1 }).toSQL();
-// SELECT name, email, age FROM users WHERE active = TRUE
-
-// Projection as array
-users.find({ active: true }, ["name", "email"]).toSQL();
+// Projection (object or array)
+users.find({ active: true }, { name: 1, email: 1 }).toSQL();
 // SELECT name, email FROM users WHERE active = TRUE
+users.find({ active: true }, ["name", "email"]).toSQL();
 
 // Chainable query builder
 users
-	.find({ age: { $gte: 18 } })
-	.select({ name: 1, email: 1 })
-	.sort({ age: -1, name: 1 })
-	.skip(10)
-	.limit(5)
-	.toSQL();
+    .find({ age: { $gte: 18 } })
+    .select({ name: 1, email: 1 })
+    .sort({ age: -1, name: 1 })
+    .skip(10)
+    .limit(5)
+    .toSQL();
 // SELECT name, email FROM users WHERE age >= 18
 // ORDER BY age DESC, name ASC LIMIT 5 OFFSET 10
 
-// Sort only
-users.find({}).sort({ createdAt: -1 }).toSQL();
-// SELECT * FROM users ORDER BY createdAt DESC
-
-// DISTINCT
+// Distinct
 users.find({ country: "USA" }).select(["state"]).distinct().toSQL();
 // SELECT DISTINCT state FROM users WHERE country = 'USA'
 
-// Find one
+// Find one / count
 users.findOne({ email: "alice@example.com" }).toSQL();
 // SELECT * FROM users WHERE email = 'alice@example.com' LIMIT 1
-
-// Find by ID
-users.findOne({ id: 123 }).toSQL();
-// SELECT * FROM users WHERE id = 123 LIMIT 1
-
-// Count documents
-users.find({ status: "active" }).count().toSQL();
-// SELECT COUNT(*) AS count FROM users WHERE status = 'active'
 
 users.countDocuments({ age: { $gte: 18 } });
 // SELECT COUNT(*) AS count FROM users WHERE age >= 18
@@ -563,956 +346,311 @@ users.countDocuments({ age: { $gte: 18 } });
 // Distinct values
 users.distinct("city", { country: "USA" });
 // SELECT DISTINCT city FROM users WHERE country = 'USA'
-
-users.distinct("status");
-// SELECT DISTINCT status FROM users
 ```
 
-### Insert Operations
+### Insert operations
 
 ```javascript
-// Insert one document
-users.insertOne({
-	name: "Alice",
-	age: 25,
-	email: "alice@example.com",
-	status: "active",
-});
-// INSERT INTO users (name, age, email, status)
-// VALUES ('Alice', 25, 'alice@example.com', 'active')
+users.insertOne({ name: "Alice", age: 25, email: "alice@example.com" });
+// INSERT INTO users (name, age, email) VALUES ('Alice', 25, 'alice@example.com')
 
-// Insert with nested JSON
-users.insertOne({
-	name: "Bob",
-	profile: {
-		country: "USA",
-		city: "New York",
-		score: 95,
-	},
-});
-// PostgreSQL: profile stored as JSONB
-// Others: profile stored as JSON string
+// Nested JSON is serialized per dialect (JSONB on PG, JSON string elsewhere)
+users.insertOne({ name: "Bob", profile: { country: "USA", score: 95 } });
 
-// Insert many documents
+// Missing fields become NULL
 users.insertMany([
-	{ name: "Charlie", age: 22, status: "pending" },
-	{ name: "David", age: 28, status: "active" },
-	{ name: "Eve", age: 35, status: "active" },
-]);
-// INSERT INTO users (name, age, status) VALUES
-// ('Charlie', 22, 'pending'),
-// ('David', 28, 'active'),
-// ('Eve', 35, 'active')
-
-// Documents with different fields (NULL for missing)
-users.insertMany([
-	{ name: "Frank", age: 30 },
-	{ name: "Grace", email: "grace@example.com" },
-	{ name: "Henry", age: 40, email: "henry@example.com" },
+    { name: "Frank", age: 30 },
+    { name: "Grace", email: "grace@example.com" },
 ]);
 // INSERT INTO users (name, age, email) VALUES
-// ('Frank', 30, NULL),
-// ('Grace', NULL, 'grace@example.com'),
-// ('Henry', 40, 'henry@example.com')
+// ('Frank', 30, NULL), ('Grace', NULL, 'grace@example.com')
 
-// With RETURNING clause (PostgreSQL)
-users.insertOne({ name: "Ivan" }, { returning: ["id", "name", "createdAt"] });
-// INSERT INTO users (name) VALUES ('Ivan') RETURNING id, name, createdAt
-
-users.insertMany([{ name: "Jack" }, { name: "Kate" }], { returning: "*" });
-// INSERT INTO users (name) VALUES ('Jack'), ('Kate') RETURNING *
+// RETURNING (PostgreSQL)
+users.insertOne({ name: "Ivan" }, { returning: ["id", "name"] });
+// INSERT INTO users (name) VALUES ('Ivan') RETURNING id, name
+users.insertMany([{ name: "Jack" }], { returning: "*" });
 ```
 
-### Update Operations
+### Update operations
 
 ```javascript
-// Update one document
-users.updateOne(
-	{ email: "alice@example.com" },
-	{ $set: { status: "verified", verifiedAt: new Date() } }
-);
-// UPDATE users SET status = 'verified', verifiedAt = '2024-01-01 12:00:00'
-// WHERE email = 'alice@example.com' LIMIT 1
+users.updateOne({ email: "alice@example.com" }, { $set: { status: "verified" } });
+// UPDATE users SET status = 'verified' WHERE email = 'alice@example.com' LIMIT 1
 
-// Update many documents
-users.updateMany(
-	{ age: { $lt: 18 } },
-	{ $set: { role: "minor", permissions: [] } }
-);
-// UPDATE users SET role = 'minor', permissions = '[]' WHERE age < 18
+users.updateMany({ age: { $lt: 18 } }, { $set: { role: "minor" } });
 
-// Increment values
+// Arithmetic / bounds
 users.updateOne({ id: 1 }, { $inc: { loginCount: 1, points: 10 } });
-// UPDATE users SET loginCount = loginCount + 1, points = points + 10
-// WHERE id = 1 LIMIT 1
-
-// Multiply values
+// UPDATE users SET loginCount = loginCount + 1, points = points + 10 WHERE id = 1 LIMIT 1
 users.updateOne({ id: 1 }, { $mul: { score: 1.1 } });
-// UPDATE users SET score = score * 1.1 WHERE id = 1 LIMIT 1
+users.updateMany({}, { $min: { price: 9.99 } });   // LEAST/MIN
+users.updateMany({}, { $max: { discount: 50 } });  // GREATEST/MAX
 
-// Set to minimum
-users.updateMany({}, { $min: { minPrice: 10 } });
-// UPDATE users SET minPrice = LEAST(minPrice, 10)
-
-// Set to maximum
-users.updateMany({}, { $max: { maxDiscount: 50 } });
-// UPDATE users SET maxDiscount = GREATEST(maxDiscount, 50)
-
-// Unset fields (set to NULL)
-users.updateOne({ id: 1 }, { $unset: { tempToken: "", tempData: "" } });
-// UPDATE users SET tempToken = NULL, tempData = NULL WHERE id = 1 LIMIT 1
-
-// Rename fields
+// Null out or rename fields
+users.updateOne({ id: 1 }, { $unset: { tempToken: "" } });
 users.updateMany({}, { $rename: { oldField: "newField" } });
-// UPDATE users SET newField = oldField, oldField = NULL
 
-// Current timestamp
+// Current timestamp per dialect
+users.updateOne({ id: 1 }, { $currentDate: { updatedAt: true } });
+// PG: CURRENT_TIMESTAMP  |  MySQL: NOW()  |  SQLite: datetime('now')
+
+// Combined operators
 users.updateOne(
-	{ id: 1 },
-	{ $currentDate: { lastLogin: true, updatedAt: true } }
-);
-// PostgreSQL: UPDATE users SET lastLogin = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP WHERE id = 1 LIMIT 1
-// MySQL: UPDATE users SET lastLogin = NOW(), updatedAt = NOW() WHERE id = 1 LIMIT 1
-// SQLite: UPDATE users SET lastLogin = datetime('now'), updatedAt = datetime('now') WHERE id = 1 LIMIT 1
-
-// Multiple operators combined
-users.updateOne(
-	{ id: 1 },
-	{
-		$set: { status: "active", lastLogin: new Date() },
-		$inc: { loginCount: 1, points: 5 },
-		$unset: { resetToken: "" },
-		$currentDate: { updatedAt: true },
-	}
+    { id: 1 },
+    {
+        $set: { status: "active" },
+        $inc: { loginCount: 1 },
+        $unset: { resetToken: "" },
+        $currentDate: { updatedAt: true },
+    }
 );
 
-// Update with $in filter
-users.updateMany(
-	{ status: { $in: ["pending", "unverified"] } },
-	{ $set: { needsVerification: true } }
-);
-// UPDATE users SET needsVerification = TRUE
-// WHERE status IN ('pending', 'unverified')
-
-// Update JSON fields (Full & Lite)
-users.updateOne(
-	{ id: 1 },
-	{ $set: { "profile.score": 95, "profile.level": 5 } }
-);
-// PostgreSQL: jsonb_set for efficient nested updates
-// MySQL: JSON_SET
-// SQLite: json_set
-
-// Increment JSON numeric field
-users.updateOne({ id: 1 }, { $inc: { "stats.views": 1, "stats.likes": 1 } });
-
-// Remove JSON field
+// JSON path updates (Full & Lite)
+users.updateOne({ id: 1 }, { $set: { "profile.score": 95 } });
+// PG: jsonb_set  |  MySQL: JSON_SET  |  SQLite: json_set
+users.updateOne({ id: 1 }, { $inc: { "stats.views": 1 } });
 users.updateOne({ id: 1 }, { $unset: { "profile.tempField": "" } });
 
-// With RETURNING (PostgreSQL)
-users.updateMany(
-	{ city: "Paris" },
-	{ $inc: { points: 10 } },
-	{ returning: ["id", "name", "points"] }
-);
-// UPDATE users SET points = points + 10 WHERE city = 'Paris' RETURNING id, name, points
+// RETURNING (PostgreSQL)
+users.updateMany({ city: "Paris" }, { $inc: { points: 10 } }, { returning: ["id", "points"] });
 ```
 
-### Delete Operations
+### Delete operations
 
 ```javascript
-// Delete one document
 users.deleteOne({ email: "old@example.com" });
 // DELETE FROM users WHERE email = 'old@example.com' LIMIT 1
 
-// Delete many documents
 users.deleteMany({ active: false });
-// DELETE FROM users WHERE active = FALSE
 
-users.deleteMany({ lastLogin: { $lt: "2023-01-01" } });
-// DELETE FROM users WHERE lastLogin < '2023-01-01'
+users.deleteMany({ status: { $in: ["banned", "deleted"] } });
 
-// Delete with $in
-users.deleteMany({ status: { $in: ["banned", "deleted", "suspended"] } });
-// DELETE FROM users WHERE status IN ('banned', 'deleted', 'suspended')
-
-// Delete with complex conditions
-users.deleteMany({
-	$and: [{ createdAt: { $lt: "2020-01-01" } }, { loginCount: { $eq: 0 } }],
-});
-
-// Delete all (requires explicit permission)
+// Deleting everything is guarded behind an explicit option
+users.deleteMany({}); // ❌ throws: requires a filter or allowDeleteAll
 users.deleteMany({}, { allowDeleteAll: true });
 // DELETE FROM users
 
-// Attempting to delete all without permission throws error
-users.deleteMany({}); // ❌ Error: deleteMany requires a filter or allowDeleteAll option
-
-// With RETURNING (PostgreSQL)
-users.deleteMany({ age: { $lt: 13 } }, { returning: ["id", "name", "email"] });
-// DELETE FROM users WHERE age < 13 RETURNING id, name, email
-
-users.deleteOne({ id: 123 }, { returning: "*" });
-// DELETE FROM users WHERE id = 123 LIMIT 1 RETURNING *
+// RETURNING (PostgreSQL)
+users.deleteMany({ age: { $lt: 13 } }, { returning: ["id", "name"] });
 ```
 
 ---
 
-## 📊 Aggregation Pipeline (Full Version)
-
-### Basic Aggregation
+## Aggregation pipeline
 
 ```javascript
-const orders = collection("orders", "pg");
+const orders = qb.collection("orders", "pg");
 
-// Group by and count
+// Group by and count (aggregate returns the SQL string directly)
+orders.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }]);
+// SELECT status AS _id, COUNT(*) AS count FROM (SELECT * FROM orders) AS t1 GROUP BY status// Match before group (WHERE)
 orders.aggregate([
-	{
-		$group: {
-			_id: "$status",
-			count: { $sum: 1 },
-		},
-	},
+    { $match: { status: "completed" } },
+    { $group: { _id: "$customerId", totalSpent: { $sum: "$amount" } } },
 ]);
-// SELECT status AS _id, SUM(1) AS count
-// FROM (SELECT * FROM orders) AS t1
-// GROUP BY status
 
-// Group with average
+// Match after group (HAVING)
 orders.aggregate([
-	{
-		$group: {
-			_id: "$customerId",
-			avgAmount: { $avg: "$amount" },
-			totalOrders: { $sum: 1 },
-		},
-	},
+    { $group: { _id: "$customerId", totalSpent: { $sum: "$amount" } } },
+    { $match: { totalSpent: { $gte: 1000 } } },
 ]);
-// SELECT customerId AS _id, AVG(amount) AS avgAmount, SUM(1) AS totalOrders
-// FROM (SELECT * FROM orders) AS t1
-// GROUP BY customerId
 
-// Group with min/max
+// Project with expressions
 orders.aggregate([
-	{
-		$group: {
-			_id: "$category",
-			minPrice: { $min: "$price" },
-			maxPrice: { $max: "$price" },
-			avgPrice: { $avg: "$price" },
-		},
-	},
+    {
+        $project: {
+            orderId: "$id",
+            total: { $multiply: ["$quantity", "$price"] },
+            discount: { $divide: ["$amount", 10] },
+        },
+    },
 ]);
-```
 
-### Match Before Group
-
-```javascript
-// Filter then aggregate
+// Sort / skip / limit
 orders.aggregate([
-	{ $match: { status: "completed" } },
-	{
-		$group: {
-			_id: "$customerId",
-			totalSpent: { $sum: "$amount" },
-			orderCount: { $sum: 1 },
-		},
-	},
+    { $group: { _id: "$customerId", totalSpent: { $sum: "$amount" } } },
+    { $sort: { totalSpent: -1 } },
+    { $limit: 10 },
 ]);
-// SELECT customerId AS _id, SUM(amount) AS totalSpent, SUM(1) AS orderCount
-// FROM (SELECT * FROM orders WHERE status = 'completed') AS t1
-// GROUP BY customerId
 
-// Match with $in
+// Count stage
 orders.aggregate([
-	{ $match: { status: { $in: ["completed", "shipped"] } } },
-	{
-		$group: {
-			_id: "$category",
-			total: { $sum: "$amount" },
-		},
-	},
+    { $match: { status: "completed", amount: { $gte: 100 } } },
+    { $count: "expensiveOrders" },
 ]);
-```
 
-### Match After Group (HAVING)
-
-```javascript
-// Aggregate then filter results
-orders.aggregate([
-	{
-		$group: {
-			_id: "$customerId",
-			totalSpent: { $sum: "$amount" },
-			orderCount: { $sum: 1 },
-		},
-	},
-	{ $match: { totalSpent: { $gte: 1000 } } },
-]);
-// SELECT customerId AS _id, SUM(amount) AS totalSpent, SUM(1) AS orderCount
-// FROM (SELECT * FROM orders) AS t1
-// GROUP BY customerId
-// HAVING totalSpent >= 1000
-
-// Multiple HAVING conditions
-orders.aggregate([
-	{
-		$group: {
-			_id: "$customerId",
-			avgAmount: { $avg: "$amount" },
-			count: { $sum: 1 },
-		},
-	},
-	{
-		$match: {
-			avgAmount: { $gte: 100 },
-			count: { $gte: 5 },
-		},
-	},
-]);
-```
-
-### Project Stage
-
-```javascript
-// Select and transform fields
-orders.aggregate([
-	{
-		$project: {
-			orderId: "$id",
-			customer: "$customerId",
-			total: "$amount",
-			status: 1,
-		},
-	},
-]);
-// SELECT id AS orderId, customerId AS customer, amount AS total, status AS status
-// FROM (SELECT * FROM orders) AS t1
-
-// With expressions
-orders.aggregate([
-	{
-		$project: {
-			orderId: "$id",
-			total: { $multiply: ["$quantity", "$price"] },
-			discount: { $divide: ["$amount", 10] },
-		},
-	},
-]);
-```
-
-### Sort, Skip, Limit
-
-```javascript
-// Sort aggregation results
-orders.aggregate([
-	{
-		$group: {
-			_id: "$customerId",
-			totalSpent: { $sum: "$amount" },
-		},
-	},
-	{ $sort: { totalSpent: -1 } },
-	{ $limit: 10 },
-]);
-// Top 10 customers by spending
-
-// Pagination
-orders.aggregate([
-	{
-		$group: {
-			_id: "$category",
-			count: { $sum: 1 },
-		},
-	},
-	{ $sort: { count: -1 } },
-	{ $skip: 20 },
-	{ $limit: 10 },
-]);
-// Page 3 of categories (offset 20, limit 10)
-```
-
-### Count Stage
-
-```javascript
-// Count filtered results
-orders.aggregate([
-	{ $match: { status: "completed", amount: { $gte: 100 } } },
-	{ $count: "expensiveOrders" },
-]);
-// SELECT COUNT(*) AS expensiveOrders
-// FROM (SELECT * FROM orders WHERE status = 'completed' AND amount >= 100) AS t1
-```
-
-### Complex Aggregation Examples
-
-```javascript
-const users = collection("users", "pg");
-
-// Average age by city, sorted
+// JSON field aggregation (Full/Lite)
 users.aggregate([
-	{ $match: { active: true } },
-	{
-		$group: {
-			_id: "$city",
-			avgAge: { $avg: "$age" },
-			count: { $sum: 1 },
-		},
-	},
-	{ $match: { count: { $gte: 10 } } },
-	{ $sort: { avgAge: -1 } },
-]);
-
-// JSON field aggregation (Full version)
-users.aggregate([
-	{
-		$group: {
-			_id: "$profile.country",
-			avgScore: { $avg: "$profile.score" },
-			users: { $sum: 1 },
-		},
-	},
-	{ $match: { avgScore: { $gte: 80 } } },
-	{ $sort: { avgScore: -1 } },
-]);
-
-// Multi-stage pipeline
-const products = collection("products", "pg");
-
-products.aggregate([
-	// Filter active products
-	{ $match: { active: true, stock: { $gt: 0 } } },
-
-	// Calculate revenue per category
-	{
-		$group: {
-			_id: "$category",
-			totalRevenue: { $sum: { $multiply: ["$price", "$stock"] } },
-			avgPrice: { $avg: "$price" },
-			productCount: { $sum: 1 },
-		},
-	},
-
-	// Only categories with significant revenue
-	{ $match: { totalRevenue: { $gte: 10000 } } },
-
-	// Sort by revenue
-	{ $sort: { totalRevenue: -1 } },
-
-	// Top 5 categories
-	{ $limit: 5 },
-
-	// Project final shape
-	{
-		$project: {
-			category: "$_id",
-			revenue: "$totalRevenue",
-			avgPrice: 1,
-			products: "$productCount",
-		},
-	},
+    { $group: { _id: "$profile.country", avgScore: { $avg: "$profile.score" } } },
+    { $sort: { avgScore: -1 } },
 ]);
 ```
 
----
+Full stages: `$match`, `$project`, `$addFields`/`$set`, `$group`, `$sort`, `$limit`, `$skip`, `$count`,
+`$sample`, `$sortByCount`, `$bucket` (and `$unwind` on the memory engine). Lite/Tiny include the seven
+basic stages.
 
-## 🎯 Filter Operators Reference
+## Operator reference
 
-| Operator  | Description            | Example                                               | SQL Output                         |
-| --------- | ---------------------- | ----------------------------------------------------- | ---------------------------------- |
-| `$eq`     | Equals                 | `{ age: { $eq: 25 } }`                                | `age = 25`                         |
-| `$ne`     | Not equals             | `{ status: { $ne: 'inactive' } }`                     | `status != 'inactive'`             |
-| `$gt`     | Greater than           | `{ age: { $gt: 18 } }`                                | `age > 18`                         |
-| `$gte`    | Greater than or equal  | `{ age: { $gte: 18 } }`                               | `age >= 18`                        |
-| `$lt`     | Less than              | `{ age: { $lt: 65 } }`                                | `age < 65`                         |
-| `$lte`    | Less than or equal     | `{ age: { $lte: 65 } }`                               | `age <= 65`                        |
-| `$in`     | In array               | `{ status: { $in: ['active', 'pending'] } }`          | `status IN ('active', 'pending')`  |
-| `$nin`    | Not in array           | `{ role: { $nin: ['admin', 'mod'] } }`                | `role NOT IN ('admin', 'mod')`     |
-| `$like`   | Pattern match          | `{ email: { $like: '%@gmail.com' } }`                 | `email LIKE '%@gmail.com'`         |
-| `$ilike`  | Case-insensitive match | `{ name: { $ilike: 'alice' } }`                       | `name ILIKE 'alice'` (PG)          |
-| `$nlike`  | Not like               | `{ email: { $nlike: '%temp%' } }`                     | `email NOT LIKE '%temp%'`          |
-| `$nilike` | Not ilike              | `{ name: { $nilike: 'admin%' } }`                     | `name NOT ILIKE 'admin%'`          |
-| `$regex`  | Regular expression     | `{ code: { $regex: /^[A-Z]+$/ } }`                    | `code ~ '^[A-Z]+$'` (PG)           |
-| `$exists` | Field exists           | `{ phone: { $exists: true } }`                        | `phone IS NOT NULL`                |
-| `$and`    | Logical AND            | `{ $and: [{ age: { $gte: 18 } }, { active: true }] }` | `(age >= 18 AND active = TRUE)`    |
-| `$or`     | Logical OR             | `{ $or: [{ role: 'admin' }, { role: 'mod' }] }`       | `(role = 'admin' OR role = 'mod')` |
-| `$not`    | Logical NOT            | `{ $not: { status: 'banned' } }`                      | `NOT (status = 'banned')`          |
-| `$expr`   | Expression             | `{ $expr: { $gt: ['$price', '$cost'] } }`             | `(price > cost)`                   |
+### Filter operators
 
----
+| Operator | Description | Example | SQL output |
+| --- | --- | --- | --- |
+| `$eq` | Equals | `{ age: { $eq: 25 } }` | `age = 25` |
+| `$ne` | Not equals | `{ status: { $ne: 'inactive' } }` | `status != 'inactive'` |
+| `$gt` / `$gte` | Greater than (or equal) | `{ age: { $gte: 18 } }` | `age >= 18` |
+| `$lt` / `$lte` | Less than (or equal) | `{ age: { $lt: 65 } }` | `age < 65` |
+| `$in` | In array | `{ status: { $in: ['a','b'] } }` | `status IN ('a','b')` |
+| `$nin` | Not in array | `{ role: { $nin: ['admin'] } }` | `role NOT IN ('admin')` |
+| `$like` | Pattern match | `{ email: { $like: '%@gmail.com' } }` | `email LIKE '%@gmail.com'` |
+| `$ilike` | Case-insensitive like | `{ name: { $ilike: 'alice' } }` | `name ILIKE 'alice'` (PG) |
+| `$nlike` | Not like | `{ email: { $nlike: '%temp%' } }` | `email NOT LIKE '%temp%'` |
+| `$nilike` | Not ilike | `{ name: { $nilike: 'admin%' } }` | `name NOT ILIKE 'admin%'` |
+| `$regex` | Regex match | `{ code: { $regex: /^[A-Z]+$/ } }` | `code ~ '...'` (PG) / `REGEXP` (MySQL) |
+| `$exists` | Field exists | `{ phone: { $exists: true } }` | `phone IS NOT NULL` |
+| `$between` | Range check | `{ age: { $between: [18, 65] } }` | `age BETWEEN 18 AND 65` |
+| `$mod` | Modulo match | `{ id: { $mod: [10, 0] } }` | `(id % 10) = 0` |
+| `$and` / `$or` / `$not` / `$nor` | Logical combinators | `{ $or: [...] }` | parenthesized SQL |
+| `$expr` | Embedded expression | `{ $expr: { $gt: ['$price', '$cost'] } }` | `(price > cost)` |
 
-## 🔧 Update Operators Reference
+Memory-only extras: `$type`, `$elemMatch`, `$all`, `$size`.
 
-| Operator       | Description      | Example                                 | SQL Output                             |
-| -------------- | ---------------- | --------------------------------------- | -------------------------------------- |
-| `$set`         | Set field value  | `{ $set: { status: 'active' } }`        | `status = 'active'`                    |
-| `$inc`         | Increment value  | `{ $inc: { views: 1 } }`                | `views = views + 1`                    |
-| `$mul`         | Multiply value   | `{ $mul: { price: 1.1 } }`              | `price = price * 1.1`                  |
-| `$min`         | Set to minimum   | `{ $min: { lowScore: 50 } }`            | `lowScore = LEAST(lowScore, 50)`       |
-| `$max`         | Set to maximum   | `{ $max: { highScore: 100 } }`          | `highScore = GREATEST(highScore, 100)` |
-| `$unset`       | Remove field     | `{ $unset: { tempField: '' } }`         | `tempField = NULL`                     |
-| `$rename`      | Rename field     | `{ $rename: { old: 'new' } }`           | `new = old, old = NULL`                |
-| `$currentDate` | Set current date | `{ $currentDate: { updatedAt: true } }` | `updatedAt = CURRENT_TIMESTAMP`        |
+### Update operators
 
-### Update Operator Examples
+| Operator | Description | Example | SQL output |
+| --- | --- | --- | --- |
+| `$set` | Set field value | `{ $set: { status: 'active' } }` | `status = 'active'` |
+| `$inc` | Increment | `{ $inc: { views: 1 } }` | `views = views + 1` |
+| `$mul` | Multiply | `{ $mul: { price: 1.1 } }` | `price = price * 1.1` |
+| `$min` | Set to minimum | `{ $min: { lowScore: 50 } }` | `LEAST(lowScore, 50)` |
+| `$max` | Set to maximum | `{ $max: { highScore: 100 } }` | `GREATEST(highScore, 100)` |
+| `$unset` | Remove field (NULL) | `{ $unset: { tempField: '' } }` | `tempField = NULL` |
+| `$rename` | Rename field | `{ $rename: { old: 'new' } }` | `new = old, old = NULL` |
+| `$currentDate` | Current date | `{ $currentDate: { updatedAt: true } }` | `CURRENT_TIMESTAMP` / `NOW()` / `datetime('now')` |
 
-```javascript
-const products = collection("products", "pg");
+JSON paths work inside every operator above (`$set`/`$inc`/`$unset` …), e.g. `{ $inc: { 'stats.views': 1 } }`.
 
-// Set multiple fields
-products.updateOne(
-	{ id: 1 },
-	{
-		$set: {
-			name: "New Name",
-			price: 99.99,
-			stock: 100,
-			updatedAt: new Date(),
-		},
-	}
-);
+### Expression operators
 
-// Increment multiple counters
-products.updateOne(
-	{ id: 1 },
-	{
-		$inc: {
-			views: 1,
-			sales: 1,
-			stock: -1, // decrement
-		},
-	}
-);
-
-// Multiply for percentage increase
-products.updateMany(
-	{ category: "electronics" },
-	{
-		$mul: { price: 1.15 }, // 15% price increase
-	}
-);
-
-// Ensure minimum/maximum values
-products.updateMany(
-	{},
-	{
-		$min: { price: 9.99 }, // No product less than $9.99
-		$max: { discount: 50 }, // Max 50% discount
-	}
-);
-
-// Complex update with multiple operators
-products.updateOne(
-	{ id: 1 },
-	{
-		$set: { status: "featured", featuredAt: new Date() },
-		$inc: { promotionCount: 1 },
-		$mul: { price: 0.9 }, // 10% discount
-		$unset: { tempPromo: "" },
-		$currentDate: { updatedAt: true },
-	}
-);
-```
-
----
-
-## 📐 Expression Operators Reference
-
-### Arithmetic Operators
+Use inside `$project`, `$addFields`, `$group`, or standalone via `qb.expression(...)`:
 
 ```javascript
-import { expression } from "umosql";
-
-// Addition
-expression({ $add: ["$price", 10] }, "pg");
-// (price + 10)
-
-expression({ $add: ["$subtotal", "$tax", "$shipping"] }, "pg");
-// (subtotal + tax + shipping)
-
-// Subtraction
-expression({ $subtract: ["$total", "$discount"] }, "pg");
-// (total - discount)
-
-// Multiplication
-expression({ $multiply: ["$quantity", "$price"] }, "pg");
-// (quantity * price)
-
-// Division
-expression({ $divide: ["$total", "$count"] }, "pg");
-// (total / count)
-
-// Modulo
-expression({ $mod: ["$value", 10] }, "pg");
-// (value % 10)
-```
-
-### String Operators
-
-```javascript
-// Concatenate strings
-expression({ $concat: ["$firstName", " ", "$lastName"] }, "pg");
-// PostgreSQL: CONCAT(firstName, ' ', lastName)
-// SQLite: firstName || ' ' || lastName
-
-expression({ $concat: ["Order #", "$orderNumber"] }, "pg");
-// CONCAT('Order #', orderNumber)
-
-// Uppercase
-expression({ $upper: "$email" }, "pg");
-// UPPER(email)
-
-// Lowercase
-expression({ $lower: "$name" }, "pg");
-// LOWER(name)
-
-// Substring
-expression({ $substr: ["$description", 0, 100] }, "pg");
-// SUBSTRING(description, 0, 100)
-```
-
-### Comparison in Expressions
-
-```javascript
-// Equal
-expression({ $eq: ["$price", "$msrp"] }, "pg");
-// (price = msrp)
-
-// Greater than
-expression({ $gt: ["$stock", 10] }, "pg");
-// (stock > 10)
-
-// Check if in array
-expression({ $in: ["$status", ["active", "verified"]] }, "pg");
-// (status IN ('active', 'verified'))
-```
-
-### Conditional Operators
-
-```javascript
-// Simple if-then-else
-expression(
-	{
-		$cond: [{ $gte: ["$age", 18] }, "adult", "minor"],
-	},
-	"pg"
-);
+qb.expression({ $add: ["$price", 10] }, "pg"); // (price + 10)
+qb.expression({ $concat: ["$firstName", " ", "$lastName"] }, "pg");
+qb.expression({ $cond: [{ $gte: ["$age", 18] }, "adult", "minor"] }, "pg");
 // CASE WHEN (age >= 18) THEN 'adult' ELSE 'minor' END
-
-// Nested conditions
-expression(
-	{
-		$cond: [
-			{ $gte: ["$score", 90] },
-			"A",
-			{ $cond: [{ $gte: ["$score", 80] }, "B", "C"] },
-		],
-	},
-	"pg"
-);
-
-// Switch statement
-expression(
-	{
-		$switch: {
-			branches: [
-				{ case: { $eq: ["$status", "pending"] }, then: "Processing" },
-				{ case: { $eq: ["$status", "shipped"] }, then: "In Transit" },
-				{ case: { $eq: ["$status", "delivered"] }, then: "Completed" },
-			],
-			default: "Unknown",
-		},
-	},
-	"pg"
-);
-// CASE
-//   WHEN (status = 'pending') THEN 'Processing'
-//   WHEN (status = 'shipped') THEN 'In Transit'
-//   WHEN (status = 'delivered') THEN 'Completed'
-//   ELSE 'Unknown'
-// END
+qb.expression({ $switch: { branches: [...], default: "Unknown" } }, "pg");
 ```
 
-### Aggregation Functions (Full version)
+Available (Full):
+
+- **Arithmetic**: `$add`, `$subtract`, `$multiply`, `$divide`, `$mod`, `$abs`, `$ceil`, `$floor`, `$round`, `$pow`, `$sqrt`
+- **String**: `$concat`, `$upper`, `$lower`, `$substr`, `$trim`, `$ltrim`, `$rtrim`, `$strLen`, `$replace`
+- **Aggregates**: `$sum`, `$avg`, `$min`, `$max`, `$count`, `$stdDevPop`, `$stdDevSamp`
+- **Comparison**: `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$cmp`, `$in`, `$nin`, `$size`
+- **Logic/conditional**: `$and`, `$or`, `$not`, `$cond`, `$ifNull`, `$switch`, `$exists`
+- **Date parts**: `$year`, `$month`, `$dayOfMonth`, `$dayOfWeek`, `$hour`, `$minute`, `$second`, `$week`
+- **Casts**: `$toString`, `$toInt`, `$toDouble`, `$toBool`, `$toDate`
+- **Misc**: `$literal`
+
+## Custom operators (extend)
+
+Every builder exposes `extend` to register operators at runtime — no fork required:
 
 ```javascript
-// In aggregation pipeline
-orders.aggregate([
-	{
-		$group: {
-			_id: "$customerId",
-			total: { $sum: "$amount" },
-			avg: { $avg: "$amount" },
-			min: { $min: "$amount" },
-			max: { $max: "$amount" },
-			count: { $sum: 1 },
-		},
-	},
-]);
+import { escape } from "umosql";
+
+qb.extend.filter({
+    // BETWEEN a AND b
+    $between: (value, db, field) =>
+        `${field} BETWEEN ${escape(value[0], db)} AND ${escape(value[1], db)}`,
+});
+
+qb.extend.expression({
+    $power: (args, ctx) => `POWER(${ctx.expr(args[0])}, ${ctx.expr(args[1])})`,
+});
+
+qb.extend.update({
+    // PostgreSQL array push
+    $push: (fields, db) =>
+        Object.entries(fields).map(
+            ([key, val]) => `${key} = array_append(${key}, ${escape(val, db)})`
+        ),
+});
+
+// Usage
+users.find({ age: { $between: [18, 65] } }).toSQL();
 ```
 
----
-	try {
-		req.mongoQuery = req.query.q ? JSON.parse(req.query.q) : {};
-		req.queryOptions = {
-			projection: req.query.fields ? JSON.parse(req.query.fields) : null,
-			sort: req.query.sort ? JSON.parse(req.query.sort) : null,
-			limit: parseInt(req.query.limit) || 100,
-			skip: parseInt(req.query.skip) || 0,
-		};
-		next();
-	} catch (error) {
-		res
-			.status(400)
-			.json({ error: "Invalid query format", details: error.message });
-	}
-};
+The memory engine has its own `extend` with the same shape:
+`umosql/memory` → `extend.filter / extend.expression / extend.update / extend.stage`.
 
-// GET /:collection - List all documents
-app.get("/:collection", parseQuery, async (req, res) => {
-	try {
-		const coll = collection(req.params.collection, "pg");
+## Custom builds (ultra-minimal)
 
-		let query = coll.find(req.mongoQuery, req.queryOptions.projection);
+Build a builder with only the operators you need — unused operators are tree-shaken from the bundle:
 
-		if (req.queryOptions.sort) {
-			query = query.sort(req.queryOptions.sort);
-		}
+```javascript
+import { createQueryBuilder, filterOps, exprOps, updateOps, stageHandlers } from "umosql";
 
-		query = query.skip(req.queryOptions.skip).limit(req.queryOptions.limit);
-
-		const sql = query.toSQL();
-		const result = await pool.query(sql);
-
-		res.json({
-			data: result.rows,
-			count: result.rows.length,
-			skip: req.queryOptions.skip,
-			limit: req.queryOptions.limit,
-		});
-	} catch (error) {
-		res.status(500).json({ error: error.message });
-	}
+const custom = createQueryBuilder({
+    filterOps: { $eq: filterOps.$eq, $in: filterOps.$in },
+    exprOps: { $add: exprOps.$add, $upper: exprOps.$upper },
+    updateOps: { $set: updateOps.$set },
+    stageHandlers: {}, // no aggregation
 });
 
-// GET /:collection/count - Count documents
-app.get("/:collection/count", parseQuery, async (req, res) => {
-	try {
-		const coll = collection(req.params.collection, "pg");
-		const sql = coll.countDocuments(req.mongoQuery);
+export const { collection, filter, expression } = custom;
+```
 
-		const result = await pool.query(sql);
-		res.json({ count: parseInt(result.rows[0].count) });
-	} catch (error) {
-		res.status(500).json({ error: error.message });
-	}
-});
+## Schemaless adapters
 
-// GET /:collection/:id - Get single document
-app.get("/:collection/:id", async (req, res) => {
-	try {
-		const coll = collection(req.params.collection, "pg");
-		const sql = coll.findOne({ id: req.params.id }).toSQL();
+The `/schemaless` and `/client` entries wrap a driver in a Mongo-like collection API that also
+**manages the SQL schema for you**: tables, columns and JSON columns are inferred from your documents,
+created lazily, and widened when types grow. The adapter builds and executes the SQL itself via an
+internal query builder (wired with the full operator set).
 
-		const result = await pool.query(sql);
-
-		if (result.rows.length === 0) {
-			return res.status(404).json({ error: "Document not found" });
-		}
-
-		res.json(result.rows[0]);
-	} catch (error) {
-		res.status(500).json({ error: error.message });
-	}
-});
-
-// POST /:collection - Create document
-app.post("/:collection", async (req, res) => {
-	try {
-		const coll = collection(req.params.collection, "pg");
-		const sql = coll.insertOne(req.body, { returning: "*" });
-
-		const result = await pool.query(sql);
-		res.status(201).json(result.rows[0]);
-	} catch (error) {
-		res.status(500).json({ error: error.message });
-	}
-});
-
-// POST /:collection/bulk - Bulk insert
-app.post("/:collection/bulk", async (req, res) => {
-	try {
-		if (!Array.isArray(req.body)) {
-			return res.status(400).json({ error: "Body must be an array" });
-		}
-
-		const coll = collection(req.params.collection, "pg");
-		const sql = coll.insertMany(req.body, { returning: "*" });
-
-		const result = await pool.query(sql);
-		res.status(201).json({ inserted: result.rows.length, data: result.rows });
-	} catch (error) {
-		res.status(500).json({ error: error.message });
-	}
-});
-
-// PATCH /:collection/:id - Update single document
-app.patch("/:collection/:id", async (req, res) => {
-	try {
-		const coll = collection(req.params.collection, "pg");
-		const sql = coll.updateOne(
-			{ id: req.params.id },
-			{ $set: req.body },
-			{ returning: "*" }
-		);
-
-		const result = await pool.query(sql);
-
-		if (result.rows.length === 0) {
-			return res.status(404).json({ error: "Document not found" });
-		}
-
-		res.json(result.rows[0]);
-	} catch (error) {
-		res.status(500).json({ error: error.message });
-	}
-});
-
-// PUT /:collection/:id - Replace document
-app.put("/:collection/:id", async (req, res) => {
-	try {
-		const coll = collection(req.params.collection, "pg");
-		const sql = coll.updateOne(
-			{ id: req.params.id },
-			{ $set: req.body },
-			{ returning: "*" }
-		);
-
-		const result = await pool.query(sql);
-
-		if (result.rows.length === 0) {
-			return res.status(404).json({ error: "Document not found" });
-		}
-
-		res.json(result.rows[0]);
-	} catch (error) {
-		res.status(500).json({ error: error.message });
-	}
-});
-
-// PATCH /:collection - Bulk update
-app.patch("/:collection", parseQuery, async (req, res) => {
-	try {
-		const coll = collection(req.params.collection, "pg");
-		const sql = coll.updateMany(
-			req.mongoQuery,
-			{ $set: req.body },
-			{ returning: "*" }
-		);
-
-		const result = await pool.query(sql);
-		res.json({ updated: result.rows.length, data: result.rows });
-	} catch (error) {
-		res.status(500).json({ error: error.message });
-	}
-});
-
-// DELETE /:collection/:id - Delete single document
-app.delete("/:collection/:id", async (req, res) => {
-	try {
-		const coll = collection(req.params.collection, "pg");
-		const sql = coll.deleteOne({ id: req.params.id }, { returning: "*" });
-
-		const result = await pool.query(sql);
-
-		if (result.rows.length === 0) {
-			return res.status(404).json({ error: "Document not found" });
-		}
-
-		res.json({ deleted: true, data: result.rows[0] });
-	} catch (error) {
-		res.status(500).json({ error: error.message });
-	}
-});
-
-// DELETE /:collection - Bulk delete
-app.delete("/:collection", parseQuery, async (req, res) => {
-	try {
-		if (Object.keys(req.mongoQuery).length === 0) {
-			return res.status(400).json({
-				error: 'Query required for bulk delete. Use ?q={"field":"value"}',
-			});
-		}
-
-		const coll = collection(req.params.collection, "pg");
-		const sql = coll.deleteMany(req.mongoQuery, { returning: "*" });
-
-		const result = await pool.query(sql);
-		res.json({ deleted: result.rows.length, data: result.rows });
-	} catch (error) {
-		res.status(500).json({ error: error.message });
-	}
-});
-
-// Error handler
-app.use((err, req, res, next) => {
-	console.error(err.stack);
-	res
-		.status(500)
-		.json({ error: "Internal server error", details: err.message });
-});
-
----
-
-## 🔌 Universal Adapters
-
-### Unified Client (one factory, every backend)
+### Unified client (memory / sqlite / pg / mysql / mongodb / sql)
 
 ```javascript
 import { createSchemalessClient } from "umosql/client";
 
-// 'memory' | 'sqlite' | 'pg' | 'mysql' | 'mongodb' | 'sql'
 const client = await createSchemalessClient("pg", {
-	host: "localhost",
-	database: "mydb",
-	user: "postgres",
-	password: "password",
+    host: "localhost",
+    database: "mydb",
+    user: "postgres",
+    password: "password",
 });
 
 const users = client.db("mydb").collection("users");
 
-// All operations return promises
-const inserted = await users.insertOne({ name: "Alice", age: 25 });
+await users.insertOne({ name: "Alice", age: 25 });
 await users.updateOne({ name: "Alice" }, { $inc: { loginCount: 1 } });
 await users.deleteMany({ active: false });
 
 // find() is async and returns a chainable cursor
-const adults = await (await users.find({ age: { $gte: 18 } }))
-	.sort({ age: -1 })
-	.limit(10)
-	.toArray();
+const adults = await (await users.find({ age: { $gte: 18 } })).sort({ age: -1 }).limit(10).toArray();
 
-// Aggregation
-const stats = await users.aggregate([
-	{ $group: { _id: "$city", count: { $sum: 1 } } },
-]);
+// Aggregation works on every backend
+const stats = await users.aggregate([{ $group: { _id: "$city", count: { $sum: 1 } } }]);
 
-// client.raw is the underlying driver handle (pg.Client, mysql2 connection, ...)
+client.raw; // underlying driver handle: pg.Client, mysql2 connection, MongoClient, ...
 await client.close();
 ```
 
-Only the backend you ask for is imported, so the other drivers do not need to be installed.
+`type` accepts `memory` (default for `createSchemalessAdapter`, zero deps), `sqlite`
+(default for `createSchemalessClient`), `pg`, `mysql`, `mongodb`, or `sql` — any backend driven by
+your own `executor(sql, params)`.
 
-#### Drivers are yours, not ours
+#### Bring your own driver
 
-| Backend   | Install yourself      | Or bring your own                                                        |
-| --------- | --------------------- | ------------------------------------------------------------------------ |
-| `memory`  | nothing               | —                                                                        |
-| `sql`     | nothing (any driver)  | `executor(sql, params)` — Neon, Turso, PlanetScale, Hyperdrive, ...      |
-| `sqlite`  | `npm i better-sqlite3`| `{ client: db }` or `{ driver: { default: Database } }`                  |
-| `pg`      | `npm i pg`            | `{ client: pgClient }` (adopted as-is, never re-connected) or `{ driver }`|
-| `mysql`   | `npm i mysql2`        | `{ conn }` / `{ client }` or `{ driver }`                                |
-| `mongodb` | `npm i mongodb`       | `{ client: mongoClient }` or `{ driver }`                                |
+| Backend | Install yourself | Or bring your own |
+| --- | --- | --- |
+| `memory` | nothing | — |
+| `sql` | nothing (any driver) | `executor(sql, params)` — Neon, Turso, PlanetScale, Hyperdrive, D1, ... |
+| `sqlite` | `npm i better-sqlite3` | `{ client: db }` or `{ driver: { default: Database } }` |
+| `pg` | `npm i pg` | `{ client: pgClient }` (adopted as-is, never re-connected) or `{ driver }` |
+| `mysql` | `npm i mysql2` | `{ conn }` / `{ client }` or `{ driver }` |
+| `mongodb` | `npm i mongodb` | `{ client: mongoClient }` or `{ driver }` |
 
 ```javascript
 // umosql never resolves the package itself:
@@ -1532,658 +670,425 @@ umosql: the "pg" backend needs the "pg" driver, which is not installed.
 umosql never bundles drivers.
 ```
 
-### Memory Adapter
+### MongoDB backend
+
+Same collection API, backed by a real MongoDB server:
 
 ```javascript
-import { createSchemalessClient } from "umosql/client";
+const client = await createSchemalessClient("mongodb", {
+    host: "localhost",
+    port: 27017,
+    database: "test",
+});
+const users = client.db("test").collection("users");
+await users.insertOne({ name: "Alice" });
+const rows = await (await users.find({ name: "Alice" })).toArray();
+await client.close();
 
-const client = await createSchemalessClient("memory");
-const users = client.db("app").collection("users");
-
-// Works exactly like MongoDB
-await users.insertMany([
-	{ name: "Alice", age: 25, tags: ["premium"] },
-	{ name: "Bob", age: 30, tags: ["basic"] },
-	{ name: "Charlie", age: 22, tags: ["premium", "vip"] },
-]);
-
-const premium = await (await users.find({ tags: { $in: ["premium"] } })).toArray();
-await users.updateMany({ tags: { $in: ["premium"] } }, { $inc: { points: 100 } });
-const grouped = await users.aggregate([
-	{ $group: { _id: "$age", count: { $sum: 1 } } },
-]);
-
-await client.close(); // drops every in-memory store
+// Or use the raw adapter factory:
+import { createMongoSchemaless } from "umosql/client";
+const { adapter, client: mongoClient } = await createMongoSchemaless({ host: "localhost", database: "test" });
 ```
 
-Each `client.db(name)` gets its own isolated store, so database names never share documents.
+### Auto DDL, schema inference and migration
 
-### In-memory engine without adapters (synchronous)
-
-```javascript
-import { collection, db } from "umosql/memory";
-
-const users = collection("users", [
-	{ name: "Alice", age: 25, tags: ["premium"] },
-	{ name: "Bob", age: 30, tags: ["basic"] },
-]);
-
-users.find({ tags: { $in: ["premium"] } }).toArray(); // no promises
-users.updateMany({ age: { $gte: 18 } }, { $inc: { points: 100 } });
-users.aggregate([{ $group: { _id: "$age", count: { $sum: 1 } } }]);
-
-// Or several named databases:
-const app = db("app");
-const logs = app.collection("logs", [], { idStrategy: "mongo" });
-```
-
-### Bring your own driver (adapters only)
+- On the first operation, the adapter reads `information_schema` / `PRAGMA` and, if the table is
+  missing, creates it (`CREATE TABLE IF NOT EXISTS`) with:
+  - an id column (`_id SERIAL PRIMARY KEY` on PG, `INT AUTO_INCREMENT` on MySQL, `INTEGER ... AUTOINCREMENT` on SQLite)
+  - `created_at` / `updated_at` timestamp columns (server-side defaults per dialect)
+- Insert/update documents **add missing columns** automatically (`ALTER TABLE ... ADD COLUMN`),
+  inferring types from values: `INTEGER`/`INT`, `DECIMAL(20,6)`, `VARCHAR(255)`→`TEXT`,
+  `BOOLEAN`/`TINYINT(1)`, `TIMESTAMP`, `JSONB`/`JSON`/`TEXT` for objects and arrays.
+- Types are widened when a value no longer fits (e.g. `INTEGER` → `DECIMAL`), never narrowed.
+- Failed statements are retried once after idempotent DDL, so the whole flow is race-safe.
+- Updates can also introduce new columns via `$set`; opt out per collection with
+  `collection(name, { migrateOnUpdate: false })`.
 
 ```javascript
 import { createSchemalessAdapter } from "umosql/schemaless";
 import Database from "better-sqlite3";
 
+// SQLite
 const { adapter } = createSchemalessAdapter(new Database(":memory:"), "sqlite");
-const users = adapter.collection("users");
+
+// PostgreSQL
+import pg from "pg";
+const pgClient = new pg.Client({ host: "localhost", database: "mydb" });
+await pgClient.connect();
+const { adapter: pgAdapter } = createSchemalessAdapter(pgClient, "pg");
+
+// MySQL
+import mysql from "mysql2/promise";
+const conn = await mysql.createConnection({ host: "localhost", database: "mydb" });
+const { adapter: myAdapter } = createSchemalessAdapter(conn, "mysql");
 ```
 
-### Serverless / HTTP drivers
+### Schemas, defaults, hidden fields
+
+Pass a partial schema to `collection()` to pin column types, `NOT NULL`, `UNIQUE`, defaults
+(static or factory), or to keep fields out of every returned document:
+
+```javascript
+const users = adapter.collection("users", {
+    schema: {
+        email: { type: "VARCHAR(320)", required: true, unique: true },
+        role: { type: "VARCHAR(32)", default: "member" },
+        createdAt: { type: "TIMESTAMP", default: () => new Date() },
+        passwordHash: { hidden: true }, // stripped from every find*() result
+    },
+});
+```
+
+### Auto ID creation
+
+| Strategy | Behavior |
+| --- | --- |
+| `auto` (default) | SQL autoincrement: `_id SERIAL` (PG) / `AUTO_INCREMENT` (MySQL) / `AUTOINCREMENT` (SQLite); numeric counter in memory |
+| `mongo` | 24-character hex ObjectId-like string generated on insert |
+| `custom` | your `idGenerator()` is called when `_id` is absent (passing `idGenerator` alone implies `custom`) |
+
+```javascript
+const db = client.db("test_database", { idColumn: "_id", idStrategy: "mongo" });
+const users = db.collection("users");
+await users.insertOne({ name: "Alice" }); // _id = 24-char hex
+```
+
+### DDL helpers
+
+SQL adapters expose administrative helpers (SQL-only; memory is CRUD/aggregate only):
+
+```javascript
+await adapter.listCollections(); // string[]
+await adapter.dropCollection("users");
+await adapter.createTableWithSchema("posts", { title: "TEXT", views: "INTEGER" });
+await adapter.getTableSchema("posts"); // { columns: { title: 'TEXT', ... } } — raw dialect names
+await adapter.addColumn("posts", "slug", "TEXT", { unique: true });
+await adapter.renameColumn("posts", "slug", "path");
+await adapter.modifyColumn("posts", "views", "BIGINT"); // pg/mysql
+await adapter.createIndex("posts", "title", { unique: true });
+await adapter.dropIndex("posts", "posts_title_idx");
+await users.dropColumn("views"); // pg/mysql only (SQLite cannot DROP COLUMN)
+```
+
+### findMany — SQL pagination helper
+
+```javascript
+const page = await users.findMany({
+    filter: { active: true },
+    sort: { createdAt: -1 },
+    page: 2,
+    pageSize: 20,
+    includeTotal: true, // adds one COUNT(*) query
+});
+// { items: [...], total: 137, page: 2, pageSize: 20 }
+```
+
+### Method support matrix
+
+| Method | Memory | SQLite | MySQL | PostgreSQL |
+| --- | --- | --- | --- | --- |
+| `insertOne` / `insertMany` | ✅ | ✅ | ✅ | ✅ |
+| `find` (async cursor) | ✅ | ✅ | ✅ | ✅ |
+| `findOne` | ✅ | ✅ | ✅ | ✅ |
+| `findMany` (SQL-only helper) | ❌ | ✅ | ✅ | ✅ |
+| `updateOne` / `updateMany` | ✅ | ✅ | ✅ | ✅ |
+| `upsertOne` | ✅ | ✅ | ✅ | ✅ |
+| `deleteOne` / `deleteMany` | ✅ | ✅ | ✅ | ✅ |
+| `countDocuments` / `estimatedDocumentCount` | ✅ | ✅ | ✅ | ✅ |
+| `distinct` | ✅ | ✅ | ✅ | ✅ |
+| `aggregate` | ✅ | ✅ | ✅ | ✅ |
+| `createIndex` / `dropIndex` | ✅ | ✅ | ✅ | ✅ |
+| `dropColumn` | ❌ | ❌ | ✅ | ✅ |
+| `listCollections` / `dropCollection` | ✅ | ✅ | ✅ | ✅ |
+| `createTableWithSchema` / `getTableSchema` | ❌ | ✅ | ✅ | ✅ |
+| `addColumn` / `renameColumn` | ❌ | ✅ | ✅ | ✅ |
+| `modifyColumn` | ❌ | ❌ | ✅ | ✅ |
+
+## Serverless (Neon, Turso, PlanetScale, Drizzle, Hyperdrive, ...)
+
+Any HTTP SQL driver works through `createSQLAdapter({ database, execute, queryBuilder })` or
+`createSchemalessClient('sql', { database, executor })` — umosql generates the SQL, you ship it to
+the provider:
 
 ```javascript
 import { createSchemalessClient } from "umosql/client";
 
-// Neon, Turso, PlanetScale, Cloudflare Hyperdrive, ...
 const client = await createSchemalessClient("sql", {
-	database: "pg",
-	executor: async (sql, params) => {
-		const res = await fetch(url, {
-			method: "POST",
-			headers: { Authorization: `Bearer ${token}` },
-			body: JSON.stringify({ sql, params }),
-		});
-		return { rows: (await res.json()).rows };
-	},
+    database: "pg",
+    executor: async (sql, params) => {
+        const res = await fetch(process.env.NEON_HTTP_URL, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${process.env.NEON_API_KEY}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ sql, params }),
+        });
+        return res.json();
+    },
 });
 ```
 
-### Switch Between Adapters
+Working examples in [`examples/`](examples/):
+
+| Example | Provider | Env vars |
+| --- | --- | --- |
+| `examples/serverless-neon.js` | Neon (Postgres over HTTP) | `NEON_HTTP_URL` (or `DATABASE_URL`), `NEON_API_KEY` |
+| `examples/serverless-turso.js` | Turso (SQLite over HTTP) | `TURSO_HTTP_URL` (or `DATABASE_URL`), `TURSO_TOKEN` (or `DATABASE_AUTH_TOKEN`) |
+| `examples/serverless-planetscale.js` | PlanetScale Data API | `PSCALE_DATA_API_URL`, `PSCALE_TOKEN` |
+| `examples/serverless-neon-drizzle.js` | Neon via `drizzle-orm/neon-http` | `NEON_HTTP_URL` |
+| `examples/serverless-turso-drizzle.js` | Turso via `drizzle-orm/libsql/http` | `TURSO_HTTP_URL` |
+
+Notes:
+
+- Compose with the QueryBuilder (`qb.collection('users', 'pg' \| 'mysql' \| 'sqlite')`) and execute with your provider.
+- DDL and JSON operators vary by provider; the schemaless adapter's auto-DDL works wherever the
+  provider executes plain SQL.
+
+## Express / REST integration
+
+The builder is a pure function from Mongo queries to SQL, so it maps cleanly onto request handling.
+Minimal pattern (adapt to your framework):
 
 ```javascript
-import { createSchemalessClient } from "umosql/client";
+import express from "express";
+import { pool } from "./db.js"; // your pg Pool
+import { createQueryBuilder, filterOps, exprOps, updateOps, stageHandlers } from "umosql";
 
-// Use an environment variable to switch backends
-const dbType = process.env.DB_TYPE || "memory";
-const client = await createSchemalessClient(dbType, {
-	host: process.env.DB_HOST,
-	database: process.env.DB_NAME,
-	user: process.env.DB_USER,
-	password: process.env.DB_PASSWORD,
+const qb = createQueryBuilder({ filterOps, exprOps, updateOps, stageHandlers });
+const app = express();
+app.use(express.json());
+
+// GET /users?q={"age":{"$gte":18}}&sort={"age":-1}&limit=10&skip=0
+app.get("/:collection", async (req, res) => {
+    try {
+        const coll = qb.collection(req.params.collection, "pg");
+        const query = coll
+            .find(req.query.q ? JSON.parse(req.query.q) : {})
+            .sort(req.query.sort ? JSON.parse(req.query.sort) : {})
+            .skip(parseInt(req.query.skip) || 0)
+            .limit(parseInt(req.query.limit) || 100);
+        const sql = query.toSQL();
+        const result = await pool.query(sql);
+        res.json({ data: result.rows, count: result.rows.length });
+    } catch (err) {
+        res.status(400).json({ error: "Invalid query", details: err.message });
+    }
 });
 
-// Same code works with any backend
-const users = client.db("app").collection("users");
-await users.insertOne({ name: "Alice" });
-const results = await (await users.find({ age: { $gte: 18 } })).toArray();
-await client.close();
+// POST /users — insertOne with RETURNING
+app.post("/:collection", async (req, res) => {
+    const sql = qb.collection(req.params.collection, "pg").insertOne(req.body, { returning: "*" });
+    const result = await pool.query(sql);
+    res.status(201).json(result.rows[0] ?? null);
+});
+
+app.listen(3000);
 ```
 
----
+The same pattern works with the schemaless adapter — then table/column creation and JSON columns
+are handled for you, and `findMany` gives you pagination with totals out of the box.
 
-## 🎨 Custom Operators
+## In-memory engine
 
-### Adding Custom Filter Operators
-
-```javascript
-import { extend, escape } from "umosql";
-
-// Between operator
-extend.filter({
-	$between: (value, db, field) => {
-		if (!Array.isArray(value) || value.length !== 2) {
-			throw new Error("$between requires [min, max]");
-		}
-		return `BETWEEN ${escape(value[0], db)} AND ${escape(value[1], db)}`;
-	},
-
-	// Starts with
-	$startsWith: (value, db, field) => {
-		return db === "pg"
-			? `LIKE ${escape(value + "%", db)}`
-			: `LIKE ${escape(value + "%", db)}`;
-	},
-
-	// Ends with
-	$endsWith: (value, db, field) => {
-		return `LIKE ${escape("%" + value, db)}`;
-	},
-});
-
-// Usage
-users.find({ age: { $between: [18, 65] } }).toSQL();
-users.find({ email: { $startsWith: "admin" } }).toSQL();
-users.find({ email: { $endsWith: "@company.com" } }).toSQL();
-```
-
-### Adding Custom Expression Operators
+`umosql/memory` is a standalone MongoDB-style engine — no SQL, no driver, sync API, great for tests
+and edge runtimes. It supports the full operator set plus memory-only features (`$type`, `$elemMatch`,
+`$all`, `$size`, `$unwind`):
 
 ```javascript
-extend.expression({
-	// Absolute value
-	$abs: (args, ctx) => `ABS(${ctx.expr(args[0])})`,
+import { collection as memCollection } from "umosql/memory";
 
-	// Power
-	$power: (args, ctx) => {
-		if (args.length !== 2) throw new Error("$power requires [base, exponent]");
-		return `POWER(${ctx.expr(args[0])}, ${ctx.expr(args[1])})`;
-	},
-
-	// Round
-	$round: (args, ctx) => `ROUND(${ctx.expr(args[0])})`,
-
-	// Coalesce (null handling)
-	$ifNull: (args, ctx) => {
-		if (args.length !== 2) throw new Error("$ifNull requires [field, default]");
-		return `COALESCE(${ctx.expr(args[0])}, ${ctx.expr(args[1])})`;
-	},
-});
-
-// Usage in aggregation
-orders.aggregate([
-	{
-		$project: {
-			orderId: "$id",
-			total: { $abs: { $subtract: ["$amount", "$discount"] } },
-			squared: { $power: ["$value", 2] },
-			displayName: { $ifNull: ["$nickname", "$name"] },
-		},
-	},
+const users = memCollection("users", [
+    { name: "Alice", age: 25, city: "Paris", profile: { score: 85 } },
+    { name: "Bob", age: 30, city: "London", profile: { score: 90 } },
 ]);
+
+users.find({ city: "Paris" }).toArray(); // sync
+users.aggregate([
+    { $group: { _id: "$city", avgAge: { $avg: "$age" } } },
+    { $sort: { avgAge: 1 } },
+]);
+users.updateOne({ name: "Alice" }, { $inc: { "profile.score": 5 } });
 ```
 
-### Adding Custom Update Operators
+For an async, schemaless-flavored in-memory store with the full adapter API, use the memory backend
+of the unified client (each database name gets an isolated store):
 
 ```javascript
-extend.update({
-	// Array push (PostgreSQL)
-	$push: (fields, db) => {
-		if (db !== "pg") throw new Error("$push only for PostgreSQL");
-		return Object.entries(fields).map(
-			([key, val]) => `${key} = array_append(${key}, ${escape(val, db)})`
-		);
-	},
-
-	// Array pull (PostgreSQL)
-	$pull: (fields, db) => {
-		if (db !== "pg") throw new Error("$pull only for PostgreSQL");
-		return Object.entries(fields).map(
-			([key, val]) => `${key} = array_remove(${key}, ${escape(val, db)})`
-		);
-	},
-});
-
-// Usage
-users.updateOne(
-	{ id: 1 },
-	{
-		$push: { tags: "featured" },
-	}
-);
-// UPDATE users SET tags = array_append(tags, 'featured') WHERE id = 1
+const client = await createSchemalessClient("memory");
+const users = client.db("app", { idStrategy: "mongo" }).collection("users");
 ```
-## Operator Support Matrix
 
-### Filter Operators
+## Operator support matrix
+
+### Filter operators
 
 | Operator | Memory | SQLite | MySQL | PostgreSQL | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `$eq` | ✅ | ✅ | ✅ | ✅ | `=` |
 | `$ne` | ✅ | ✅ | ✅ | ✅ | `!=` / `<>` |
-| `$gt` | ✅ | ✅ | ✅ | ✅ | `>` |
-| `$gte` | ✅ | ✅ | ✅ | ✅ | `>=` |
-| `$lt` | ✅ | ✅ | ✅ | ✅ | `<` |
-| `$lte` | ✅ | ✅ | ✅ | ✅ | `<=` |
-| `$in` | ✅ | ✅ | ✅ | ✅ | Empty array handled: `= 1 AND 1 = 0` |
-| `$nin` | ✅ | ✅ | ✅ | ✅ | Empty array handled: `= 1 OR 1 = 1` |
-| `$like` | ✅ | ✅ | ✅ | ✅ | `%` `_` patterns |
-| `$ilike` | ✅ | ✅ | ✅ | ✅ | PG: `ILIKE`; others: `LOWER(field) LIKE LOWER(value)` |
-| `$nlike` | ✅ | ✅ | ✅ | ✅ | `NOT LIKE` |
-| `$nilike` | ✅ | ✅ | ✅ | ✅ | PG: `NOT ILIKE`; others: `NOT LIKE LOWER(...)` |
+| `$gt` / `$gte` / `$lt` / `$lte` | ✅ | ✅ | ✅ | ✅ | comparison |
+| `$in` / `$nin` | ✅ | ✅ | ✅ | ✅ | empty arrays handled |
+| `$like` / `$nlike` | ✅ | ✅ | ✅ | ✅ | `%` `_` patterns |
+| `$ilike` / `$nilike` | ✅ | ✅ | ✅ | ✅ | PG: `ILIKE`; others: `LOWER(field) LIKE LOWER(value)` |
 | `$regex` | ✅ | ⚠️ | ✅ | ✅ | PG: `~`; MySQL: `REGEXP`; SQLite: needs `REGEXP` UDF |
 | `$exists` | ✅ | ✅ | ✅ | ✅ | `IS NULL` / `IS NOT NULL` |
-| `$between` | ✅ | ✅ | ✅ | ✅ | `BETWEEN a AND b` |
-| `$mod` | ✅ | ✅ | ✅ | ✅ | `field % m = r` |
-| `$and` | ✅ | ✅ | ✅ | ✅ | Parenthesized conjunctions |
-| `$or` | ✅ | ✅ | ✅ | ✅ | Parenthesized disjunctions |
-| `$not` | ✅ | ✅ | ✅ | ✅ | `NOT ( ... )` |
-| `$nor` | ✅ | ✅ | ✅ | ✅ | `NOT ( ... OR ... )` |
-| `$expr` | ✅ | ✅ | ✅ | ✅ | Embed expression in filter |
-| `$type` | ✅ | — | — | — | Memory-only |
-| `$elemMatch` | ✅ | — | — | — | Memory-only |
-| `$all` | ✅ | — | — | — | Memory-only |
-| `$size` | ✅ | — | — | — | Memory-only |
+| `$between` / `$mod` | ✅ | ✅ | ✅ | ✅ | `BETWEEN`, `%` |
+| `$and` / `$or` / `$not` / `$nor` | ✅ | ✅ | ✅ | ✅ | parenthesized conjunctions/disjunctions |
+| `$expr` | ✅ | ✅ | ✅ | ✅ | embed expression in filter |
+| `$type` / `$elemMatch` / `$all` / `$size` | ✅ | — | — | — | memory-only |
 
-### Expression Operators
+### Expression operators
 
-| Operator | Memory | SQLite | MySQL | PostgreSQL | Notes |
-| --- | --- | --- | --- | --- | --- |
-| `$add` | ✅ | ✅ | ✅ | ✅ | `+` |
-| `$subtract` | ✅ | ✅ | ✅ | ✅ | `-` |
-| `$multiply` | ✅ | ✅ | ✅ | ✅ | `*` |
-| `$divide` | ✅ | ✅ | ✅ | ✅ | `/ NULLIF(...,0)` |
-| `$mod` | ✅ | ✅ | ✅ | ✅ | `%` |
-| `$abs` | ✅ | ✅ | ✅ | ✅ | `ABS()` |
-| `$ceil` | ✅ | ✅ | ✅ | ✅ | `CEIL()` |
-| `$floor` | ✅ | ✅ | ✅ | ✅ | `FLOOR()` |
-| `$round` | ✅ | ✅ | ✅ | ✅ | `ROUND(x, p)` |
-| `$pow` | ✅ | ✅ | ✅ | ✅ | `POWER()` |
-| `$sqrt` | ✅ | ✅ | ✅ | ✅ | `SQRT()` |
-| `$concat` | ✅ | ✅ | ✅ | ✅ | PG/MySQL: `CONCAT`, SQLite: `||` |
-| `$upper` | ✅ | ✅ | ✅ | ✅ | `UPPER()` |
-| `$lower` | ✅ | ✅ | ✅ | ✅ | `LOWER()` |
-| `$substr` | ✅ | ✅ | ✅ | ✅ | `SUBSTRING()` |
-| `$trim`/`$ltrim`/`$rtrim` | ✅ | ✅ | ✅ | ✅ | `TRIM` variants |
-| `$strLen` | ✅ | ✅ | ✅ | ✅ | `LENGTH()` |
-| `$replace` | ✅ | ✅ | ✅ | ✅ | `REPLACE()` |
-| `$sum` | ✅ | ✅ | ✅ | ✅ | Aggregates; `$sum: 1` maps to `COUNT(*)` |
-| `$avg` | ✅ | ✅ | ✅ | ✅ | `AVG()` |
-| `$min` | ✅ | ✅ | ✅ | ✅ | Single: `MIN()`; multi: `LEAST()` |
-| `$max` | ✅ | ✅ | ✅ | ✅ | Single: `MAX()`; multi: `GREATEST()` |
-| `$count` | ✅ | ✅ | ✅ | ✅ | `COUNT(*)` |
-| `$stdDevPop`/`$stdDevSamp` | ✅ | ✅ | ✅ | ✅ | `STDDEV_*()` |
-| `$eq`,`$ne`,`$gt`,`$gte`,`$lt`,`$lte` | ✅ | ✅ | ✅ | ✅ | Comparison in expressions |
-| `$cmp` | ✅ | ✅ | ✅ | ✅ | Returns -1/0/1 |
-| `$in`/`$nin` | ✅ | ✅ | ✅ | ✅ | Expression `IN`/`NOT IN` |
-| `$size` (JSON array) | ✅ | ✅ | ✅ | ✅ | PG: `jsonb_array_length`, MySQL: `JSON_LENGTH`, SQLite: `json_array_length` |
-| `$and`/`$or`/`$not` | ✅ | ✅ | ✅ | ✅ | Logical composition |
-| `$cond` | ✅ | ✅ | ✅ | ✅ | `CASE WHEN ... THEN ... ELSE ... END` |
-| `$ifNull` | ✅ | ✅ | ✅ | ✅ | `COALESCE()` |
-| `$switch` | ✅ | ✅ | ✅ | ✅ | `CASE` branches |
-| `$exists` | ✅ | ✅ | ✅ | ✅ | `IS NULL` / `IS NOT NULL` |
-| Date parts `$year`,`$month`,`$dayOfMonth`,`$dayOfWeek`,`$hour`,`$minute`,`$second`,`$week` | ✅ | ✅ | ✅ | ✅ | DB-specific functions (`EXTRACT`, `YEAR`, `strftime`) |
-| Cast `$toString`,`$toInt`,`$toDouble`,`$toBool`,`$toDate` | ✅ | ✅ | ✅ | ✅ | DB-specific `CAST` |
-| `$literal` | ✅ | ✅ | ✅ | ✅ | Escaped literal |
+Full list in [Expression operators](#expression-operators). Highlights per dialect:
 
-### Update Operators
+- `$concat`: PG/MySQL `CONCAT`, SQLite `||`
+- `$min`/`$max` (multi-arg): `LEAST`/`GREATEST` (SQLite `MIN`/`MAX`)
+- `$size` (JSON array length): PG `jsonb_array_length`, MySQL `JSON_LENGTH`, SQLite `json_array_length`
+- Date parts: `EXTRACT` (PG), `YEAR()`/etc. (MySQL), `strftime` (SQLite)
+- Casts: DB-specific `CAST`
+
+### Update operators
 
 | Operator | Memory | SQLite | MySQL | PostgreSQL | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `$set` | ✅ | ✅ | ✅ | ✅ | Scalar and JSON path updates |
-| `$inc` | ✅ | ✅ | ✅ | ✅ | Scalar and JSON numeric JSON path |
-| `$mul` | ✅ | ✅ | ✅ | ✅ | Scalar and JSON numeric JSON path |
-| `$min` | ✅ | ✅ | ✅ | ✅ | SQLite uses `MIN`, others `LEAST` |
-| `$max` | ✅ | ✅ | ✅ | ✅ | SQLite uses `MAX`, others `GREATEST` |
+| `$set` / `$inc` / `$mul` | ✅ | ✅ | ✅ | ✅ | scalar and JSON path updates |
+| `$min` / `$max` | ✅ | ✅ | ✅ | ✅ | SQLite `MIN`/`MAX`, others `LEAST`/`GREATEST` |
 | `$unset` | ✅ | ✅ | ✅ | ✅ | JSON path remove or `NULL` for scalars |
-| `$currentDate` | ✅ | ✅ | ✅ | ✅ | PG: `CURRENT_TIMESTAMP`; MySQL: `NOW()`; SQLite: `datetime('now')` |
-| `$rename` | ✅ | ✅ | ✅ | ✅ | Non-JSON fields; sets new = old, old = NULL |
-| `$push`/`$pull`/`$addToSet` | ✅ | — | — | — | Memory-only array mutations |
+| `$currentDate` | ✅ | ✅ | ✅ | ✅ | `CURRENT_TIMESTAMP` / `NOW()` / `datetime('now')` |
+| `$rename` | ✅ | ✅ | ✅ | ✅ | non-JSON fields; sets new = old, old = NULL |
+| `$push` / `$pull` / `$addToSet` | ✅ | — | — | — | memory-only array mutations (or via `extend.update`) |
 
-### Aggregation Stages
+### Aggregation stages
 
 | Stage | Memory | SQLite | MySQL | PostgreSQL | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `$match` | ✅ | ✅ | ✅ | ✅ | WHERE/HAVING integration |
 | `$project` | ✅ | ✅ | ✅ | ✅ | SELECT with expressions |
-| `$addFields` / `$set` | ✅ | ✅ | ✅ | ✅ | Adds computed fields |
+| `$addFields` / `$set` | ✅ | ✅ | ✅ | ✅ | adds computed fields |
 | `$group` | ✅ | ✅ | ✅ | ✅ | GROUP BY with aggregates |
-| `$sort` | ✅ | ✅ | ✅ | ✅ | ORDER BY |
-| `$limit` | ✅ | ✅ | ✅ | ✅ | LIMIT |
-| `$skip` | ✅ | ✅ | ✅ | ✅ | OFFSET |
-| `$count` | ✅ | ✅ | ✅ | ✅ | Aggregates count |
-| `$sample` | ✅ | ✅ | ✅ | ✅ | Random ordering + LIMIT |
+| `$sort` / `$limit` / `$skip` | ✅ | ✅ | ✅ | ✅ | ORDER BY / LIMIT / OFFSET |
+| `$count` | ✅ | ✅ | ✅ | ✅ | aggregate count |
+| `$sample` | ✅ | ✅ | ✅ | ✅ | random ordering + LIMIT |
 | `$sortByCount` | ✅ | ✅ | ✅ | ✅ | GROUP BY expr, order by count desc |
 | `$bucket` | ✅ | ✅ | ✅ | ✅ | CASE-based bucketing |
-| `$unwind` | ✅ | — | — | — | Memory-only |
+| `$unwind` | ✅ | — | — | — | memory-only |
 
-#### Code References
+## Compatibility and caveats
 
-- Filter operators: `src/index.js:196` and `src/adapter/memory/memory.js:74`
-- Expression operators: `src/index.js:253` and `src/adapter/memory/memory.js:121`
-- Update operators: `src/index.js:426` and `src/adapter/memory/memory.js:311`
-- Aggregation stages: `src/index.js:477` and `src/adapter/memory/memory.js:419`
-- JSON path extraction: `src/index.js:80`
-- JSON updates (`$set`, `$inc`, `$mul`): `src/index.js:98`
-- Aggregate builder and stage assembly: `src/index.js:717`
+- **JSON storage**: PostgreSQL `JSONB` with `jsonb_set`/`#>>`; MySQL `JSON` with `JSON_EXTRACT`/`JSON_SET`; SQLite `TEXT` with `json_extract`.
+- **Booleans**: PostgreSQL `TRUE/FALSE`; MySQL/SQLite use `TINYINT(1)`/`INTEGER` (1/0).
+- **Column management**: SQLite cannot `DROP COLUMN` or `MODIFY COLUMN` (rename or recreate instead).
+- **Upserts**: SQL `upsertOne` is update-then-insert and not atomic — add unique constraints.
+- **Indexes**: PostgreSQL supports index types (`USING BTREE`, ...); the adapter uses sensible defaults elsewhere.
+- **Pagination totals**: `findMany({ includeTotal: true })` performs one extra `COUNT(*)`.
+- **Transactions**: adapters don't expose transaction helpers — use `client.raw` directly.
+- **Identifiers**: table/column names are used unquoted; Postgres folds unquoted identifiers to
+  lowercase (so `getTableSchema` may return lowercase column names for camelCase fields).
+- **`$regex` on SQLite**: requires a `REGEXP` UDF (or use `$like`).
 
-### Compatibility & Testing
+## Testing
 
-- PostgreSQL: tested with 16; native `ILIKE` and regex `~` used.
-- MySQL: tested with 8.x; uses `REGEXP`, `LOWER(...) LIKE LOWER(...)` for case-insensitive like.
-- SQLite: tested with `better-sqlite3`; regex requires `REGEXP` extension/UDF.
-- Memory: full operator coverage, including array and pipeline-only stages.
-- Unified suite covers filters, expressions, updates, and aggregation across adapters where applicable.
-
-## Schemaless Adapters
-
-- Adapters infer and evolve table schemas automatically for memory, SQLite, PostgreSQL, and MySQL. MongoDB adapter is optional; for drop-in replacement needs against SQL, use the unified adapter.
-- Chainable cursor API for `find()` supports `sort`, `skip`, `limit`, and `toArray()` consistently.
-
-### Quick Start
-
-- Default backend is memory when omitted.
-
-```javascript
-import { createSchemalessAdapter } from 'umosql/schemaless';
-
-// Memory (default)
-const { adapter } = createSchemalessAdapter();
-const users = adapter.collection('users');
-await users.insertOne({ name: 'Alice' });
-console.log(await (await users.find({ name: 'Alice' })).toArray());
+```bash
+npm test          # full suite — runs offline: memory + SQLite + PGlite (WASM Postgres)
+npm run test:db   # only the db-backed specs
+npm run coverage  # c8 coverage over the full suite
 ```
 
-### Unified Adapter File
+The suite executes **787 assertions across every backend** and needs no external services:
 
-- Use a single factory to target SQL backends without per-backend adapter folders.
+- **PostgreSQL** → `@electric-sql/pglite` (in-memory WASM Postgres), or a real server via `PG_HOST`/`PG_PORT`/`PG_USER`/`PG_PASSWORD`/`PG_DB`
+- **MySQL** → `mysql-memory-server` (embedded real `mysqld`, no Docker), or `MYSQL_HOST`/`MYSQL_PORT`/`MYSQL_USER`/`MYSQL_PASS`/`MYSQL_DB`
+- **SQLite** → `better-sqlite3` `:memory:`
 
-```javascript
-import { createSchemalessAdapter } from 'umosql/schemaless';
-import Database from 'better-sqlite3';
-
-// SQLite
-const { adapter } = createSchemalessAdapter(new Database(':memory:'), 'sqlite');
-const users = adapter.collection('users');
-await users.insertOne({ name: 'Alice', profile: { score: 85 } });
-
-// PostgreSQL
-import pkg from 'pg';
-const { Client } = pkg;
-const pg = new Client({ host, port: 5432, user, password, database });
-await pg.connect();
-const { adapter: pgAdapter } = createSchemalessAdapter(pg, 'pg');
-
-// MySQL
-import mysql from 'mysql2/promise';
-const conn = await mysql.createConnection({ host, user, password, database });
-const { adapter: myAdapter } = createSchemalessAdapter(conn, 'mysql');
+```bash
+docker compose up -d   # optional: real PG + MySQL for CI parity (npm run db:up)
 ```
 
-### MongoDB
-
-- Optional backend with the same collection API shape.
- - Configure via an options object (host, port, user, password, database) according to your environment. No fixed environment variable names are required.
-- Example usage:
-
-```javascript
-import { createSchemalessClient } from 'umosql/client';
-
-const client = await createSchemalessClient('mongodb', { host: 'localhost', port: 27017, database: 'test' });
-const users = client.db('test').collection('users');
-await users.insertOne({ name: 'Alice' });
-const rows = await (await users.find({ name: 'Alice' })).toArray();
-await client.close();
-```
-
-The raw adapter factory is re-exported from `umosql/client` if you prefer it:
-
-```javascript
-import { createMongoSchemaless } from 'umosql/client';
-
-const { adapter, client } = await createMongoSchemaless({ host: 'localhost', database: 'test' });
-```
-
-### Serverless Examples (Drizzle)
-
-- Neon: `examples/serverless-neon-drizzle.js` (requires `NEON_HTTP_URL`)
-- Turso: `examples/serverless-turso-drizzle.js` (requires `TURSO_HTTP_URL`, `TURSO_TOKEN`)
-- PlanetScale: `examples/serverless-planetscale.js` (requires `PSCALE_DATA_API_URL`, `PSCALE_TOKEN`)
-- Runnable tour of every backend: `examples/client.js` (`node examples/client.js`)
-
-### Auto ID Creation
-
-- Strategies
-  - `auto`: numeric autoincrement (SQL default per backend)
-  - `mongo`: 24-character hex string (ObjectId-like)
-  - `custom`: supply `idGenerator()`
-
-- Defaults
-  - Default id column is `_id`
-  - Non-`auto` strategies generate ids when absent on insert
-
-- Configure per database/collection
-
-```javascript
-import { createSchemalessClient } from 'umosql/client';
-
-const client = await createSchemalessClient('pg', { host, port, user, password, database });
-const db = client.db('test_database', { id: '_id', idStrategy: 'mongo' });
-const users = db.collection('users');
-await users.insertOne({ name: 'Alice' });
-```
-
-```javascript
-import { createSchemalessClient } from 'umosql/client';
-
-const client = await createSchemalessClient('sql', {
-  database: 'sqlite',
-  executor: async (sql, params) => {}
-});
-const db = client.db('mydb', { id: '_id', idStrategy: 'custom', idGenerator: () => crypto.randomUUID() });
-const events = db.collection('events');
-await events.insertOne({ type: 'click' });
-```
-
-Passing `idGenerator` without `idStrategy` implies `custom` — under `auto` adapters would ignore it.
-
-### Serverless Behavior
-
-- On missing table/column errors, adapters perform idempotent DDL (`CREATE TABLE IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN`) and retry once.
-- Updates can optionally introduce new columns via `$set`; toggle with `migrateOnUpdate` in `collection(name, { migrateOnUpdate: false })`.
-## MongoDB-Compatible Methods Support Matrix
-
-| Method | Memory | SQLite | MySQL | PostgreSQL |
-| --- | --- | --- | --- | --- |
-| `insertOne` | ✅ | ✅ | ✅ | ✅ |
-| `insertMany` | ✅ | ✅ | ✅ | ✅ |
-| `find` | ✅ | ✅ | ✅ | ✅ |
-| `findOne` | ✅ | ✅ | ✅ | ✅ |
-| `findMany` (SQL-only helper) | ❌ | ✅ | ✅ | ✅ |
-| `sort/skip/limit` in `find()` | ✅ | ✅ | ✅ | ✅ |
-| `updateOne` | ✅ | ✅ | ✅ | ✅ |
-| `updateMany` | ✅ | ✅ | ✅ | ✅ |
-| `upsertOne` | ✅ | ✅ | ✅ | ✅ |
-| `deleteOne` | ✅ | ✅ | ✅ | ✅ |
-| `deleteMany` | ✅ | ✅ | ✅ | ✅ |
-| `countDocuments` | ✅ | ✅ | ✅ | ✅ |
-| `estimatedDocumentCount` | ✅ | ✅ | ✅ | ✅ |
-| `distinct` | ✅ | ✅ | ✅ | ✅ |
-| `aggregate` | ✅ | ✅ | ✅ | ✅ |
-| `createIndex` | ✅ | ✅ | ✅ | ✅ |
-| `dropIndex` | ✅ | ✅ | ✅ | ✅ |
-| `dropColumn` | ❌ | ❌ | ✅ | ✅ |
-| `listCollections` | ✅ | ✅ | ✅ | ✅ |
-| `dropCollection` | ✅ | ✅ | ✅ | ✅ |
-| `createTableWithSchema` | ❌ | ✅ | ✅ | ✅ |
-| `getTableSchema` | ❌ | ✅ | ✅ | ✅ |
-| `addColumn` | ❌ | ✅ | ✅ | ✅ |
-| `renameColumn` | ❌ | ✅ | ✅ | ✅ |
-| `modifyColumn` | ❌ | ❌ | ✅ | ✅ |
-
-Notes:
-- Memory adapter is a drop-in for core CRUD, query, and aggregation. Administrative DDL is SQL-only.
-- `findMany` is a convenience on SQL adapters for pagination plus total count.
-
-## Caveats and Differences
-
-- JSON storage and operators
-  - PostgreSQL uses `JSONB` and `jsonb_set`/`#>>` for path reads/writes.
-  - MySQL uses `JSON` with `JSON_EXTRACT` and `JSON_SET`.
-  - SQLite stores JSON as `TEXT` and uses `json_extract` (requires `json1` extension).
-- Boolean values
-  - PostgreSQL uses `TRUE/FALSE`.
-  - MySQL/SQLite often represent booleans as `TINYINT(1)`/`INTEGER` (1/0) at the SQL level.
-- Column management
-  - `DROP COLUMN` is not supported by SQLite.
-  - `MODIFY COLUMN` is not supported by SQLite; use `ALTER TABLE ... RENAME COLUMN` or recreate.
-- Upsert semantics
-  - SQL `upsertOne` is implemented as update-then-insert and may not be atomic; add unique constraints to ensure correctness.
-- Indexes
-  - PostgreSQL supports index types (`USING BTREE`, etc.); others are simpler. The adapter uses sensible defaults.
-- Pagination totals
-  - `findMany({ includeTotal: true })` performs an additional `COUNT(*)` query.
-- Transactions
-  - Adapters do not expose transaction helpers; use your client directly if needed.
-
-## Drop-in Replacement Scope
-
-- Implemented as MongoDB-like collection methods across backends:
-  - CRUD: `insertOne`, `insertMany`, `find`, `findOne`, `updateOne`, `updateMany`, `deleteOne`, `deleteMany`.
-  - Query helpers: `countDocuments`, `distinct`, `aggregate`, projection and computed fields via `$project`, `$addFields`, `$set`.
-  - SQL-only helpers: `findMany`, `createTableWithSchema`, `addColumn`, `renameColumn`, `modifyColumn`, `getTableSchema`, `listCollections`.
-- For pure MongoDB replacement needs (without DDL), memory and SQL adapters are compatible at the collection method level.
-## API Reference
+## API reference
 
 ### Entry points
 
-| Module                | Exports                                                                                                                                                                                                                                       |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `umosql`              | `collection` (default), `filter`, `expression`, `aggregate`, `insertMany`, `updateMany`, `deleteMany`, `FindQuery`, `extend`, `db`, `createQueryBuilder`, `filterOps`, `exprOps`, `updateOps`, `stageHandlers`, `escape`, `jsonPath`, `validate` |
-| `umosql/lite`         | default builder object + `collection`, `filter`, `expression`, `aggregate`, `extend`, `db`                                                                                                                                                    |
-| `umosql/tiny`         | default builder object + `collection`, `filter`, `expression`, `aggregate`, `extend`, `db`                                                                                                                                                    |
-| `umosql/schemaless`   | `createSchemalessAdapter`, `createSQLAdapter`, `createMemorySchemaless`                                                                                                                                                                       |
-| `umosql/memory`       | `collection` (default), `db`, `Database`, `Collection`, `FindQuery`, `filter`, `expression`, `aggregate`, `project`, `extend`, `createMemoryDB`, `createMemorySchemaless`, `filterOps`, `exprOps`, `updateOps`, `stageOps`, `deepEquals`, `getPath`, `setPath`, `deletePath`, `clone` |
-| `umosql/client`       | `createSchemalessClient` (default), `CLIENT_TYPES`, `createSchemalessAdapter`, `createSQLAdapter`, `createMemorySchemaless`, `createMongoSchemaless`                                                                                          |
-
-Each entry point is published as ESM (`.es.js`), CommonJS (`.cjs`), UMD, minified IIFE, and a matching `.d.ts`.
-The query-builder entries (`umosql`, `/lite`, `/tiny`) only produce SQL strings; the adapter entries
-(`/schemaless`, `/memory`, `/client`) execute them.
+| Module | Key exports |
+| --- | --- |
+| `umosql` | `createQueryBuilder`, `filterOps`, `exprOps`, `updateOps`, `stageHandlers`, `collection`, `filter`, `expression`, `aggregate`, `insertMany`, `updateMany`, `deleteMany`, `db`, `FindQuery`, `extend`, `escape`, `jsonPath`, `validate`, `is$`, `isObject` |
+| `umosql/lite` | default builder + `collection`, `filter`, `expression`, `aggregate`, `extend`, `db` |
+| `umosql/tiny` | default builder + `collection`, `filter`, `expression`, `aggregate`, `extend`, `db` |
+| `umosql/schemaless` | `createSchemalessAdapter`, `createSQLAdapter`, `createMemorySchemaless` |
+| `umosql/memory` | `collection`, `db`, `Database`, `Collection`, `FindQuery`, `filter`, `expression`, `aggregate`, `project`, `extend`, `createMemoryDB`, `createMemorySchemaless`, `filterOps`, `exprOps`, `updateOps`, `stageOps`, `deepEquals`, `getPath`, `setPath`, `deletePath`, `clone` |
+| `umosql/client` | `createSchemalessClient`, `CLIENT_TYPES`, `loadDriver`, `createSchemalessAdapter`, `createSQLAdapter`, `createMemorySchemaless`, `createMongoSchemaless` |
 
 ### createSchemalessClient(type?, config?)
 
-- `type`: `memory` (in-process), `sqlite` (`better-sqlite3`), `pg`, `mysql`, `mongodb`, or `sql`
-  (any driver through your own `executor`). Defaults to `sqlite`.
-- `config`
-  - `client` / `conn`: reuse an existing driver instance instead of creating one — the driver package
-    is then **never imported**. A `pg` client you pass in is **not** re-connected (pg throws on a second
-    `connect()`).
-  - `driver`: inject the driver module (e.g. `await import('pg')`, or a stub in tests) when you want
-    umosql to construct the connection but not resolve the package.
-  - `driverOptions`: extra options forwarded to the driver constructor / connection factory.
-  - `filename`: sqlite file (default `:memory:`).
-  - `host`, `port`, `user`, `password`, `database`: pg / mysql / mongodb.
-  - `connectionString` | `url` (+ `ssl`): pg connection string (Neon, Supabase, ...).
-  - `uri`: mysql connection URI.
-  - `executor(sql, params)`: required for `type: 'sql'`; return driver rows (`{ rows }`, `mysql2`'s
+- `type`: `memory` \| `sqlite` (default) \| `pg` \| `mysql` \| `mongodb` \| `sql`.
+- `config`:
+  - `client` / `conn` — reuse an existing driver instance; the driver package is then **never imported**
+    (a `pg` client you pass in is not re-connected — pg throws on a second `connect()`).
+  - `driver` — inject the driver module (e.g. `await import('pg')`, or a stub in tests) so umosql
+    constructs the connection but never resolves the package.
+  - `driverOptions` — forwarded to the driver constructor / connection factory.
+  - `filename` — sqlite file (default `:memory:`).
+  - `host`, `port`, `user`, `password`, `database` — pg / mysql / mongodb.
+  - `connectionString` \| `url` (+ `ssl`) — pg connection string (Neon, Supabase, ...).
+  - `uri` — mysql connection URI.
+  - `executor(sql, params)` — required for `type: 'sql'`; return driver rows (`{ rows }`, mysql2's
     `[rows, fields]`, or a plain array). Optional `close()` for teardown.
-  - `debug`: log every generated statement.
-  - `id` | `idColumn`, `idStrategy`, `idGenerator`: defaults for collections created via `db()`.
-- Returns `{ type, raw, adapter, db(name?, options?), close() }`
-  - `raw`: the underlying driver instance (`pg.Client`, `mysql2` connection, `MongoClient`,
-    `better-sqlite3` handle, in-memory `Database`); `null` for `type: 'sql'` unless you pass `client`.
-  - `db(name, options?)` → `{ name, collection(name, opts?), adapter }`. For `memory`, each name gets an
-    isolated store; for SQL/Mongo it scopes id options.
-  - `close()`: releases the driver (ends connections, drops in-memory stores). Safe to call twice.
-
-```javascript
-import { createSchemalessClient } from 'umosql/client';
-
-const client = await createSchemalessClient('sqlite', { filename: ':memory:' });
-const users = client.db('app').collection('users');
-await users.insertOne({ name: 'Alice', age: 25 });
-console.log(await (await users.find({ age: { $gte: 18 } })).toArray());
-await client.close();
-```
+  - `debug` — log every generated statement.
+  - `id` \| `idColumn`, `idStrategy`, `idGenerator` — defaults for collections created via `db()`.
+- Returns `{ type, raw, adapter, db(name?, options?), close() }`:
+  - `raw` — the underlying driver instance (`null` for `type: 'sql'` unless you pass `client`).
+  - `db(name, options?)` → `{ name, collection(name, opts?), adapter }`; for `memory` each name gets an
+    isolated store.
+  - `close()` — releases the driver; safe to call twice.
 
 ### createSchemalessAdapter(client?, database?, options?)
 
-- Parameters
-  - `client` (optional): backend client instance. Omit for memory.
-  - `database` (optional): one of `memory` | `sqlite` | `pg` | `mysql`. Defaults to `memory`.
-  - `options` (optional): `{ debug?: boolean }`.
-- Returns: `{ adapter, client? }`
-  - `adapter`: unified interface with Mongo-compatible collection methods.
-  - `client`: the raw client for SQL backends (not present for memory).
-  - memory returns `{ adapter, database }` instead, where `database` is the in-memory `Database`.
+- `client` — driver instance; omit for memory.
+- `database` — `memory` (default) \| `sqlite` \| `pg` \| `mysql`.
+- `options` — `{ debug?: boolean }`.
+- Returns `{ adapter, client? }` (memory returns `{ adapter, database }`).
 - Use `createSchemalessClient` when you want the driver created/closed for you, or `mongodb` support.
 
-### Drivers
+### createSQLAdapter({ database, execute, queryBuilder, debug? })
 
-- umosql declares **no** runtime dependencies and bundles **no** driver code (`pg`, `mysql2`,
-  `better-sqlite3`, `mongodb` and `dotenv` stay external in every build).
-- Install only what you use, or pass `{ client }` / `{ driver }` to skip resolution entirely.
-- `loadDriver(backend, specifier, () => import(specifier))` is exported from `umosql/client` if you
-  want the same lazy-load-with-hint behaviour in a custom backend.
+- `database` — `'pg'` \| `'mysql'` \| `'sqlite'` (controls SQL dialect).
+- `execute(sql, params)` — your serverless/HTTP transport; return driver rows.
+- `queryBuilder` — pass `createQueryBuilder({ filterOps, exprOps, updateOps, stageHandlers })`.
 
-### Adapter
+### Adapter and Collection
 
-- `collection(name, opts?)` → `Collection`
-  - `opts` may include `{ id?: string, idStrategy?: 'auto'|'mongo'|'custom', idGenerator?: () => string }`.
-- `listCollections()` → `string[]`
-- `dropCollection(name)` → `{ acknowledged: boolean }`
-- SQL-only helpers
-  - `createTableWithSchema(name, jsonSchema)`
-  - `getTableSchema(name)` → `{ columns: Record<string, any> }`
-  - `addColumn(name, col, type, options?)`
-  - `renameColumn(name, from, to)`
-  - `modifyColumn(name, col, type, options?)` (pg/mysql)
+Adapter: `collection(name, options?)`, `listCollections()`, `dropCollection(name)`,
+`tableExists(name)`, `getTableSchema(name)`, `createTableWithSchema(name, schema)`, `addColumn()`,
+`renameColumn()`, `modifyColumn()` (pg/mysql), `createIndex()`, `dropIndex()`, `dropColumn()` (pg/mysql),
+plus `buildInsert/buildFind/buildUpdateOne/...` for custom pipelines.
 
-### Collection
+Collection options: `{ schema?, migrateOnUpdate?, idColumn?, idStrategy?, idGenerator? }`.
 
-- CRUD
-  - `insertOne(doc)` → `{ acknowledged: boolean, insertedId: any }`
-  - `insertMany(docs)` → `{ acknowledged: boolean, insertedIds: any[] }`
-  - `find(filter?, projection?, options?)` → `{ toArray(): Promise<any[]>, count(): Promise<number> }`
-  - `findOne(filter?, projection?)` → `Promise<any | null>`
-  - `updateOne(filter, update, options?)` → `{ acknowledged: boolean, matchedCount: number, modifiedCount: number, upsertedId?: any }`
-  - `updateMany(filter, update, options?)` → `{ acknowledged: boolean, matchedCount: number, modifiedCount: number }`
-  - `upsertOne(filter, update)` → `{ acknowledged: boolean, upserted: boolean, upsertedId?: any }`
-  - `deleteOne(filter)` → `{ acknowledged: boolean, deletedCount: number }`
-  - `deleteMany(filter?)` → `{ acknowledged: boolean, deletedCount: number }`
-- Query helpers
-  - `countDocuments(filter?)` → `number`
-  - `estimatedDocumentCount()` → `number`
-  - `distinct(field, filter?)` → `any[]`
-  - `aggregate(pipeline)` → `any[]` (Mongo-like stages with SQL mapping under the hood)
-- SQL-only convenience
-  - `findMany({ filter, sort, page, pageSize, includeTotal })` → `{ items, total, page, pageSize }`
+Collection methods: `insertOne`, `insertMany`, `find` (await → cursor with `sort`/`skip`/`limit`/
+`distinct`/`toArray`/`count`), `findOne`, `findMany` (SQL), `updateOne`, `updateMany`, `upsertOne`,
+`deleteOne`, `deleteMany`, `countDocuments`, `estimatedDocumentCount`, `distinct`, `aggregate`,
+`createIndex`, `dropColumn` (pg/mysql).
 
-### ID Strategies
+Write results follow Mongo conventions:
+`{ acknowledged, insertedId?, insertedIds?, matchedCount?, modifiedCount?, deletedCount?, upserted?, upsertedId? }`.
 
-- `auto` (default): numeric autoincrement on SQL; in-memory numeric counter.
-- `mongo`: 24-character hex string (`_id`) for parity.
-- `custom`: provide `idGenerator()`; adapter respects provided id.
+## Examples directory
 
+| File | What it shows |
+| --- | --- |
+| `examples/client.js` | Runnable tour of every backend (memory → sql → sqlite → pg/mysql/mongo when configured) |
+| `examples/memory.js` | In-memory engine: filters, aggregation, nested updates |
+| `examples/lite.js` / `examples/tiny.js` | Prebuilt lite/tiny builders |
+| `examples/pg.js`, `examples/mysql.js`, `examples/sqlite.js` | Schemaless adapters on each SQL backend |
+| `examples/mongo.js` | MongoDB backend |
+| `examples/serverless-*.js` | Neon, Turso, PlanetScale, Drizzle (see [Serverless](#serverless-neon-turso-planetscale-drizzle-hyperdrive-)) |
+
+Run any of them directly, e.g. `node examples/client.js`.
+
+## License
+
+[ISC](LICENSE) © Kethan Surana
 
 ---
 
-### Similar Projects
+Inspired by MongoDB's query syntax; built for the SQL world. Similar projects:
+[MongoDB](https://www.mongodb.com/) (the inspiration), [Mongoose](https://mongoosejs.com/)
+(object modeling), [Knex.js](http://knexjs.org/) (SQL query builder).
 
-- [MongoDB](https://www.mongodb.com/) - The inspiration
-- [Mongoose](https://mongoosejs.com/) - MongoDB object modeling
-- [Knex.js](http://knexjs.org/) - SQL query builder
-
----
-
-## 📞 Support
-
-- 🐛 [Report bugs](https://github.com/kethan/umosql/issues)
-- 💡 [Request features](https://github.com/kethan/umosql/issues)
-- 📖 [Documentation](https://github.com/kethan/umosql)
-
----
-
-## 🚀 Quick Links
-
-- [NPM Package](https://www.npmjs.com/package/umosql)
-- [GitHub Repository](https://github.com/kethan/umosql)
-
----
-
-## 🙏 Acknowledgments
-
-Inspired by MongoDB's intuitive query syntax and the need for SQL compatibility.
-
----
-
-## 📄 License
-
-MIT License - feel free to use in your projects!
-
----
-
-## 🙏 Credits
-
-Created for developers who love MongoDB syntax but need SQL databases.
-
----
-
-**Made with ❤️ for the JavaScript community and for developers who love MongoDB syntax but need SQL databases**
