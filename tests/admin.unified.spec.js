@@ -61,6 +61,9 @@ try {
   console.log('[admin.unified] MongoDB unavailable, skipping mongodb tests:', e?.message || e);
 }
 
+// try/finally: a failing test must not skip connection cleanup, otherwise a
+// direct `node <spec>` run (or the suite) hangs forever on leaked handles.
+try {
 for (const db of dbs) {
   const tname = `studio_users_unified_${db.name}`;
   const adapter = db.adapter;
@@ -332,12 +335,14 @@ for (const db of dbs) {
   }
 }
 
-for (const db of dbs) {
-  try {
-    if (db.client && typeof db.client.end === 'function') await db.client.end();
-    else if (db.client && typeof db.client.close === 'function') await db.client.close();
-    if (db.conn && typeof db.conn.end === 'function') await db.conn.end();
-    if (db.name === 'sqlite' && db.client && typeof db.client.close === 'function') await db.client.close();
-    if (typeof db.stop === 'function') await db.stop().catch?.(() => { });
-  } catch { }
+} finally {
+  for (const db of dbs) {
+    try {
+      if (db.client && typeof db.client.end === 'function') await db.client.end();
+      else if (db.client && typeof db.client.close === 'function') await db.client.close();
+      if (db.conn && typeof db.conn.end === 'function') await db.conn.end();
+      if (db.name === 'sqlite' && db.client && typeof db.client.close === 'function') await db.client.close();
+      if (typeof db.stop === 'function') await db.stop().catch?.(() => { });
+    } catch { }
+  }
 }

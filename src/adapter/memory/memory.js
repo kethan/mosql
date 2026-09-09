@@ -752,7 +752,7 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
                 ctxArr = sOps[op](args, ctxArr, expression);
             } else if (op === '$match') {
                 ctxArr = ctxArr.filter(i => sOps[op](args, i, filter));
-            } else if (op === '$project' || op === '$addFields' || op === '$set') {
+            } else if (op === '$project' || op === '$addFields' || op === '$set' || op === '$unset') {
                 ctxArr = ctxArr.map(i => sOps[op](args, i, expression));
             } else {
                 ctxArr = sOps[op](args, ctxArr);

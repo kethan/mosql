@@ -78,6 +78,9 @@ await (async () => {
   for (const sql of rows) await a.execute(sql);
 };
 
+// try/finally: a failing test must not skip connection cleanup, otherwise a
+// direct `node <spec>` run (or the suite) hangs forever on leaked handles.
+try {
 for (const db of dbs) {
   await setup(db);
 
@@ -192,11 +195,13 @@ for (const db of dbs) {
   }, [{ name: 'Alice' }, { name: 'Bob' }]);
 }
 
-for (const db of dbs) {
-  try {
-    if (db.client && typeof db.client.end === 'function') await db.client.end();
-    if (db.conn && typeof db.conn.end === 'function') await db.conn.end();
-    if (typeof db.stop === 'function') await db.stop();
-  } catch { }
+} finally {
+  for (const db of dbs) {
+    try {
+      if (db.client && typeof db.client.end === 'function') await db.client.end();
+      if (db.conn && typeof db.conn.end === 'function') await db.conn.end();
+      if (typeof db.stop === 'function') await db.stop();
+    } catch { }
+  }
 }
 })();
