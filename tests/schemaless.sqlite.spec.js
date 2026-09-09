@@ -39,4 +39,4 @@ const main = async () => {
   await runTest('SQLite dropColumn throws', async () => [{ ok: !!dropErr }], [ { ok: true } ]);
 };
 
-main().catch(e => { process.exitCode = 1; });
+await main().catch(e => { process.exitCode = 1; });

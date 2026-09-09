@@ -93,7 +93,7 @@ const main = async () => {
   }
 };
 
-main().catch(e => {
+await main().catch(e => {
   console.error('[schemaless.pg.types] FAILED');
   console.error(e);
   process.exitCode = 1;

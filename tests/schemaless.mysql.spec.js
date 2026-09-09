@@ -28,7 +28,7 @@ const main = async () => {
   }
 };
 
-main().catch(e => {
+await main().catch(e => {
   console.error('[schemaless.mysql] FAILED');
   console.error(e);
   process.exitCode = 1;

@@ -50,7 +50,7 @@ const main = async () => {
   }
 };
 
-main().catch(err => {
+await main().catch(err => {
   console.error('[schemaless.pg] FAILED');
   console.error(err);
   process.exitCode = 1;

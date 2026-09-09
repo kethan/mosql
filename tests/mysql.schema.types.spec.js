@@ -46,7 +46,7 @@ const main = async () => {
   }
 };
 
-main().catch(e => {
+await main().catch(e => {
   console.error('[mysql.schema.types] FAILED');
   console.error(e);
   process.exitCode = 1;

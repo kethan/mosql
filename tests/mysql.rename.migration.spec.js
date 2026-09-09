@@ -63,6 +63,14 @@ const makeMockMySQL = () => {
       // MySQL rejects a lengthless VARCHAR/CHAR in DDL — reproduce that so
       // the regression test fails if the adapter ever emits one again.
       if (/^(varchar|char)$/i.test(type)) throw mysqlError(1064, `You have an error in your SQL syntax near '${type}'`);
+      // MySQL's grammar for `ALTER TABLE ... ADD col` (without COLUMN) breaks
+      // when the column name matches a type keyword case-insensitively, e.g.
+      // `ADD longText VARCHAR(255)` is a 1064 on real MySQL 8.0 because
+      // `longText` lexes as LONGTEXT. Mirror that so this stays guarded.
+      const withoutColumn = !/\bADD\s+COLUMN\b/i.test(sql);
+      if (withoutColumn && /^(longtext|mediumtext|tinytext|text|longblob|mediumblob|tinyblob|blob|date|datetime|timestamp|time|year|json)$/i.test(m[2])) {
+        throw mysqlError(1064, `You have an error in your SQL syntax near '${m[2]} ${type}'`);
+      }
       const tbl = tables.get(m[1]) || { columns: new Map(), rows: [], nextId: 1 };
       tbl.columns.set(m[2], type.toUpperCase());
       tables.set(m[1], tbl);
@@ -168,7 +176,7 @@ await runTest('mysql mock $rename pre-adds target column with a valid type', asy
   await users.insertMany(seed);
   await users.updateOne({ name: 'David' }, { $rename: { city: 'town' } });
   const row = await users.findOne({ name: 'David' });
-  const addTown = mock.ddl.find((d) => /ADD town/i.test(d));
+  const addTown = mock.ddl.find((d) => /ADD(?: COLUMN)? town/i.test(d));
   assert.ok(addTown, 'expected an ALTER TABLE ... ADD town statement');
   assert.match(addTown, /VARCHAR\(\d+\)/i, 'town must be added with a length (bare VARCHAR is invalid DDL in MySQL)');
   return [{ isCityNull: row?.city == null, hasTown: row?.town != null, town: row?.town }];
@@ -189,3 +197,16 @@ await runTest('mysql mock $set migrates a missing column on update', async () =>
   const row = await users.findOne({ name: 'Alice' });
   return [{ alias: row?.alias }];
 }, [{ alias: 'ally' }]);
+
+await runTest('mysql mock inferred columns are added with ADD COLUMN (type-named column like longText)', async () => {
+  const { users, mock } = setup();
+  // On real MySQL 8.0, `ALTER TABLE users ADD longText VARCHAR(255)` is a
+  // syntax error (longText lexes as the LONGTEXT type keyword); the adapter
+  // must always emit `ADD COLUMN` so inferred columns survive.
+  await users.insertOne({ name: 'Alice', longText: 'A'.repeat(600) });
+  const row = await users.findOne({ name: 'Alice' });
+  const adds = mock.ddl.filter((d) => /ADD/i.test(d) && /longText/i.test(d));
+  assert.ok(adds.length > 0, 'expected an ALTER TABLE statement adding longText');
+  assert.ok(adds.every((d) => /\bADD\s+COLUMN\b/i.test(d)), `longText must be added with ADD COLUMN, got: ${adds.join(' | ')}`);
+  return [{ longText: row?.longText?.length }];
+}, [{ longText: 600 }]);
