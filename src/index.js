@@ -800,12 +800,16 @@ export const createQueryBuilder = (config = {}) => {
         const allKeys = [...new Set(docs.flatMap(d => Object.keys(d)))];
         if (allKeys.length === 0) throw new Error('Documents must have at least one field');
 
-        const columns = allKeys.map(Validate.col).join(', ');
+        // MySQL lexes type-keyword names (e.g. `longText` → LONGTEXT) as keywords
+        // even inside an INSERT column list, so quote mysql identifiers here.
+        const colName = (name) => db === 'mysql' ? `\`${name}\`` : name;
+
+        const columns = allKeys.map((k) => colName(Validate.col(k, db))).join(', ');
         const rows = docs.map(doc =>
             `(${allKeys.map(k => doc.hasOwnProperty(k) ? escape(doc[k], db) : 'NULL').join(', ')})`
         ).join(', ');
 
-        let sql = `INSERT INTO ${Validate.col(table, db)} (${columns}) VALUES ${rows}`;
+        let sql = `INSERT INTO ${colName(Validate.col(table, db))} (${columns}) VALUES ${rows}`;
 
         if (db === 'pg' && options.returning) {
             const ret = Array.isArray(options.returning) ? options.returning.map(Validate.col).join(', ') : '*';
