@@ -696,9 +696,16 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
         if (isObject(e)) {
             const [op, args] = Object.entries(e)[0];
             if (!eOps[op]) throw new Error(`Unknown expression operator: ${op}`);
-            return eOps[op](Array.isArray(args) ? args : [args], { expr: (x) => expression(x)(doc), ctx, doc });
+            return eOps[op](Array.isArray(args) ? args : [args], { expr: (x, c2 = ctx) => expression(x, c2)(doc), ctx, doc });
         }
-        if (is$(e)) return getPath(doc, e.slice(1));
+        if (is$(e)) {
+            // '$field' reads a document field; '$$var' reads a variable bound by
+            // an enclosing operator ($map/$filter/$reduce) through the ctx chain.
+            let key = e.slice(1);
+            if (key.startsWith('$')) key = key.slice(1);
+            if (Object.prototype.hasOwnProperty.call(ctx, key)) return ctx[key];
+            return getPath(doc, key);
+        }
         return e;
     };
     

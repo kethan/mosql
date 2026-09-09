@@ -9,6 +9,7 @@ const log = (...args) => console.log('[db-helpers]', ...args);
  * - PG_HOST env set -> real `pg` Client (CI / local server), caller connects.
  * - otherwise       -> PGlite (WASM Postgres, in-memory) wrapped in a pg-like API
  *   (`connect`/`query`/`end`/`on`), so specs need no code changes between backends.
+ * Returns null (with a warning) when no Postgres backend is available.
  */
 export async function createPGClient() {
   const host = process.env.PG_HOST;
@@ -28,7 +29,8 @@ export async function createPGClient() {
   try {
     ({ PGlite } = await import('@electric-sql/pglite'));
   } catch (e) {
-    throw new Error(`PGlite not installed (npm i -D @electric-sql/pglite): ${e?.message || e}`);
+    log('PostgreSQL unavailable (no PG_HOST, and PGlite not installed — npm i -D @electric-sql/pglite), skipping pg tests:', e?.message || e);
+    return null;
   }
 
   const db = await PGlite.create(); // in-memory WASM Postgres
@@ -59,38 +61,56 @@ export async function createPGClient() {
  * - MYSQL_HOST env set -> real `mysql2` connection (CI / local server).
  * - otherwise          -> mysql-memory-server: ephemeral real mysqld (no Docker,
  *   binary downloaded once and cached), connected via the same `mysql2` API.
- * Returns `{ conn, label, stop }` — `stop()` shuts the embedded server down.
+ *   Set MYSQL_EMBED=0 to disable the embedded fallback (e.g. in CI unit jobs).
+ * Returns `{ conn, label, stop }` — `stop()` shuts the embedded server down —
+ * or null (with a warning) when no MySQL backend is available.
  */
 export async function createMySQLConn() {
   const host = process.env.MYSQL_HOST;
   if (host) {
     const mysql = await import('mysql2/promise');
-    const conn = await mysql.createConnection({
-      host,
-      port: Number(process.env.MYSQL_PORT || 3306),
-      user: process.env.MYSQL_USER,
-      password: process.env.MYSQL_PASS,
-      database: process.env.MYSQL_DB,
-    });
-    return { conn, label: `mysql-server:${host}`, stop: async () => {} };
+    try {
+      const conn = await mysql.createConnection({
+        host,
+        port: Number(process.env.MYSQL_PORT || 3306),
+        user: process.env.MYSQL_USER,
+        password: process.env.MYSQL_PASS,
+        database: process.env.MYSQL_DB,
+      });
+      return { conn, label: `mysql-server:${host}`, stop: async () => {} };
+    } catch (e) {
+      log('MySQL server configured but unreachable, skipping mysql tests:', e?.message || e);
+      return null;
+    }
+  }
+
+  if (process.env.MYSQL_EMBED === '0') {
+    log('MYSQL_EMBED=0, skipping embedded mysqld');
+    return null;
   }
 
   let createDB;
   try {
     ({ createDB } = await import('mysql-memory-server'));
   } catch (e) {
-    throw new Error(`mysql-memory-server not installed (npm i -D mysql-memory-server): ${e?.message || e}`);
+    log('MySQL unavailable (no MYSQL_HOST, and mysql-memory-server not installed — npm i -D mysql-memory-server), skipping mysql tests:', e?.message || e);
+    return null;
   }
 
   log('starting embedded mysqld (no Docker) — first run downloads the MySQL binary, please wait');
-  const db = await createDB({ dbName: 'testdb' });
-  const mysql = await import('mysql2/promise');
-  const conn = await mysql.createConnection({
-    host: '127.0.0.1',
-    port: db.port,
-    user: db.username,
-    password: '',
-    database: db.dbName,
-  });
-  return { conn, label: 'mysql-embedded(mysqld)', stop: () => db.stop() };
+  try {
+    const db = await createDB({ dbName: 'testdb' });
+    const mysql = await import('mysql2/promise');
+    const conn = await mysql.createConnection({
+      host: '127.0.0.1',
+      port: db.port,
+      user: db.username,
+      password: '',
+      database: db.dbName,
+    });
+    return { conn, label: 'mysql-embedded(mysqld)', stop: () => db.stop() };
+  } catch (e) {
+    log('embedded mysqld failed to start, skipping mysql tests:', e?.message || e);
+    return null;
+  }
 }

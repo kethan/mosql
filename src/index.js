@@ -300,8 +300,9 @@ export const exprOps = {
         const x = `AVG(${c.expr(a[0])})`;
         return c.db === 'mysql' ? `CAST(${x} AS DOUBLE)` : x;
     },
-    $min: (a, c) => a.length === 1 ? `MIN(${c.expr(a[0])})` : `LEAST(${a.map(x => c.expr(x)).join(', ')})`,
-    $max: (a, c) => a.length === 1 ? `MAX(${c.expr(a[0])})` : `GREATEST(${a.map(x => c.expr(x)).join(', ')})`,
+    // SQLite has multi-arg MIN/MAX but no LEAST/GREATEST scalars.
+    $min: (a, c) => a.length === 1 ? `MIN(${c.expr(a[0])})` : c.db === 'sqlite' ? `MIN(${a.map(x => c.expr(x)).join(', ')})` : `LEAST(${a.map(x => c.expr(x)).join(', ')})`,
+    $max: (a, c) => a.length === 1 ? `MAX(${c.expr(a[0])})` : c.db === 'sqlite' ? `MAX(${a.map(x => c.expr(x)).join(', ')})` : `GREATEST(${a.map(x => c.expr(x)).join(', ')})`,
     $count: () => 'COUNT(*)',
     $stdDevPop: (a, c) => `STDDEV_POP(${c.expr(a[0])})`,
     $stdDevSamp: (a, c) => `STDDEV_SAMP(${c.expr(a[0])})`,
@@ -575,7 +576,12 @@ export const stageHandlers = {
 
     $sort: (a, s, db) => {
         const clauses = Object.entries(a).map(([k, ord]) => {
-            const f = s.aggExprs[k] || (k.includes('.') ? jsonPath(k, db) : Validate.col(k, db));
+            // When the field was produced by an earlier $project/$addFields/$group
+            // stage, sort by its output alias: the raw expression may reference
+            // columns that the wrapping sub-select no longer exposes.
+            const f = s.aggExprs[k] !== undefined
+                ? Validate.alias(k)
+                : (k.includes('.') ? jsonPath(k, db) : Validate.col(k, db));
             return `${f} ${ord === 1 || ord === 'asc' ? 'ASC' : 'DESC'}`;
         }).join(', ');
         s.order = ` ORDER BY ${clauses}`;

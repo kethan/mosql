@@ -1,10 +1,17 @@
 import fs from 'fs';
 import path from 'path';
 import { pathToFileURL, fileURLToPath } from 'url';
+import { getSkipCount } from './common.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-const isSpec = (f) => f.endsWith('.spec.js') && !f.includes('bun.');
+// Every *.spec.js in the tree runs in one process. Files are written so they
+// also work under `bun test` (see common.js), so nothing is excluded here:
+// "unified" runtime specs degrade to SQLite/Memory and SKIP the backends that
+// are not reachable in the current environment (pg/mysql/mongodb are enabled
+// via PG_HOST / MYSQL_HOST / MONGO_HOST, or via the embedded PGlite / mysqld
+// fallbacks in db-helpers.js).
+const isSpec = (f) => f.endsWith('.spec.js');
 
 const walk = (dir) => {
   const out = [];
@@ -28,6 +35,9 @@ for (const spec of specs) {
     console.error('Import failed:', spec, e?.message || e);
   }
 }
+
+const skipped = getSkipCount();
+console.log(`\n[run-all] ${specs.length} spec files, ${skipped} skipped tests${failed ? ', FAILURES' : ''}`);
 // Exit non-zero when any spec module throws during evaluation so CI catches it.
 if (failed && typeof process !== 'undefined' && process?.exit) {
   process.exit(1);

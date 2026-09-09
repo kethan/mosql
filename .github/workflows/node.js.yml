@@ -10,6 +10,10 @@ jobs:
   unit:
     runs-on: ubuntu-latest
 
+    env:
+      # Fast job: sqlite + memory + embedded PGlite. Real MySQL/Mongo run in the `db` job.
+      MYSQL_EMBED: "0"
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -164,35 +168,11 @@ jobs:
           echo "MONGO_USER=$MONGO_USER"
           echo "MONGO_DB=$MONGO_DB"
 
-      - name: Run PostgreSQL schemaless tests
+      - name: Run full unified test suite (sqlite, memory, pg, mysql, mongodb)
         run: |
-          echo "=== START schemaless.pg.spec.js ==="
-          timeout 3m node ./tests/schemaless.pg.spec.js
-          echo "=== END schemaless.pg.spec.js ==="
-
-      - name: Run PostgreSQL schema types tests
-        run: |
-          echo "=== START pg.schema.types.spec.js ==="
-          timeout 3m node ./tests/pg.schema.types.spec.js
-          echo "=== END pg.schema.types.spec.js ==="
-
-      - name: Run MySQL schemaless tests
-        run: |
-          echo "=== START schemaless.mysql.spec.js ==="
-          timeout 3m node ./tests/schemaless.mysql.spec.js
-          echo "=== END schemaless.mysql.spec.js ==="
-
-      - name: Run MySQL schema types tests
-        run: |
-          echo "=== START mysql.schema.types.spec.js ==="
-          timeout 3m node ./tests/mysql.schema.types.spec.js
-          echo "=== END mysql.schema.types.spec.js ==="
-
-      - name: Run admin unified tests
-        run: |
-          echo "=== START admin.unified.spec.js ==="
-          timeout 3m node ./tests/admin.unified.spec.js
-          echo "=== END admin.unified.spec.js ==="
+          echo "=== START full unified suite ==="
+          timeout 15m node ./tests/run-all.js
+          echo "=== END full unified suite ==="
 
       - name: Dump PostgreSQL container logs
         if: failure()

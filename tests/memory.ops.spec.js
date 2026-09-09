@@ -39,6 +39,93 @@ const main = async () => {
     return av - bv;
   }), [ { _id: 0, count: 2 }, { _id: 30, count: 2 }, { _id: 40, count: 1 } ]);
   await runTest('mem stage $unwind', async () => users.aggregate([ { $unwind: '$tags' }, { $match: { name: 'Alice' } } ]).map(x => ({ tag: x.tags })), [ { tag: 'a' }, { tag: 'b' } ]);
+
+  // ---------------------------------------------------------------
+  // Memory-only operators that previously had no test coverage at all.
+  // ---------------------------------------------------------------
+  const extras = collection('extras', [
+    { _id: 1, name: 'A', age: 25, tags: ['x', 'y'], nums: [3, 1, 2], created: '2024-01-01T00:00:00.123Z' },
+    { _id: 2, name: 'B', age: 31, tags: ['y'], nums: [5], created: '2024-06-01T00:00:00.456Z' },
+  ]);
+
+  await runTest('mem filter $where', async () =>
+    extras.find({ $where: function () { return this.age > 30; } }).toArray().map(x => ({ name: x.name })),
+  [ { name: 'B' } ]);
+
+  await runTest('mem filter $type', async () =>
+    extras.find({ tags: { $type: 'array' }, name: { $type: 'string' } }).toArray().map(x => ({ name: x.name })),
+  [ { name: 'A' }, { name: 'B' } ]);
+
+  await runTest('mem expr $type', async () =>
+    extras.aggregate([ { $match: { name: 'A' } }, { $project: { t: { $type: '$tags' }, n: { $type: '$nums' } } } ]).map(x => ({ t: x.t, n: x.n })),
+  [ { t: 'array', n: 'array' } ]);
+
+  await runTest('mem expr $split', async () =>
+    extras.aggregate([ { $match: { name: 'A' } }, { $project: { s: { $split: ['a-b-c', '-'] } } } ]).map(x => ({ s: x.s })),
+  [ { s: ['a', 'b', 'c'] } ]);
+
+  await runTest('mem expr $slice', async () =>
+    extras.aggregate([ { $match: { name: 'A' } }, { $project: { a: { $slice: ['$nums', 2] }, b: { $slice: ['$nums', -2] }, c: { $slice: ['$nums', 1, 2] } } } ]).map(x => ({ a: x.a, b: x.b, c: x.c })),
+  [ { a: [3, 1], b: [1, 2], c: [1, 2] } ]);
+
+  await runTest('mem expr $arrayElemAt', async () =>
+    extras.aggregate([ { $match: { name: 'A' } }, { $project: { a: { $arrayElemAt: ['$nums', 0] }, b: { $arrayElemAt: ['$nums', -1] } } } ]).map(x => ({ a: x.a, b: x.b })),
+  [ { a: 3, b: 2 } ]);
+
+  await runTest('mem expr $map', async () =>
+    extras.aggregate([ { $match: { name: 'A' } }, { $project: { up: { $map: ['$tags', 't', { $upper: '$$t' }] } } } ]).map(x => ({ up: x.up })),
+  [ { up: ['X', 'Y'] } ]);
+
+  await runTest('mem expr $filter', async () =>
+    extras.aggregate([ { $match: { name: 'A' } }, { $project: { f: { $filter: ['$tags', 't', { $ne: ['$$t', 'x'] }] } } } ]).map(x => ({ f: x.f })),
+  [ { f: ['y'] } ]);
+
+  await runTest('mem expr $reduce', async () =>
+    extras.aggregate([ { $match: { name: 'A' } }, { $project: { r: { $reduce: ['$nums', 0, { $add: ['$$value', '$$this'] }] } } } ]).map(x => ({ r: x.r })),
+  [ { r: 6 } ]);
+
+  await runTest('mem expr $millisecond', async () =>
+    extras.aggregate([ { $match: { name: 'A' } }, { $project: { ms: { $millisecond: '$created' } } } ]).map(x => ({ ms: x.ms })),
+  [ { ms: 123 } ]);
+
+  await runTest('mem update $pullAll', async () => {
+    extras.updateOne({ name: 'A' }, { $pullAll: { tags: ['x'] } });
+    return extras.find({ name: 'A' }).toArray().map(x => ({ tags: x.tags }));
+  }, [ { tags: ['y'] } ]);
+
+  await runTest('mem update $pop', async () => {
+    extras.updateOne({ name: 'A' }, { $pop: { tags: 1 } });
+    return extras.find({ name: 'A' }).toArray().map(x => ({ tags: x.tags }));
+  }, [ { tags: [] } ]);
+
+  await runTest('mem update $setOnInsert upsert', async () => {
+    const res = extras.updateOne({ name: 'New' }, { $setOnInsert: { age: 9 } }, { upsert: true });
+    const doc = extras.findOne({ name: 'New' });
+    return [ { upserted: res.upsertedCount, age: doc.age } ];
+  }, [ { upserted: 1, age: 9 } ]);
+
+  await runTest('mem update $setOnInsert existing doc noop', async () => {
+    extras.updateOne({ name: 'New' }, { $setOnInsert: { age: 99 } });
+    const doc = extras.findOne({ name: 'New' });
+    return [ { age: doc.age } ];
+  }, [ { age: 9 } ]);
+
+  await runTest('mem group $push/$addToSet/$first/$last', async () =>
+    users.aggregate([
+      { $group: {
+        _id: '$city',
+        names: { $push: '$name' },
+        oneCity: { $addToSet: '$city' },
+        firstAge: { $first: '$age' },
+        lastAge: { $last: '$age' },
+      } },
+      { $sort: { _id: 1 } },
+    ]).map(x => ({ _id: x._id, names: x.names, oneCity: x.oneCity, firstAge: x.firstAge, lastAge: x.lastAge })),
+  [
+    { _id: 'Berlin', names: ['Charlie', 'Eve'], oneCity: ['Berlin'], firstAge: 22, lastAge: 35 },
+    { _id: 'London', names: ['Bob'], oneCity: ['London'], firstAge: 30, lastAge: 30 },
+    { _id: 'Paris', names: ['Alice', 'David'], oneCity: ['Paris'], firstAge: 25, lastAge: 40 },
+  ]);
 };
 
 main().catch(e => { process.exitCode = 1; });
