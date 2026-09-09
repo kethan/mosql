@@ -50,7 +50,11 @@ const label = 'qb.unified';
     await a.execute('DROP TABLE IF EXISTS orders');
     await a.execute('DROP TABLE IF EXISTS qb_users');
     await a.execute('CREATE TABLE qb_users (id SERIAL PRIMARY KEY, name TEXT, age INT, city TEXT, active BOOLEAN, profile JSONB, created_at TIMESTAMP, nullable TEXT)');
-    await a.execute('CREATE TABLE orders (id SERIAL PRIMARY KEY, user_id INT REFERENCES users(id), amount NUMERIC, status TEXT)');
+    // The key has to point at qb_users: PostgreSQL resolves a REFERENCES target while
+    // creating the table, so referencing a `users` table this file never makes fails
+    // there (SQLite and MySQL accept the dangling reference because they check it later
+    // or not at all, which is how it went unnoticed).
+    await a.execute('CREATE TABLE orders (id SERIAL PRIMARY KEY, user_id INT REFERENCES qb_users(id), amount NUMERIC, status TEXT)');
     const rows = [
       `INSERT INTO qb_users (name, age, city, active, profile, created_at, nullable) VALUES ('Alice',25,'Paris',TRUE,'{"country":"France","score":85}','2024-01-01 00:00:00',NULL)`,
       `INSERT INTO qb_users (name, age, city, active, profile, created_at, nullable) VALUES ('Bob',30,'London',TRUE,'{"country":"UK","score":90}','2024-06-01 00:00:00',NULL)`,

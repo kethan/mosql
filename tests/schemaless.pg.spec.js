@@ -22,14 +22,18 @@ const main = async () => {
     await client.connect();
 
     const { adapter } = createSchemalessAdapter(client, 'pg');
-    const users = adapter.collection('users');
+    const users = adapter.collection('schemaless_pg_users');
 
     await runTest(
       'Insert and update JSON',
       async () => {
-        await client.query('DROP TABLE IF EXISTS users');
+    // Every live spec owns its table name: these files run against one shared
+    // database in CI, so a bare `users` would be dropped and reshaped by whichever
+    // spec happened to run first (and the CREATE below only applies if it is absent,
+    // so a leftover table from another file silently changes what is inserted).
+        await client.query('DROP TABLE IF EXISTS schemaless_pg_users');
         await client.query(
-          'CREATE TABLE users (_id SERIAL PRIMARY KEY, name TEXT, profile JSONB)'
+          'CREATE TABLE schemaless_pg_users (_id SERIAL PRIMARY KEY, name TEXT, profile JSONB)'
         );
 
         await users.insertOne({
@@ -44,7 +48,7 @@ const main = async () => {
         );
 
         const res = await client.query(
-          "SELECT profile->>'score' AS score FROM users WHERE name = 'Alice'"
+          "SELECT profile->>'score' AS score FROM schemaless_pg_users WHERE name = 'Alice'"
         );
 
         return res.rows.map(r => ({

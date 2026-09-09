@@ -114,6 +114,13 @@ export const skipMessage = (label, kind, cfg) => {
 export const connectSkip = (label, cfg, error) =>
   `SKIP ${label} - cannot connect to ${cfg.host}:${cfg.port}/${cfg.database}: ${error?.message || error}`;
 
+// Dialects disagree about how a column name comes back: PostgreSQL folds unquoted
+// camelCase to lower case, while SQLite and MySQL keep the casing it was written
+// with. A spec that stores `createdAt` and asserts on `row.createdAt` therefore
+// passes on two of the three and reads undefined on pg - read through this instead.
+export const fieldOf = (row, name) =>
+  row == null ? undefined : name in row ? row[name] : row[String(name).toLowerCase()];
+
 // ---------------------------------------------------------------- schema shape
 //
 // The columns a "NULL everywhere" document has to leave alone, which the schema's

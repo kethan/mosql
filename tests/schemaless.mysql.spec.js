@@ -19,14 +19,16 @@ const main = async () => {
     return;
   }
   const { adapter } = createSchemalessAdapter(conn, 'mysql');
-  const users = adapter.collection('users');
+  // Own table name, because CI runs every live spec against the same database and
+  // a bare `users` would be dropped or reshaped by whichever spec ran first.
+  const users = adapter.collection('schemaless_mysql_users');
 
   await runTest('Insert and update JSON', async () => {
-    await conn.query('DROP TABLE IF EXISTS users');
-    await conn.query('CREATE TABLE users (_id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), profile JSON)');
+    await conn.query('DROP TABLE IF EXISTS schemaless_mysql_users');
+    await conn.query('CREATE TABLE schemaless_mysql_users (_id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(255), profile JSON)');
     await users.insertOne({ name: 'Alice', age: 25, profile: { score: 85 } });
     await users.updateOne({ name: 'Alice' }, { $set: { 'profile.score': 90 } });
-    const [rows] = await conn.query("SELECT JSON_EXTRACT(profile, '$.score') AS score FROM users WHERE name = 'Alice'");
+    const [rows] = await conn.query("SELECT JSON_EXTRACT(profile, '$.score') AS score FROM schemaless_mysql_users WHERE name = 'Alice'");
     return rows;
   }, [ { score: 90 } ]);
 

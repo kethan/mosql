@@ -2045,6 +2045,16 @@ Notes:
 - Boolean values
   - PostgreSQL uses `TRUE/FALSE`.
   - MySQL/SQLite often represent booleans as `TINYINT(1)`/`INTEGER` (1/0) at the SQL level.
+- Identifier casing
+  - `UMoSQL` writes column names unquoted, so PostgreSQL folds them to lower case:
+    a field stored as `profileScore` is reported by `SELECT *` and by
+    `getTableSchema()` as `profilescore`. MySQL and SQLite keep the casing. Read it
+    with the name the database gives back, or declare the columns in lower case.
+- Aggregation types
+  - `$bucket`'s `default` has to be comparable with its `boundaries`: PostgreSQL
+    types the generated `CASE` from the boundary values, so a string default such as
+    `'other'` against numeric boundaries fails with `invalid input syntax for type
+    integer`, while SQLite and MySQL mix the two.
 - Column management
   - `DROP COLUMN` is not supported by SQLite.
   - `MODIFY COLUMN` is not supported by SQLite; use `ALTER TABLE ... RENAME COLUMN` or recreate.

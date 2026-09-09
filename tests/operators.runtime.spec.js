@@ -5,7 +5,7 @@ import mysql from 'mysql2/promise';
 import pkg from 'pg';
 import { createSchemalessAdapter } from '../src/schemaless.js';
 import { createMongoSchemaless } from '../src/adapter/mongodb/adapter.js';
-import { runTest, pgConfig, mysqlConfig, mongoConfig, isConfigured, connectSkip } from './common.js';
+import { runTest, pgConfig, mysqlConfig, mongoConfig, isConfigured, connectSkip, fieldOf } from './common.js';
 
 const setups = [];
 const label = 'operators.runtime';
@@ -13,7 +13,7 @@ const label = 'operators.runtime';
 // SQLite
 {
   const { adapter } = createSchemalessAdapter(new Database(':memory:'), 'sqlite');
-  const users = adapter.collection('users');
+  const users = adapter.collection('operators_users');
   setups.push({ name: 'sqlite', adapter, users });
 }
 
@@ -29,7 +29,7 @@ const label = 'operators.runtime';
       const client = new Client(cfg);
       await client.connect();
       const { adapter } = createSchemalessAdapter(client, 'pg');
-      setups.push({ name: 'pg', adapter, users: adapter.collection('users'), client });
+      setups.push({ name: 'pg', adapter, users: adapter.collection('operators_users'), client });
     } catch (e) {
       console.log(connectSkip(`${label} pg`, cfg, e));
     }
@@ -43,7 +43,7 @@ const label = 'operators.runtime';
     try {
       const conn = await mysql.createConnection(cfg);
       const { adapter } = createSchemalessAdapter(conn, 'mysql');
-      setups.push({ name: 'mysql', adapter, users: adapter.collection('users'), conn });
+      setups.push({ name: 'mysql', adapter, users: adapter.collection('operators_users'), conn });
     } catch (e) {
       console.log(connectSkip(`${label} mysql`, cfg, e));
     }
@@ -53,7 +53,7 @@ const label = 'operators.runtime';
 // Memory
 {
   const { adapter } = createSchemalessAdapter();
-  setups.push({ name: 'memory', adapter, users: adapter.collection('users') });
+  setups.push({ name: 'memory', adapter, users: adapter.collection('operators_users') });
 }
 
 // MongoDB (env-guarded)
@@ -62,7 +62,7 @@ const label = 'operators.runtime';
     // createMongoSchemaless resolves MONGO_* itself, so there is nothing to repeat here.
     const mongoInit = await createMongoSchemaless(mongoConfig());
     const adapter = mongoInit.adapter;
-    setups.push({ name: 'mongodb', adapter, users: adapter.collection('users'), client: mongoInit.client });
+    setups.push({ name: 'mongodb', adapter, users: adapter.collection('operators_users'), client: mongoInit.client });
   } catch (e) {
     console.log(`SKIP ${label} mongodb - ${e.message}`);
   }
@@ -71,7 +71,7 @@ const label = 'operators.runtime';
 // Memory and MongoDB setups removed
 
 for (const s of setups) {
-  await s.adapter.dropCollection('users').catch(() => { });
+  await s.adapter.dropCollection('operators_users').catch(() => { });
   const u = s.users;
   await u.insertMany([
     { name: 'Alice', age: 25, city: 'Paris', active: true, profile: { score: 85, tags: ['x', 'y'] }, items: [1, 2, 3] },
@@ -179,7 +179,8 @@ for (const s of setups) {
   await runTest(`runtime/${s.name} currentDate`, async () => {
     await u.updateOne({ name: 'David' }, { $currentDate: { createdAt: { $type: 'timestamp' } } });
     const row = await u.findOne({ name: 'David' });
-    return [{ ok: !!row.createdAt }];
+    // `createdAt` comes back folded on pg, so read it the way either casing stores it.
+    return [{ ok: !!fieldOf(row, 'createdAt') }];
   }, [{ ok: true }]);
 
   await runTest(`runtime/${s.name} rename`, async () => {
@@ -194,7 +195,8 @@ for (const s of setups) {
     const rows = await u.aggregate([{ $project: { name: 1, age: 1, nextAge: { $add: ['$age', 1] } } }, { $addFields: { isAdult: { $gte: ['$age', 18] } } }]);
     // SQLite reports booleans as 1/0, and Bob's age was rewritten by the
     // $min/$max cases above, so the expectations follow the mutated data.
-    return rows.map(r => ({ name: r.name, nextAge: r.nextAge, isAdult: !!r.isAdult })).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 2);
+    // The aliases come back folded on pg (`nextage`), so read them case-insensitively.
+    return rows.map(r => ({ name: r.name, nextAge: fieldOf(r, 'nextAge'), isAdult: !!fieldOf(r, 'isAdult') })).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 2);
   }, [{ name: 'Alice', nextAge: 26, isAdult: true }, { name: 'Bob', nextAge: 32, isAdult: true }]);
 
   // The updates above left Alice 25/Paris, Bob 31/London, Charlie 22 with no
@@ -203,7 +205,7 @@ for (const s of setups) {
   // the ordering of the two 31s deterministic.
   await runTest(`runtime/${s.name} aggregate $group avg age by city`, async () => {
     const rows = await u.aggregate([{ $group: { _id: '$city', avgAge: { $avg: '$age' } } }, { $sort: { avgAge: -1 } }]);
-    return rows.map(r => ({ id: r._id, avgAge: Math.round((r.avgAge || 0) * 100) / 100 }))
+    return rows.map(r => ({ id: r._id, avgAge: Math.round((fieldOf(r, 'avgAge') || 0) * 100) / 100 }))
       .sort((a, b) => b.avgAge - a.avgAge || String(a.id).localeCompare(String(b.id)));
   }, [{ id: 'London', avgAge: 31 }, { id: null, avgAge: 31 }, { id: 'Paris', avgAge: 25 }]);
 
@@ -226,8 +228,13 @@ for (const s of setups) {
     return rows.map(r => ({ id: r._id, count: r.count })).slice(0, 1);
   }, [{ id: null, count: 2 }]);
 
+  // The default bucket is numeric on purpose: PostgreSQL types the whole CASE
+  // expression from its first branch, so `ELSE 'other'` against integer boundaries
+  // is `invalid input syntax for type integer`, where SQLite and MySQL happily mix
+  // the two. Documented as a caveat; a string default is only portable in the sense
+  // that it fails.
   await runTest(`runtime/${s.name} aggregate $bucket`, async () => {
-    const rows = await u.aggregate([{ $bucket: { groupBy: '$age', boundaries: [0, 25, 50], default: 'other', output: { count: { $count: 1 } } } }]);
+    const rows = await u.aggregate([{ $bucket: { groupBy: '$age', boundaries: [0, 25, 50], default: 99, output: { count: { $count: 1 } } } }]);
     return rows.map(r => ({ id: r._id, count: r.count })).sort((a, b) => String(a.id).localeCompare(String(b.id)));
   }, [{ id: 0, count: 1 }, { id: 25, count: 3 }]);
 

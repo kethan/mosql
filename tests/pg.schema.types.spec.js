@@ -1,5 +1,5 @@
 import { loadEnv } from '../src/env.js';
-import { runTest, pgConfig, isConfigured, skipMessage, connectSkip, shapeOf, nullableColumns } from './common.js';
+import { runTest, pgConfig, isConfigured, skipMessage, connectSkip, shapeOf, nullableColumns, fieldOf } from './common.js';
 import { createSchemalessAdapter } from '../src/schemaless.js';
 
 await loadEnv();
@@ -192,6 +192,16 @@ const main = async () => {
 
     log('14. building test document');
 
+    // Postgres folds unquoted identifiers to lower case: information_schema reports
+    // `smallintcol`, and so does `SELECT *`. Both the column lookups and the row
+    // read-back have to fold, or every `columns[name]` returns undefined and a real
+    // run reads as "no column" / "no default" - which is what `defaultCol:
+    // undefined` was. Writes need no folding because they quote nothing either, so
+    // the server folds them the same way.
+    const fold = (source) => Object.fromEntries(
+      Object.entries(source || {}).map(([name, value]) => [name.toLowerCase(), value])
+    );
+
     const shape = (k) => shapeOf(coll.schema[k]);
     const required = Object.keys(coll.schema).filter((k) => shape(k).required);
     const withDefault = Object.keys(coll.schema).filter((k) => shape(k).default !== undefined);
@@ -226,7 +236,7 @@ const main = async () => {
       // a column with a DEFAULT keeps it when the document omits the key
       const row = await coll.findOne(probeWhere);
       const defaults = {};
-      for (const k of withDefault) defaults[k] = row[k];
+      for (const k of withDefault) defaults[k] = fieldOf(row, k);
 
       // a NOT NULL column rejects NULL - and it has to be that constraint
       // complaining, naming that column: the row also carries a unique value, so a
@@ -242,12 +252,6 @@ const main = async () => {
       return [{ defaults, rejected }];
     }, [{ defaults: { defaultCol: 100 }, rejected: true }]);
 
-    // Postgres folds unquoted identifiers to lower case and information_schema
-    // reports them that way, while this schema is written camelCase - so a plain
-    // `columns[name]` lookup never matches and every run re-issues its ALTERs.
-    const fold = (source) => Object.fromEntries(
-      Object.entries(source.columns || {}).map(([name, type]) => [name.toLowerCase(), type])
-    );
 
     const ensure = async (name, typeSpec) => {
       log(`17.${name}.1 getTableSchema`);
@@ -258,7 +262,7 @@ const main = async () => {
         `${name}: getTableSchema #1`
       );
 
-      if (!fold(s)[name.toLowerCase()]) {
+      if (!fold(s.columns)[name.toLowerCase()]) {
         const type =
           typeof typeSpec === 'string'
             ? typeSpec
@@ -297,7 +301,7 @@ const main = async () => {
         `${name}: getTableSchema #2`
       );
 
-      const exists = !!fold(s2)[name.toLowerCase()];
+      const exists = !!fold(s2.columns)[name.toLowerCase()];
 
       log(`17.${name}.5 done`, { exists });
 
@@ -330,7 +334,7 @@ const main = async () => {
           'pg_schema_types'
         );
 
-        const c = fold(s);
+        const c = fold(s.columns);
         const keys = Object.keys(defs);
 
         return keys.map((k) => ({
