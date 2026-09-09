@@ -182,15 +182,14 @@ for (const db of dbs) {
     return [{ est }];
   }, [{ est: 4 }]);
 
-  // Defaults: active should be true for unspecified rows (Alice, Charlie, Dave, Eve) except Bob=false
+  // Defaults: active should be true for unspecified rows (Alice, Charlie, Dave, Eve) except Bob=false.
+  // Charlie is deleted by the earlier deleteOne test, so SQL backends see Alice, Dave, Eve.
   await runTest(`unified/${db.name} default active`, async () => {
     const rows = await (await users.find({ active: true }, null, { order: { name: 1 } })).toArray();
     return rows.map(r => ({ name: r.name })).sort((a, b) => a.name.localeCompare(b.name));
-  }, db.name === 'pg' || db.name === 'sqlite'
+  }, db.name === 'pg' || db.name === 'sqlite' || db.name === 'mysql'
     ? [{ name: 'Alice' }, { name: 'Dave' }, { name: 'Eve' }]
-    : db.name === 'mysql'
-      ? [{ name: 'Alice' }]
-      : [{ name: 'Alice' }, { name: 'Dave' }]);
+    : [{ name: 'Alice' }, { name: 'Dave' }]);
 
   // Projection via select alias
   await runTest(`unified/${db.name} find select`, async () => {
