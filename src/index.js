@@ -415,16 +415,16 @@ export const exprOps = {
     },
 
     // Type conversion
-    $toString: (a, c) => `CAST(${c.expr(a[0])} AS TEXT)`,
-    $toInt: (a, c) => `CAST(${c.expr(a[0])} AS INTEGER)`,
+    $toString: (a, c) => c.db === 'mysql' ? `CAST(${c.expr(a[0])} AS CHAR)` : `CAST(${c.expr(a[0])} AS TEXT)`,
+    $toInt: (a, c) => c.db === 'mysql' ? `CAST(${c.expr(a[0])} AS SIGNED)` : `CAST(${c.expr(a[0])} AS INTEGER)`,
     $toDouble: (a, c) => {
         const x = c.expr(a[0]);
         return c.db === 'pg' ? `CAST(${x} AS DOUBLE PRECISION)` :
             c.db === 'mysql' ? `CAST(${x} AS DECIMAL(20,6))` :
                 `CAST(${x} AS REAL)`;
     },
-    $toBool: (a, c) => `CAST(${c.expr(a[0])} AS BOOLEAN)`,
-    $toDate: (a, c) => c.db === 'sqlite' ? `datetime(${c.expr(a[0])})` : `CAST(${c.expr(a[0])} AS TIMESTAMP)`,
+    $toBool: (a, c) => c.db === 'mysql' ? `IF(${c.expr(a[0])}, 1, 0)` : `CAST(${c.expr(a[0])} AS BOOLEAN)`,
+    $toDate: (a, c) => c.db === 'sqlite' ? `datetime(${c.expr(a[0])})` : c.db === 'mysql' ? `CAST(${c.expr(a[0])} AS DATETIME)` : `CAST(${c.expr(a[0])} AS TIMESTAMP)`,
 
     // Literal
     $literal: (a) => escape(a[0]),

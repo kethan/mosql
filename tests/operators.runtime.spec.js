@@ -274,7 +274,7 @@ for (const s of setups) {
     }, [{ up: 'BOB', low: 'bob', sub: 'ob', t: 'hi', lt: 'hi  ', rt: '  hi', len: 3, rep: 'B0b' }]);
   }
 
-  await u.updateOne({ name: 'Charlie' }, { $set: { createdAt: s.name === 'mongodb' ? new Date('2024-01-01T00:00:00Z') : '2024-01-01' } });
+  await u.updateOne({ name: 'Charlie' }, { $set: { createdAt: s.name === 'mongodb' ? new Date('2024-01-07T00:00:00Z') : '2024-01-07' } });
   // $week semantics differ between SQL backends (Monday-based) and native MongoDB
   // (Sunday-based), so this comparison is asserted for mosql-managed backends only.
   if (s.name !== 'mongodb') {
@@ -295,7 +295,7 @@ for (const s of setups) {
         }
       ]);
       return rows.map(r => ({ y: r.y, m: r.m, d: r.d, dw: r.dw, h: r.h, mi: r.mi, s2: r.s2, w: r.w }));
-    }, [{ y: 2024, m: 1, d: 1, dw: 2, h: 0, mi: 0, s2: 0, w: 1 }]);
+    }, [{ y: 2024, m: 1, d: 7, dw: 1, h: 0, mi: 0, s2: 0, w: 1 }]);
   }
   await runTest(`runtime/${s.name} expr casts`, async () => {
     const rows = await u.aggregate([
