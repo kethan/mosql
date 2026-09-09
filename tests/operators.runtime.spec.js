@@ -222,7 +222,7 @@ for (const s of setups) {
   await runTest(`runtime/${s.name} aggregate $bucket`, async () => {
     // Numeric default keeps the CASE branches homogeneous on Postgres; a string
     // default ('other') is covered by the SQL-string tests (operators.sql/ops.unified).
-    const rows = await u.aggregate([{ $bucket: { groupBy: '$age', boundaries: [0, 25, 50], default: 999, output: { count: { $count: 1 } } } }]);
+    const rows = await u.aggregate([{ $bucket: { groupBy: '$age', boundaries: [0, 25, 50], default: 999, output: { count: { $sum: 1 } } } }]);
     return rows.map(r => ({ id: r._id ?? null, count: r.count })).sort((a, b) => String(a.id).localeCompare(String(b.id)));
   }, [{ id: 0, count: 1 }, { id: 25, count: 3 }]);
 
@@ -340,13 +340,17 @@ for (const s of setups) {
     return rows.map(r => ({ cmp: r.cmp }));
   }, [{ cmp: -1 }]);
 
-  await runTest(`runtime/${s.name} expr casts $toBool/$literal`, async () => {
-    const rows = await u.aggregate([
-      { $match: { name: 'Bob' } },
-      { $project: { b: { $toBool: '$age' }, lit: { $literal: ['X'] } } }
-    ]);
-    return rows.map(r => ({ b: !!(r.b), lit: r.lit }));
-  }, [{ b: true, lit: 'X' }]);
+  // $toBool is a mosql SQL-side extension: MongoDB has no $toBool
+  // aggregation operator (it provides $convert instead).
+  if (s.name !== 'mongodb') {
+    await runTest(`runtime/${s.name} expr casts $toBool/$literal`, async () => {
+      const rows = await u.aggregate([
+        { $match: { name: 'Bob' } },
+        { $project: { b: { $toBool: '$age' }, lit: { $literal: ['X'] } } }
+      ]);
+      return rows.map(r => ({ b: !!(r.b), lit: r.lit }));
+    }, [{ b: true, lit: 'X' }]);
+  }
 
   // ---------------------------------------------------------------
   // Extended unified matrix: operators that previously only had
