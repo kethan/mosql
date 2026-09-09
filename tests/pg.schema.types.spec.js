@@ -7,18 +7,20 @@ const log = (...args) => {
 };
 
 const main = async () => {
-  const { client, label } = await createPGClient();
-
-  log('client ready:', label);
-
-  // The PGlite fallback connects lazily, but a real pg Client must be
-  // connected before use — otherwise every query hangs forever.
+  const pgCtx = await createPGClient();
+  if (!pgCtx) {
+    log('database unavailable, skipping');
+    return;
+  }
+  const { client, label } = pgCtx;
   try {
     await client.connect();
   } catch (e) {
-    log('connect failed, skipping:', e?.message || e);
+    log('database unavailable, skipping:', e?.message || e);
     return;
   }
+
+  log('client ready:', label);
 
   try {
     const { adapter } = createSchemalessAdapter(client, 'pg');
@@ -183,7 +185,7 @@ const main = async () => {
 
     log('assertion finished');
   } finally {
-    await client.end();
+    await client.end().catch(() => {});
   }
 
   log('finished');

@@ -12,12 +12,48 @@ const PATTERN = { COL: /^[\w.]+$/, W: /[^\w]/g, NUM: /\.(\d+)/g };
 // VALIDATORS (~400 bytes)
 // ============================================
 
+// MySQL 8.0 reserved words (https://dev.mysql.com/doc/refman/8.0/en/keywords.html).
+// Used as identifiers (e.g. a column named `longText` == LONGTEXT) they must be
+// quoted with backticks, otherwise MySQL throws errno 1064. Quoting only these
+// keeps generated SQL for ordinary columns byte-identical.
+const MYSQL_RESERVED = new Set(
+    ('accessible,add,all,alter,analyze,and,as,asensitive,before,between,bigint,binary,blob,both,by,' +
+     'call,cascade,case,change,char,character,check,collate,column,condition,constraint,continue,convert,' +
+     'create,cross,cube,cume_dist,current_date,current_time,current_timestamp,current_user,cursor,' +
+     'database,databases,day_hour,day_microsecond,day_minute,day_second,dec,decimal,declare,default,' +
+     'delayed,delete,dense_rank,desc,describe,deterministic,distinct,distinctrow,div,double,drop,dual,' +
+     'each,else,elseif,empty,enclosed,escaped,except,exists,exit,explain,false,fetch,first_value,float,' +
+     'float4,float8,for,force,foreign,from,fulltext,function,generated,get,grant,group,grouping,groups,' +
+     'having,high_priority,hour_microsecond,hour_minute,hour_second,if,ignore,in,index,infile,inner,inout,' +
+     'insensitive,insert,int,int1,int2,int3,int4,int8,integer,intersect,interval,into,io_after_gtids,' +
+     'io_before_gtids,is,iterate,join,json_table,key,keys,kill,lag,last_value,lateral,lead,leading,leave,' +
+     'left,like,limit,linear,lines,load,localtime,localtimestamp,lock,long,longblob,longtext,loop,' +
+     'low_priority,master_bind,master_ssl_verify_server_cert,match,maxvalue,mediumblob,mediumint,' +
+     'mediumtext,middleint,minute_microsecond,minute_second,mod,modifies,natural,not,no_write_to_binlog,' +
+     'nth_value,ntile,null,numeric,of,on,optimize,optimizer_costs,option,optionally,or,order,out,outer,' +
+     'outfile,over,partition,percent_rank,precision,primary,procedure,purge,range,rank,read,reads,' +
+     'read_write,real,recursive,references,regexp,release,rename,repeat,replace,require,resignal,restrict,' +
+     'return,revoke,right,rlike,row,rows,row_number,schema,schemas,second_microsecond,select,sensitive,' +
+     'separator,set,show,signal,smallint,spatial,specific,sql,sqlexception,sqlstate,sqlwarning,' +
+     'sql_big_result,sql_calc_found_rows,sql_small_result,ssl,starting,stored,straight_join,system,table,' +
+     'terminated,then,tinyblob,tinyint,tinytext,to,trailing,trigger,true,undo,union,unique,unlock,' +
+     'unsigned,update,usage,use,using,utc_date,utc_time,utc_timestamp,values,varbinary,varchar,' +
+     'varcharacter,varying,virtual,when,where,while,window,with,write,xor,year_month,zerofill,_filename').split(',')
+);
+
 const Validate = {
     col: (name, db) => {
         if (!name || typeof name !== 'string') throw new Error(`Invalid column: ${name}`);
-        const p = name.split('.');
+        // Idempotent: collection() pre-validates the table name and CRUD helpers
+        // validate it again, so strip an existing quoting pair before validating.
+        const strip = (s) => (s.length >= 2 && ((s.startsWith('`') && s.endsWith('`')) || (s.startsWith('"') && s.endsWith('"')))) ? s.slice(1, -1) : s;
+        const p = name.split('.').map(strip);
         if (p.some(x => !x || !/^\w+$/.test(x))) throw new Error(`Invalid column: ${name}`);
-        return name;
+        if (db === 'mysql') {
+            const quoted = p.map((part) => MYSQL_RESERVED.has(part.toLowerCase()) ? `\`${part}\`` : part);
+            return quoted.join('.');
+        }
+        return p.join('.');
     },
     alias: (str) => String(str).replace(PATTERN.W, '_'),
     arr: (value, op) => { if (!Array.isArray(value)) throw new Error(`${op} requires array`); return value; },
@@ -800,19 +836,15 @@ export const createQueryBuilder = (config = {}) => {
         const allKeys = [...new Set(docs.flatMap(d => Object.keys(d)))];
         if (allKeys.length === 0) throw new Error('Documents must have at least one field');
 
-        // MySQL lexes type-keyword names (e.g. `longText` → LONGTEXT) as keywords
-        // even inside an INSERT column list, so quote mysql identifiers here.
-        const colName = (name) => db === 'mysql' ? `\`${name}\`` : name;
-
-        const columns = allKeys.map((k) => colName(Validate.col(k, db))).join(', ');
+        const columns = allKeys.map((k) => Validate.col(k, db)).join(', ');
         const rows = docs.map(doc =>
             `(${allKeys.map(k => doc.hasOwnProperty(k) ? escape(doc[k], db) : 'NULL').join(', ')})`
         ).join(', ');
 
-        let sql = `INSERT INTO ${colName(Validate.col(table, db))} (${columns}) VALUES ${rows}`;
+        let sql = `INSERT INTO ${Validate.col(table, db)} (${columns}) VALUES ${rows}`;
 
         if (db === 'pg' && options.returning) {
-            const ret = Array.isArray(options.returning) ? options.returning.map(Validate.col).join(', ') : '*';
+            const ret = Array.isArray(options.returning) ? options.returning.map((k) => Validate.col(k, db)).join(', ') : '*';
             sql += ` RETURNING ${ret}`;
         }
 
@@ -849,7 +881,7 @@ export const createQueryBuilder = (config = {}) => {
         }
 
         if (db === 'pg' && options.returning) {
-            const ret = Array.isArray(options.returning) ? options.returning.map(Validate.col).join(', ') : '*';
+            const ret = Array.isArray(options.returning) ? options.returning.map((k) => Validate.col(k, db)).join(', ') : '*';
             sql += ` RETURNING ${ret}`;
         }
 
@@ -868,7 +900,7 @@ export const createQueryBuilder = (config = {}) => {
         }
 
         if (db === 'pg' && options.returning) {
-            const ret = Array.isArray(options.returning) ? options.returning.map(Validate.col).join(', ') : '*';
+            const ret = Array.isArray(options.returning) ? options.returning.map((k) => Validate.col(k, db)).join(', ') : '*';
             sql += ` RETURNING ${ret}`;
         }
 
@@ -897,7 +929,7 @@ export const createQueryBuilder = (config = {}) => {
             if (isObject(proj)) {
                 const inc = Object.entries(proj)
                     .filter(([_, v]) => v === 1 || v === true)
-                    .map(([k]) => k.includes('.') ? jsonPath(k, this.db) : Validate.col(k, db));
+                    .map(([k]) => k.includes('.') ? jsonPath(k, this.db) : Validate.col(k, this.db));
 
                 const comp = Object.entries(proj)
                     .filter(([_, v]) => isObject(v) || is$(v))
@@ -906,7 +938,7 @@ export const createQueryBuilder = (config = {}) => {
                 const all = [...inc, ...comp];
                 this._fields = all.length > 0 ? all.join(', ') : null;
             } else if (Array.isArray(proj)) {
-                this._fields = proj.map(f => f.includes('.') ? jsonPath(f, this.db) : Validate.col(f, db)).join(', ');
+                this._fields = proj.map(f => f.includes('.') ? jsonPath(f, this.db) : Validate.col(f, this.db)).join(', ');
             } else if (typeof proj === 'string') {
                 this._fields = proj;
             }
@@ -948,7 +980,7 @@ export const createQueryBuilder = (config = {}) => {
 
             if (this._sortObj) {
                 const clauses = Object.entries(this._sortObj).map(([k, ord]) => {
-                    const f = k.includes('.') ? jsonPath(k, this.db) : Validate.col(k, db);
+                    const f = k.includes('.') ? jsonPath(k, this.db) : Validate.col(k, this.db);
                     const asc = ord === 1 || ord === 'asc';
                     if (this.db === 'pg') return `${f} ${asc ? 'ASC NULLS FIRST' : 'DESC NULLS LAST'}`;
                     if (this.db === 'mysql' && this._distinct) return `${f} ${asc ? 'ASC' : 'DESC'}`;
