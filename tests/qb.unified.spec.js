@@ -8,7 +8,7 @@ const qb = createQueryBuilder({ filterOps, exprOps, updateOps, stageHandlers });
 
 const dbs = [];
 
-(async () => {
+await (async () => {
   const { adapter: sqlite } = createSchemalessAdapter(new Database(':memory:'), 'sqlite');
   dbs.push({ name: 'sqlite', adapter: sqlite });
 

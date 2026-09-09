@@ -78,6 +78,10 @@ export async function createMySQLConn() {
         user: process.env.MYSQL_USER,
         password: process.env.MYSQL_PASS,
         database: process.env.MYSQL_DB,
+        // Bound every query so a wedged statement surfaces as an error
+        // (with its SQL) instead of hanging the whole test job forever.
+        timeout: 60000,
+        connectTimeout: 10000,
       });
       return { conn, label: `mysql-server:${host}`, stop: async () => {} };
     } catch (e) {

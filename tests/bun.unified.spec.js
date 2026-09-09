@@ -60,10 +60,15 @@ const insertAll = async (ctx) => {
 const execWithCtx = (db, fn) => async () => {
   const ctx = await createCtx(db);
   if (!ctx) throw new SkipError(`${db} backend unavailable`);
-  await insertAll(ctx);
-  const out = await fn(ctx);
-  await ctx.close();
-  return out;
+  try {
+    await insertAll(ctx);
+    const out = await fn(ctx);
+    return out;
+  } finally {
+    // Always release the backend connection, even when the test body throws,
+    // so a failed test cannot leak an open connection into later tests.
+    await ctx.close().catch(() => { });
+  }
 };
 
 for (const db of ['sqlite','mysql','pg','memory']) {
