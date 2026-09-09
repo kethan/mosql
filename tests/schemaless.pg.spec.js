@@ -7,9 +7,7 @@ dotenv.config();
 const config = { host: process.env.PG_HOST, port: process.env.PG_PORT || 5432, user: process.env.PG_USER, password: process.env.PG_PASSWORD, database: process.env.PG_DB };
 
 const main = async () => {
-  if (!config.host) {
-    throw new Error('PG_HOST is not set');
-  }
+  if (!config.host) return; // skip when no Postgres is configured (matches mysql spec behavior)
 
   const { Client } = pkg;
   const client = new Client(config);

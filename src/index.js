@@ -108,7 +108,7 @@ const jsonUpdate = (path, value, db, operation = 'set') => {
         if (typeof v === 'object') {
             const j = JSON.stringify(v).replace(/'/g, "''");
             return db === 'pg' ? `'${j}'::jsonb` :
-                db === 'mysql' ? `CAST('${j}' AS JSON)` : `'${j}'`;
+                db === 'mysql' ? `CAST('${j}' AS JSON)` : `json('${j}')`;
         }
         return db === 'pg' ? `to_jsonb(${escape(v, db)})` : escape(v, db);
     };
@@ -168,7 +168,7 @@ const batchJSONUpdate = (fields, db) => {
             const pairs = entries.map(([p, v]) => {
                 const jp = `$.${p.split('.').slice(1).join('.')}`;
                 const val = typeof v === 'object'
-                    ? (db === 'mysql' ? `CAST('${JSON.stringify(v)}' AS JSON)` : `'${JSON.stringify(v)}'`)
+                    ? (db === 'mysql' ? `CAST('${JSON.stringify(v)}' AS JSON)` : db === 'sqlite' ? `json('${JSON.stringify(v)}')` : `'${JSON.stringify(v)}'::jsonb`)
                     : escape(v, db);
                 return `'${jp}', ${val}`;
             }).join(', ');
@@ -261,7 +261,7 @@ export const exprOps = {
     $add: (a, c) => `(${a.map(x => c.expr(x)).join(' + ')})`,
     $subtract: (a, c) => `(${a.map(x => c.expr(x)).join(' - ')})`,
     $multiply: (a, c) => `(${a.map(x => c.expr(x)).join(' * ')})`,
-    $divide: (a, c) => `(${c.expr(a[0])} / NULLIF(${c.expr(a[1])}, 0))`,
+    $divide: (a, c) => `(${c.expr(a[0])} * 1.0 / NULLIF(${c.expr(a[1])}, 0))`,
     $mod: (a, c) => `(${c.expr(a[0])} % ${c.expr(a[1])})`,
     $abs: (a, c) => `ABS(${c.expr(a[0])})`,
     $ceil: (a, c) => `CEIL(${c.expr(a[0])})`,
@@ -283,7 +283,8 @@ export const exprOps = {
     $lower: (a, c) => `LOWER(${c.expr(a[0])})`,
     $substr: (a, c) => {
         const s = c.expr(a[0]);
-        const st = c.expr(a[1]);
+        // MongoDB $substr is 0-based; SQL SUBSTRING is 1-based.
+        const st = `(${c.expr(a[1])} + 1)`;
         const l = a[2] !== undefined ? c.expr(a[2]) : null;
         return l ? `SUBSTRING(${s}, ${st}, ${l})` : `SUBSTRING(${s}, ${st})`;
     },
@@ -422,7 +423,7 @@ export const exprOps = {
                 `CAST(${x} AS REAL)`;
     },
     $toBool: (a, c) => `CAST(${c.expr(a[0])} AS BOOLEAN)`,
-    $toDate: (a, c) => `CAST(${c.expr(a[0])} AS TIMESTAMP)`,
+    $toDate: (a, c) => c.db === 'sqlite' ? `datetime(${c.expr(a[0])})` : `CAST(${c.expr(a[0])} AS TIMESTAMP)`,
 
     // Literal
     $literal: (a) => escape(a[0]),
@@ -686,6 +687,13 @@ export const createQueryBuilder = (config = {}) => {
                     const castType = typeof val === 'number' ? 'numeric'
                         : typeof val === 'boolean' ? 'boolean' : undefined;
                     const f2 = isJson && castType ? jsonPath(k, db, castType) : f;
+                    if (op === '$not' && isObject(val)) {
+                        const inner = Object.entries(val).map(([op2, val2]) => {
+                            if (!fOps[op2]) throw new Error(`Unknown operator: ${op2}`);
+                            return `${f2} ${fOps[op2](val2, db, f2)}`;
+                        }).join(' AND ');
+                        return `NOT (${inner})`;
+                    }
                     if (!fOps[op]) throw new Error(`Unknown operator: ${op}`);
                     if (op === '$ilike' || op === '$nilike') {
                         return db === 'pg' ? `${f} ${fOps[op](val, db)}` : `LOWER(${f}) ${fOps[op](val, db)}`;

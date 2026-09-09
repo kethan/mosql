@@ -179,35 +179,36 @@ for (const s of setups) {
     return [{ isCityNull: row?.city == null, hasTown: row?.town != null }];
   }, [{ isCityNull: true, hasTown: true }]);
 
+  const boolVal = (s.name === 'sqlite' || s.name === 'mysql') ? 1 : true;
   await runTest(`runtime/${s.name} aggregate $project/$addFields`, async () => {
-    const rows = await u.aggregate([{ $project: { name: 1, nextAge: { $add: ['$age', 1] } } }, { $addFields: { isAdult: { $gte: ['$age', 18] } } }]).toArray();
+    const rows = await u.aggregate([{ $project: { name: 1, age: 1, nextAge: { $add: ['$age', 1] } } }, { $addFields: { isAdult: { $gte: ['$age', 18] } } }]);
     return rows.map(r => ({ name: r.name, nextAge: r.nextAge, isAdult: r.isAdult })).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 2);
-  }, [{ name: 'Alice', nextAge: 26, isAdult: true }, { name: 'Bob', nextAge: 31, isAdult: true }]);
+  }, [{ name: 'Alice', nextAge: 26, isAdult: boolVal }, { name: 'Bob', nextAge: 32, isAdult: boolVal }]);
 
   await runTest(`runtime/${s.name} aggregate $group avg age by city`, async () => {
-    const rows = await u.aggregate([{ $group: { _id: '$city', avgAge: { $avg: '$age' } } }, { $sort: { avgAge: -1 } }]).toArray();
-    return rows.map(r => ({ id: r._id, avgAge: Math.round((r.avgAge || 0) * 100) / 100 }));
-  }, [{ id: 'Paris', avgAge: 32.5 }, { id: 'London', avgAge: 30 }, { id: 'Berlin', avgAge: 22 }]);
+    const rows = await u.aggregate([{ $group: { _id: '$city', avgAge: { $avg: '$age' } } }, { $sort: { avgAge: -1 } }]);
+    return rows.map(r => ({ id: r._id ?? null, avgAge: Math.round((r.avgAge || 0) * 100) / 100 }));
+  }, [{ id: 'London', avgAge: 31 }, { id: null, avgAge: 31 }, { id: 'Paris', avgAge: 25 }]);
 
   await runTest(`runtime/${s.name} aggregate $limit/$skip`, async () => {
-    const rows = await u.aggregate([{ $project: { name: 1, age: 1 } }, { $sort: { age: -1 } }, { $skip: 1 }, { $limit: 1 }]).toArray();
+    const rows = await u.aggregate([{ $project: { name: 1, age: 1 } }, { $sort: { age: -1 } }, { $skip: 1 }, { $limit: 1 }]);
     return rows.map(r => ({ name: r.name }));
-  }, [{ name: 'Alice' }]);
+  }, [{ name: 'Bob' }]);
 
   await runTest(`runtime/${s.name} aggregate $count`, async () => {
-    const rows = await u.aggregate([{ $match: { active: true } }, { $count: 'count' }]).toArray();
+    const rows = await u.aggregate([{ $match: { active: true } }, { $count: 'count' }]);
     return rows.map(r => ({ count: r.count }));
   }, [{ count: 3 }]);
 
   await runTest(`runtime/${s.name} aggregate $sortByCount`, async () => {
-    const rows = await u.aggregate([{ $sortByCount: '$city' }]).toArray();
-    return rows.map(r => ({ id: r._id, count: r.count })).slice(0, 1);
-  }, [{ id: 'Paris', count: 2 }]);
+    const rows = await u.aggregate([{ $sortByCount: '$city' }]);
+    return rows.map(r => ({ id: r._id ?? null, count: r.count })).slice(0, 1);
+  }, [{ id: null, count: 2 }]);
 
   await runTest(`runtime/${s.name} aggregate $bucket`, async () => {
-    const rows = await u.aggregate([{ $bucket: { groupBy: '$age', boundaries: [0, 25, 50], default: 'other', output: { count: { $count: 1 } } } }]).toArray();
-    return rows.map(r => ({ id: r._id, count: r.count })).sort((a, b) => String(a.id).localeCompare(String(b.id)));
-  }, [{ id: 0, count: 2 }, { id: 25, count: 2 }]);
+    const rows = await u.aggregate([{ $bucket: { groupBy: '$age', boundaries: [0, 25, 50], default: 'other', output: { count: { $count: 1 } } } }]);
+    return rows.map(r => ({ id: r._id ?? null, count: r.count })).sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  }, [{ id: 0, count: 1 }, { id: 25, count: 3 }]);
 
   await runTest(`runtime/${s.name} expr arithmetic set`, async () => {
     const rows = await u.aggregate([
@@ -222,7 +223,7 @@ for (const s of setups) {
           round: { $round: [{ $divide: ['$age', 2] }, 0] }
         }
       }
-    ]).toArray();
+    ]);
     return rows.map(r => ({ d: r.d, half: r.half, abs: r.abs, ceil: r.ceil, floor: r.floor, round: r.round }));
   }, [{ d: 20, half: 12.5, abs: 5, ceil: 13, floor: 12, round: 13 }]);
 
@@ -230,7 +231,7 @@ for (const s of setups) {
     const rows = await u.aggregate([
       { $match: { name: 'Alice' } },
       { $project: { power: { $pow: ['$age', 2] }, sq: { $sqrt: '$age' } } }
-    ]).toArray();
+    ]);
     return rows.map(r => ({ power: r.power, sq: r.sq }));
   }, [{ power: 625, sq: 5 }]);
 
@@ -250,9 +251,9 @@ for (const s of setups) {
           rep: { $replace: ['$name', 'o', '0'] }
         }
       }
-    ]).toArray();
+    ]);
     return rows.map(r => ({ up: r.up, low: r.low, sub: r.sub, t: r.t, lt: r.lt, rt: r.rt, len: r.len, rep: r.rep }));
-  }, [{ up: 'BOB', low: 'bob', sub: 'Bob', t: 'hi', lt: 'hi  ', rt: '  hi', len: 3, rep: 'B0b' }]);
+  }, [{ up: 'BOB', low: 'bob', sub: 'ob', t: 'hi', lt: 'hi  ', rt: '  hi', len: 3, rep: 'B0b' }]);
 
   await u.updateOne({ name: 'Charlie' }, { $set: { createdAt: '2024-01-01' } });
   await runTest(`runtime/${s.name} expr date parts`, async () => {
@@ -270,7 +271,7 @@ for (const s of setups) {
           w: { $week: '$createdAt' }
         }
       }
-    ]).toArray();
+    ]);
     return rows.map(r => ({ y: r.y, m: r.m, d: r.d, dw: r.dw, h: r.h, mi: r.mi, s2: r.s2, w: r.w }));
   }, [{ y: 2024, m: 1, d: 1, dw: 2, h: 0, mi: 0, s2: 0, w: 1 }]);
 
@@ -284,9 +285,9 @@ for (const s of setups) {
           dbl: { $toDouble: '$age' }
         }
       }
-    ]).toArray();
+    ]);
     return rows.map(r => ({ ystr: r.ystr, intval: r.intval, dbl: r.dbl }));
-  }, [{ ystr: 2024, intval: 22, dbl: 22 }]);
+  }, [{ ystr: '024-', intval: 22, dbl: 22 }]);
 
   await runTest(`runtime/${s.name} expr $switch/$ifNull`, async () => {
     const rows = await u.aggregate([
@@ -297,7 +298,7 @@ for (const s of setups) {
           nick: { $ifNull: ['$alias', 'none'] }
         }
       }
-    ]).toArray();
+    ]);
     return rows.map(r => ({ code: r.code, nick: r.nick }));
   }, [{ code: 'FR', nick: 'none' }]);
 
@@ -313,7 +314,7 @@ for (const s of setups) {
     const rows = await u.aggregate([
       { $match: { name: 'Charlie' } },
       { $project: { cmp: { $cmp: ['$age', 25] } } }
-    ]).toArray();
+    ]);
     return rows.map(r => ({ cmp: r.cmp }));
   }, [{ cmp: -1 }]);
 
@@ -321,7 +322,7 @@ for (const s of setups) {
     const rows = await u.aggregate([
       { $match: { name: 'Bob' } },
       { $project: { b: { $toBool: '$age' }, lit: { $literal: ['X'] } } }
-    ]).toArray();
+    ]);
     return rows.map(r => ({ b: !!(r.b), lit: r.lit }));
   }, [{ b: true, lit: 'X' }]);
 

@@ -238,7 +238,7 @@ describe('Expression Test', () => {
         {
             title: '$divide',
             input: () => expression({ $divide: [10, 2] }),
-            expected: '(10 / NULLIF(2, 0))'
+            expected: '(10 * 1.0 / NULLIF(2, 0))'
         },
         {
             title: '$concat',

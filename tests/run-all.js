@@ -18,15 +18,17 @@ const walk = (dir) => {
 };
 
 const specs = walk(here).filter(isSpec);
+let failed = false;
 for (const spec of specs) {
   const url = pathToFileURL(spec).href;
   try {
     await import(url);
   } catch (e) {
+    failed = true;
     console.error('Import failed:', spec, e?.message || e);
   }
 }
-// Ensure proper process exit for coverage runs
-if (typeof process !== 'undefined' && process?.exit) {
-  process.exit(0);
+// Exit non-zero when any spec module throws during evaluation so CI catches it.
+if (failed && typeof process !== 'undefined' && process?.exit) {
+  process.exit(1);
 }
