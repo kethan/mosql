@@ -1875,9 +1875,10 @@ users.updateOne(
 ### Running the Tests
 
 ```bash
-npm test        # every tests/*.spec.js file
-npm run test:db # only the specs that talk to a real database
-npm run db:up   # docker compose: postgres + mysql + mongodb, then `npm run coverage:db`
+npm test          # every tests/*.spec.js file
+npm run db:memory # boots a throwaway MySQL, then runs the suite against it
+npm run test:db   # only the specs that talk to a real database
+npm run db:up     # docker compose: postgres + mysql + mongodb, then `npm run coverage:db`
 ```
 
 `tests/run-all.js` runs each spec file in its own Node process and fails as soon as one of them
@@ -1885,6 +1886,12 @@ exits non-zero, so an assertion error cannot be printed and ignored. The specs t
 (`pg`, `mysql`, `mongodb`) check their environment first (`PG_HOST`, `MYSQL_HOST`, …) and skip
 without it, which keeps `npm test` meaningful offline; the CI `db` job provides the variables and
 runs them for real.
+
+`npm run db:memory` is the no-Docker route to MySQL coverage: `mysql-memory-server` starts a real
+`mysqld` in a temporary data directory on a free port, exports `MYSQL_*` for the run and stops it
+afterwards. It reuses a `mysqld` already on `PATH` before downloading one, and gives up promptly
+(with a message) if neither is possible. `MYSQL_HOST=… MYSQL_PORT=… npm run db:memory` skips the
+setup entirely and uses the server you already have.
 
 ## Schemaless Adapters
 
@@ -2203,6 +2210,7 @@ await client.close();
 
 ```bash
 npm test                 # the whole suite, one process, no services needed
+npm run db:memory        # optional: boots a throwaway MySQL and runs against it
 docker compose up -d     # optional: postgres + mysql + mongo on localhost
 cp .env.example .env     # optional: lets `npm test` cover the live databases too
 node tests/pg.schema.types.spec.js   # a single spec file
