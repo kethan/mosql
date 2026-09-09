@@ -178,6 +178,10 @@ export const exprOps = {
     $gte: ([a, b], c) => c.expr(a) >= c.expr(b),
     $lt: ([a, b], c) => c.expr(a) < c.expr(b),
     $lte: ([a, b], c) => c.expr(a) <= c.expr(b),
+    $cmp: ([a, b], c) => {
+        const [x, y] = [c.expr(a), c.expr(b)];
+        return x < y ? -1 : x > y ? 1 : 0;
+    },
     
     // Array
     $in: ([v, a], c) => {
@@ -261,36 +265,47 @@ export const exprOps = {
     
     // Date/Time
     $year: (a, c) => {
-        const d = c.expr(a[0]);
-        return d instanceof Date ? d.getFullYear() : null;
+        const d = new Date(c.expr(a[0]));
+        return isNaN(d) ? null : d.getFullYear();
     },
     $month: (a, c) => {
-        const d = c.expr(a[0]);
-        return d instanceof Date ? d.getMonth() + 1 : null;
+        const d = new Date(c.expr(a[0]));
+        return isNaN(d) ? null : d.getMonth() + 1;
     },
     $dayOfMonth: (a, c) => {
-        const d = c.expr(a[0]);
-        return d instanceof Date ? d.getDate() : null;
+        const d = new Date(c.expr(a[0]));
+        return isNaN(d) ? null : d.getDate();
     },
     $hour: (a, c) => {
-        const d = c.expr(a[0]);
-        return d instanceof Date ? d.getHours() : null;
+        const d = new Date(c.expr(a[0]));
+        return isNaN(d) ? null : d.getHours();
     },
     $minute: (a, c) => {
-        const d = c.expr(a[0]);
-        return d instanceof Date ? d.getMinutes() : null;
+        const d = new Date(c.expr(a[0]));
+        return isNaN(d) ? null : d.getMinutes();
     },
     $second: (a, c) => {
-        const d = c.expr(a[0]);
-        return d instanceof Date ? d.getSeconds() : null;
+        const d = new Date(c.expr(a[0]));
+        return isNaN(d) ? null : d.getSeconds();
     },
     $millisecond: (a, c) => {
-        const d = c.expr(a[0]);
-        return d instanceof Date ? d.getMilliseconds() : null;
+        const d = new Date(c.expr(a[0]));
+        return isNaN(d) ? null : d.getMilliseconds();
     },
     $dayOfWeek: (a, c) => {
-        const d = c.expr(a[0]);
-        return d instanceof Date ? d.getDay() + 1 : null;
+        const d = new Date(c.expr(a[0]));
+        return isNaN(d) ? null : d.getDay() + 1;
+    },
+    $week: (a, c) => {
+        const d = new Date(c.expr(a[0]));
+        if (isNaN(d)) return null;
+        // Monday-based week of year, glibc/SQLite %W semantics:
+        // days before the first Monday of the year belong to week 0.
+        const y = d.getUTCFullYear();
+        const yday = Math.floor((Date.UTC(y, d.getUTCMonth(), d.getUTCDate()) - Date.UTC(y, 0, 1)) / 86400000);
+        const jan1Wday = new Date(Date.UTC(y, 0, 1)).getUTCDay();
+        const daysBeforeFirstMonday = (jan1Wday + 6) % 7;
+        return Math.floor((yday + 7 - daysBeforeFirstMonday) / 7);
     },
     
     // Type conversion
@@ -362,8 +377,8 @@ export const updateOps = {
     $pull: (f, doc, filter) => Object.entries(f).forEach(([k, cond]) => {
         const curr = getPath(doc, k);
         if (Array.isArray(curr)) {
-            const fn = isObject(cond) ? filter(cond) : (i) => !deepEquals(i, cond);
-            setPath(doc, k, curr.filter(i => !fn(i)));
+            const matches = isObject(cond) ? filter(cond) : (i) => deepEquals(i, cond);
+            setPath(doc, k, curr.filter(i => !matches(i)));
         }
     }),
     
@@ -604,6 +619,9 @@ export const stageOps = {
                         case '$push':
                             out[k] = g.items.map(i => expression(arg)(i));
                             break;
+                        case '$count':
+                            out[k] = g.items.length;
+                            break;
                         case '$addToSet':
                             const uniq = [];
                             const seen = new Set();
@@ -631,7 +649,7 @@ export const stageOps = {
     $sortByCount: (expr, ctxArr, expression) => {
         const keyFn = typeof expr === 'string' && expr.startsWith('$') ? (i) => getPath(i, expr.slice(1)) : (i) => expression(expr)(i);
         const counts = ctxArr.reduce((a, i) => {
-            const k = JSON.stringify(keyFn(i));
+            const k = JSON.stringify(keyFn(i) ?? null);
             a[k] = (a[k] || 0) + 1;
             return a;
         }, {});
@@ -678,9 +696,16 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
         if (isObject(e)) {
             const [op, args] = Object.entries(e)[0];
             if (!eOps[op]) throw new Error(`Unknown expression operator: ${op}`);
-            return eOps[op](Array.isArray(args) ? args : [args], { expr: (x) => expression(x)(doc), ctx, doc });
+            return eOps[op](Array.isArray(args) ? args : [args], { expr: (x, c2 = ctx) => expression(x, c2)(doc), ctx, doc });
         }
-        if (is$(e)) return getPath(doc, e.slice(1));
+        if (is$(e)) {
+            // '$field' reads a document field; '$$var' reads a variable bound by
+            // an enclosing operator ($map/$filter/$reduce) through the ctx chain.
+            let key = e.slice(1);
+            if (key.startsWith('$')) key = key.slice(1);
+            if (Object.prototype.hasOwnProperty.call(ctx, key)) return ctx[key];
+            return getPath(doc, key);
+        }
         return e;
     };
     

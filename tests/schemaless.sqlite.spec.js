@@ -31,7 +31,7 @@ const main = async () => {
 
   await runTest('Distinct names', async () => {
     const rows = await users.distinct('name');
-    return rows.map(x => ({ name: x.name || x.NAME || x.table_name || x.TABLE_NAME })).sort((a,b)=>a.name.localeCompare(b.name));
+    return rows.map(name => ({ name })).sort((a,b)=>a.name.localeCompare(b.name));
   }, [ { name: 'Alice' }, { name: 'Bob' }, { name: 'Charlie' } ]);
 
   let dropErr = null;
@@ -39,4 +39,4 @@ const main = async () => {
   await runTest('SQLite dropColumn throws', async () => [{ ok: !!dropErr }], [ { ok: true } ]);
 };
 
-main().catch(e => { process.exitCode = 1; });
+await main().catch(e => { process.exitCode = 1; });

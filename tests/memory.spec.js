@@ -95,4 +95,4 @@ const main = async () => {
   ]);
 };
 
-main().catch(e => { process.exitCode = 1; });
+await main().catch(e => { process.exitCode = 1; });

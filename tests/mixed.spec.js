@@ -238,7 +238,7 @@ describe('Expression Test', () => {
         {
             title: '$divide',
             input: () => expression({ $divide: [10, 2] }),
-            expected: '(10 / NULLIF(2, 0))'
+            expected: '(10 * 1.0 / NULLIF(2, 0))'
         },
         {
             title: '$concat',
@@ -248,12 +248,12 @@ describe('Expression Test', () => {
         {
             title: '$min',
             input: () => expression({ $min: [10, 20, 30] }),
-            expected: 'LEAST(10, 20, 30)'
+            expected: 'MIN(10, 20, 30)' // sqlite default: multi-arg MIN (no LEAST in SQLite)
         },
         {
             title: '$max',
             input: () => expression({ $max: [10, 20, 30] }),
-            expected: 'GREATEST(10, 20, 30)'
+            expected: 'MAX(10, 20, 30)' // sqlite default: multi-arg MAX (no GREATEST in SQLite)
         },
         {
             title: '$avg',
@@ -283,7 +283,7 @@ describe('Expression Test', () => {
         {
             title: '$min with field',
             input: () => expression({ $min: ['$age', 18] }),
-            expected: "LEAST(age, 18)"
+            expected: "MIN(age, 18)" // sqlite: multi-arg MIN
         },
         {
             title: '$concat with fields',
@@ -1045,7 +1045,7 @@ describe('Aggregate Extended Tests', () => {
                 { $limit: 10 },
             ])('employees', 'sqlite'),
             expected:
-                "SELECT json_extract(profile, '$.country') AS _id, SUM(salary) AS total, AVG(salary) AS avg FROM (SELECT * FROM employees WHERE json_extract(profile, '$.active') = 1) AS t1 GROUP BY json_extract(profile, '$.country') HAVING AVG(salary) > 5000 ORDER BY SUM(salary) DESC LIMIT 10",
+                "SELECT json_extract(profile, '$.country') AS _id, SUM(salary) AS total, AVG(salary) AS avg FROM (SELECT * FROM employees WHERE json_extract(profile, '$.active') = 1) AS t1 GROUP BY json_extract(profile, '$.country') HAVING AVG(salary) > 5000 ORDER BY total DESC LIMIT 10",
         },
     ]);
 });

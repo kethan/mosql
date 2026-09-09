@@ -1,12 +1,9 @@
 import { createSchemalessAdapter } from '../src/schemaless.js';
 import Database from 'better-sqlite3';
-import mysql from 'mysql2/promise';
 import pkg from 'pg';
-import dotenv from 'dotenv';
 import { runTest } from './common.js';
 import { createMongoSchemaless } from '../src/adapter/mongodb/adapter.js';
-
-dotenv.config();
+import { createPGClient, createMySQLConn } from './db-helpers.js';
 
 const schema = {
   properties: {
@@ -28,19 +25,29 @@ dbs.push({ name: 'sqlite', adapter: sqlite, client: sqliteClient });
 const { adapter: memory } = createSchemalessAdapter();
 dbs.push({ name: 'memory', adapter: memory });
 
-const pgCfg = { host: process.env.PGHOST || process.env.PG_HOST, user: process.env.PGUSER || process.env.PG_USER, password: process.env.PGPASSWORD || process.env.PG_PASSWORD, database: process.env.PGDATABASE || process.env.PG_DB };
-if (pgCfg.host && pgCfg.user && pgCfg.database) {
-  const { Client } = pkg; const pgClient = new Client(pgCfg); let ok = true; try { await pgClient.connect(); } catch { ok = false; }
-  if (ok) { const pgInit = createSchemalessAdapter(pgClient, 'pg'); dbs.push({ name: 'pg', adapter: pgInit.adapter, client: pgClient }); }
+const pgCtx = await createPGClient();
+if (pgCtx) {
+  // Real server when PG_HOST is set; otherwise embedded PGlite (WASM Postgres).
+  const { client: pgClient } = pgCtx;
+  let ok = true; try { await pgClient.connect(); } catch { ok = false; }
+  if (ok) {
+    const pgInit = createSchemalessAdapter(pgClient, 'pg');
+    dbs.push({ name: 'pg', adapter: pgInit.adapter, client: pgClient });
+  } else {
+    console.log('[admin.unified] PostgreSQL unavailable, skipping pg tests');
+  }
 }
 
-const myCfg = { host: process.env.MYSQLHOST || process.env.MYSQL_HOST, user: process.env.MYSQLUSER || process.env.MYSQL_USER, password: process.env.MYSQLPASSWORD || process.env.MYSQL_PASS, database: process.env.MYSQLDATABASE || process.env.MYSQL_DB, port: process.env.MYSQLPORT || process.env.MYSQL_PORT };
-if (myCfg.host && myCfg.user && myCfg.database) {
-  let myConn; let ok = true; try { myConn = await mysql.createConnection(myCfg); } catch { ok = false; }
-  if (ok) { const myInit = createSchemalessAdapter(myConn, 'mysql'); dbs.push({ name: 'mysql', adapter: myInit.adapter, conn: myConn }); }
+const myCtx = await createMySQLConn();
+if (myCtx) {
+  // Real server when MYSQL_HOST is set; otherwise ephemeral embedded mysqld (no Docker).
+  const { conn: myConn, stop: myStop } = myCtx;
+  const myInit = createSchemalessAdapter(myConn, 'mysql');
+  dbs.push({ name: 'mysql', adapter: myInit.adapter, conn: myConn, stop: myStop });
 }
 
-// mongodb adapter removed/moved; unified tests target SQL
+// MongoDB adapter runs when MONGO_HOST is reachable; otherwise this backend is
+// skipped (it is a thin pass-through to the native driver).
 try {
   const mongoInit = await createMongoSchemaless({
     host: process.env.MONGO_HOST,
@@ -50,7 +57,9 @@ try {
     database: process.env.MONGO_DB || 'test_database',
   });
   dbs.push({ name: 'mongodb', adapter: mongoInit.adapter, client: mongoInit.client });
-} catch { }
+} catch (e) {
+  console.log('[admin.unified] MongoDB unavailable, skipping mongodb tests:', e?.message || e);
+}
 
 for (const db of dbs) {
   const tname = `studio_users_unified_${db.name}`;
@@ -173,15 +182,14 @@ for (const db of dbs) {
     return [{ est }];
   }, [{ est: 4 }]);
 
-  // Defaults: active should be true for unspecified rows (Alice, Charlie, Dave, Eve) except Bob=false
+  // Defaults: active should be true for unspecified rows (Alice, Charlie, Dave, Eve) except Bob=false.
+  // Charlie is deleted by the earlier deleteOne test, so SQL backends see Alice, Dave, Eve.
   await runTest(`unified/${db.name} default active`, async () => {
     const rows = await (await users.find({ active: true }, null, { order: { name: 1 } })).toArray();
     return rows.map(r => ({ name: r.name })).sort((a, b) => a.name.localeCompare(b.name));
-  }, db.name === 'pg' || db.name === 'sqlite'
+  }, db.name === 'pg' || db.name === 'sqlite' || db.name === 'mysql'
     ? [{ name: 'Alice' }, { name: 'Dave' }, { name: 'Eve' }]
-    : db.name === 'mysql'
-      ? [{ name: 'Alice' }]
-      : [{ name: 'Alice' }, { name: 'Dave' }]);
+    : [{ name: 'Alice' }, { name: 'Dave' }]);
 
   // Projection via select alias
   await runTest(`unified/${db.name} find select`, async () => {
@@ -273,7 +281,7 @@ for (const db of dbs) {
   await runTest(`unified/${db.name} update matchedCount`, async () => {
     const res = await users.updateMany({ active: true }, { $set: { alias: 'alias2' } });
     return [{ matchedCount: res.matchedCount }];
-  }, db.name === 'pg' || db.name === 'sqlite' ? [{ matchedCount: 3 }] : db.name === 'mysql' ? [{ matchedCount: 1 }] : [{ matchedCount: 2 }]);
+  }, db.name === 'pg' || db.name === 'sqlite' || db.name === 'mysql' ? [{ matchedCount: 3 }] : [{ matchedCount: 2 }]);
 
   // Drop alias column only for PG/MySQL and verify absence
   if (db.name === 'pg' || db.name === 'mysql') {
@@ -330,5 +338,6 @@ for (const db of dbs) {
     else if (db.client && typeof db.client.close === 'function') await db.client.close();
     if (db.conn && typeof db.conn.end === 'function') await db.conn.end();
     if (db.name === 'sqlite' && db.client && typeof db.client.close === 'function') await db.client.close();
+    if (typeof db.stop === 'function') await db.stop().catch?.(() => { });
   } catch { }
 }

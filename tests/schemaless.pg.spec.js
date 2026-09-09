@@ -1,22 +1,18 @@
-import dotenv from 'dotenv';
-import pkg from 'pg';
 import { createSchemalessAdapter } from '../src/schemaless.js';
 import { runTest } from './common.js';
-dotenv.config();
-
-const config = { host: process.env.PG_HOST, port: process.env.PG_PORT || 5432, user: process.env.PG_USER, password: process.env.PG_PASSWORD, database: process.env.PG_DB };
+import { createPGClient } from './db-helpers.js';
 
 const main = async () => {
-  if (!config.host) {
-    throw new Error('PG_HOST is not set');
+  let client;
+  try {
+    ({ client } = await createPGClient());
+    await client.connect();
+  } catch (e) {
+    console.error('[schemaless.pg] database unavailable, skipping:', e?.message || e);
+    return;
   }
 
-  const { Client } = pkg;
-  const client = new Client(config);
-
   try {
-    await client.connect();
-
     const { adapter } = createSchemalessAdapter(client, 'pg');
     const users = adapter.collection('users');
 
@@ -54,7 +50,8 @@ const main = async () => {
   }
 };
 
-main().catch(err => {
+await main().catch(err => {
+  console.error('[schemaless.pg] FAILED');
   console.error(err);
   process.exitCode = 1;
 });

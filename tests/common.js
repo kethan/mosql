@@ -2,6 +2,16 @@ import assert from 'assert';
 let bunTest;
 try { bunTest = await import('bun:test'); } catch { }
 
+// Thrown by a test body when a backend (pg/mysql/mongodb) is unavailable,
+// so specs can be written once for every backend and degrade gracefully.
+export class SkipError extends Error {
+  constructor(reason) { super(reason || 'backend unavailable'); this.name = 'SkipError'; }
+}
+
+let skipCount = 0;
+export const getSkipCount = () => skipCount;
+export const resetSkipCount = () => { skipCount = 0; };
+
 export const eq = (a, b, keys, ctor) => a === b || (
   a && b && (ctor = a.constructor) === b.constructor
     ? ctor === Array ? a.length === b.length && a.every((val, idx) => eq(val, b[idx]))
@@ -21,12 +31,24 @@ export const normalizeRows = (rows) => rows.map((r) => {
 export const runTest = async (title, exec, expected) => {
   if (bunTest?.test) {
     bunTest.test(title, async () => {
-      const actual = normalizeRows(await exec());
+      let actual;
+      try {
+        actual = normalizeRows(await exec());
+      } catch (e) {
+        if (e instanceof SkipError) { console.log(`SKIP ${title} (${e.message})`); return; }
+        throw e;
+      }
       assert.deepStrictEqual(actual, expected);
     });
     return;
   }
-  const actual = normalizeRows(await exec());
+  let actual;
+  try {
+    actual = normalizeRows(await exec());
+  } catch (e) {
+    if (e instanceof SkipError) { skipCount++; console.log(`SKIP ${title} (${e.message})`); return; }
+    throw e;
+  }
   assert.deepStrictEqual(actual, expected);
   console.log('PASS ' + title);
 };
@@ -34,13 +56,25 @@ export const runTest = async (title, exec, expected) => {
 export const runStringTest = (title, exec, expected) => {
   if (bunTest?.test) {
     bunTest.test(title, async () => {
-      const actual = exec();
+      let actual;
+      try {
+        actual = exec();
+      } catch (e) {
+        if (e instanceof SkipError) { console.log(`SKIP ${title} (${e.message})`); return; }
+        throw e;
+      }
       if (expected instanceof RegExp) assert.match(actual, expected);
       else assert.strictEqual(actual, expected);
     });
     return;
   }
-  const actual = exec();
+  let actual;
+  try {
+    actual = exec();
+  } catch (e) {
+    if (e instanceof SkipError) { skipCount++; console.log(`SKIP ${title} (${e.message})`); return; }
+    throw e;
+  }
   if (expected instanceof RegExp) assert.match(actual, expected);
   else assert.strictEqual(actual, expected);
   console.log(`PASS ${title}`);

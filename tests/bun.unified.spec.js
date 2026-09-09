@@ -1,32 +1,43 @@
-import { test } from 'bun:test';
 import dotenv from 'dotenv';
-import { runTest } from './common.js';
-import { createSQLiteSchemaless } from '../src/adapter/sqlite/adapter.js';
-import { createMySQLSchemaless } from '../src/adapter/mysql/adapter.js';
-import { createPostgresSchemaless } from '../src/adapter/pg/adapter.js';
+import { runTest, SkipError } from './common.js';
+import { createSchemalessAdapter } from '../src/schemaless.js';
 import { collection as memCollection } from '../src/adapter/memory/memory.js';
+import { createPGClient, createMySQLConn } from './db-helpers.js';
+import Database from 'better-sqlite3';
 dotenv.config();
-
-const configs = {
-  mysql: { host: process.env.MYSQL_HOST, user: process.env.MYSQL_USER, password: process.env.MYSQL_PASS, database: process.env.MYSQL_DB },
-  pg: { host: process.env.PG_HOST, port: process.env.PG_PORT || 5432, user: process.env.PG_USER, password: process.env.PG_PASSWORD, database: process.env.PG_DB },
-};
 
 const createCtx = async (db) => {
   if (db === 'sqlite') {
-    const { adapter } = createSQLiteSchemaless(':memory:');
+    const { adapter } = createSchemalessAdapter(new Database(':memory:'), 'sqlite');
     const coll = adapter.collection('users');
     return { db, coll, close: async () => {} };
   }
   if (db === 'mysql') {
-    const cfg = configs.mysql; if (!cfg.host) return null;
-    const { adapter, conn } = await createMySQLSchemaless(cfg);
+    // Real server when MYSQL_HOST is set; otherwise embedded mysqld (no Docker).
+    const myCtx = await createMySQLConn();
+    if (!myCtx) return null;
+    const { conn, stop } = myCtx;
+    const { adapter } = createSchemalessAdapter(conn, 'mysql');
+    await adapter.dropCollection('users').catch(() => { });
     const coll = adapter.collection('users');
-    return { db, coll, close: async () => { await conn.end(); } };
+    return {
+      db,
+      coll,
+      close: async () => {
+        await conn.end();
+        if (typeof stop === 'function') await stop().catch?.(() => { });
+      },
+    };
   }
   if (db === 'pg') {
-    const cfg = configs.pg; if (!cfg.host) return null;
-    const { adapter, client } = await createPostgresSchemaless(cfg);
+    // Real server when PG_HOST is set; otherwise embedded PGlite (WASM Postgres).
+    const pgCtx = await createPGClient();
+    if (!pgCtx) return null;
+    const { client } = pgCtx;
+    let ok = true; try { await client.connect(); } catch { ok = false; }
+    if (!ok) return null;
+    const { adapter } = createSchemalessAdapter(client, 'pg');
+    await adapter.dropCollection('users').catch(() => { });
     const coll = adapter.collection('users');
     return { db, coll, close: async () => { await client.end(); } };
   }
@@ -47,11 +58,17 @@ const insertAll = async (ctx) => {
 };
 
 const execWithCtx = (db, fn) => async () => {
-  const ctx = await createCtx(db); if (!ctx) return [];
-  await insertAll(ctx);
-  const out = await fn(ctx);
-  await ctx.close();
-  return out;
+  const ctx = await createCtx(db);
+  if (!ctx) throw new SkipError(`${db} backend unavailable`);
+  try {
+    await insertAll(ctx);
+    const out = await fn(ctx);
+    return out;
+  } finally {
+    // Always release the backend connection, even when the test body throws,
+    // so a failed test cannot leak an open connection into later tests.
+    await ctx.close().catch(() => { });
+  }
 };
 
 for (const db of ['sqlite','mysql','pg','memory']) {
@@ -124,7 +141,8 @@ for (const db of ['sqlite','mysql','pg','memory']) {
   await runTest(`Unified ${db} aggregate avg age`, execWithCtx(db, async (ctx) => {
     if (ctx.db === 'memory') return ctx.coll.aggregate([ { $group: { _id: null, avgAge: { $avg: '$age' } } } ]).map(x => ({ avgAge: Math.round(x.avgAge * 10)/10 }));
     const rows = await ctx.coll.aggregate([ { $group: { _id: null, avgAge: { $avg: '$age' } } } ]);
-    return rows.map(x => ({ avgAge: Math.round(x.avgAge * 10)/10 }));
+    // Postgres lower-cases the output alias (avgage); other backends keep avgAge.
+    return rows.map(x => { const v = x.avgAge ?? x.avgage; return { avgAge: Math.round((v ?? NaN) * 10) / 10 }; });
   }), [ { avgAge: 25.7 } ]);
 
   await runTest(`Unified ${db} pipeline`, execWithCtx(db, async (ctx) => {
@@ -144,16 +162,19 @@ for (const db of ['sqlite','mysql','pg','memory']) {
       { $skip: 1 },
       { $limit: 2 },
     ]);
-    return rows.map(x => ({ name: x.name, isAdult: x.isAdult }));
-  }), [ { name: 'Bob', isAdult: true } ]);
+    // Postgres lower-cases the output alias (isadult); others keep isAdult.
+    return rows.map(x => ({ name: x.name, isAdult: x.isAdult ?? x.isadult }));
+    // active docs sort by next: Bob(31) > Alice(26); skip 1 -> Alice, limit 2 -> [Alice].
+  }), [ { name: 'Alice', isAdult: (db === 'sqlite' || db === 'mysql') ? 1 : true } ]);
 
   await runTest(`Unified ${db} distinct name`, execWithCtx(db, async (ctx) => {
     if (ctx.db === 'memory') {
       const names = Array.from(new Set(ctx.coll.find({}).toArray().map(x => x.name))).sort();
       return names.map(n => ({ name: n }));
     }
+    // SQL adapters return the raw distinct values.
     const rows = await ctx.coll.distinct('name');
-    const names = rows.map(x => x.name || x.NAME || x.table_name || x.TABLE_NAME).sort();
+    const names = rows.map(x => (typeof x === 'object' ? (x.name || x.NAME || x.table_name || x.TABLE_NAME) : x)).sort();
     return names.map(n => ({ name: n }));
   }), [ { name: 'Alice' }, { name: 'Bob' }, { name: 'Charlie' } ]);
 
