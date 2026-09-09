@@ -3,14 +3,12 @@ import { createSchemalessAdapter } from '../src/schemaless.js';
 import { createMySQLConn } from './db-helpers.js';
 
 const main = async () => {
-  let conn;
-  let stop = async () => {};
-  try {
-    ({ conn, stop } = await createMySQLConn());
-  } catch (e) {
-    console.error('[mysql.schema.types] database unavailable, skipping:', e?.message || e);
+  const myCtx = await createMySQLConn();
+  if (!myCtx) {
+    console.log('[mysql.schema.types] database unavailable, skipping');
     return;
   }
+  const { conn, stop } = myCtx;
 
   const { adapter } = createSchemalessAdapter(conn, 'mysql');
   // Note: only _id carries AUTO_INCREMENT — MySQL permits one auto-increment

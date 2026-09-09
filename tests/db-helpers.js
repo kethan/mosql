@@ -4,6 +4,8 @@ dotenv.config();
 
 const log = (...args) => console.log('[db-helpers]', ...args);
 
+let embeddedFailed = null; // memoize a failed embedded-mysqld attempt for the whole process
+
 /**
  * PostgreSQL client for specs.
  * - PG_HOST env set -> real `pg` Client (CI / local server), caller connects.
@@ -89,11 +91,18 @@ export async function createMySQLConn() {
     return null;
   }
 
+  // Only attempt the (expensive) binary download once per test process.
+  if (embeddedFailed) {
+    log('skipping embedded mysqld (failed earlier in this process):', embeddedFailed);
+    return null;
+  }
+
   let createDB;
   try {
     ({ createDB } = await import('mysql-memory-server'));
   } catch (e) {
-    log('MySQL unavailable (no MYSQL_HOST, and mysql-memory-server not installed — npm i -D mysql-memory-server), skipping mysql tests:', e?.message || e);
+    embeddedFailed = e?.message || e;
+    log('MySQL unavailable (no MYSQL_HOST, and mysql-memory-server not installed — npm i -D mysql-memory-server), skipping mysql tests:', embeddedFailed);
     return null;
   }
 
@@ -110,7 +119,8 @@ export async function createMySQLConn() {
     });
     return { conn, label: 'mysql-embedded(mysqld)', stop: () => db.stop() };
   } catch (e) {
-    log('embedded mysqld failed to start, skipping mysql tests:', e?.message || e);
+    embeddedFailed = e?.message || e;
+    log('embedded mysqld failed to start, skipping mysql tests:', embeddedFailed);
     return null;
   }
 }
