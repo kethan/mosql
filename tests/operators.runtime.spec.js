@@ -380,10 +380,10 @@ for (const s of setups) {
   await runTest(`runtime/${s.name} expr $multiply/$mod`, async () => {
     const rows = await u.aggregate([
       { $match: { name: 'Alice' } },
-      { $project: { mul: { $multiply: ['$age', 2] }, mod: { $mod: ['$age', 7] } } }
+      { $project: { mul: { $multiply: ['$age', 2] }, modulo: { $mod: ['$age', 7] } } }
     ]);
-    return rows.map(r => ({ mul: r.mul, mod: r.mod }));
-  }, [{ mul: 50, mod: 4 }]);
+    return rows.map(r => ({ mul: r.mul, modulo: r.modulo }));
+  }, [{ mul: 50, modulo: 4 }]);
 
   await runTest(`runtime/${s.name} expr $cond/$in`, async () => {
     const rows = await u.aggregate([
