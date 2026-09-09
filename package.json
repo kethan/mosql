@@ -110,6 +110,7 @@
 		"copy:types": "echo 'types copied by rollup plugin'"
 	},
 	"devDependencies": {
+		"@electric-sql/pglite": "^0.5.8",
 		"@libsql/client": "^0.15.15",
 		"@neondatabase/serverless": "^1.0.2",
 		"@rollup/plugin-terser": "^0.4.4",
@@ -119,6 +120,7 @@
 		"drizzle-orm": "^0.44.7",
 		"husky": "^9.1.4",
 		"mongodb": "^6.10.0",
+		"mysql-memory-server": "^1.16.0",
 		"mysql2": "^3.15.3",
 		"pg": "^8.16.3",
 		"rollup": "^4.20.0",

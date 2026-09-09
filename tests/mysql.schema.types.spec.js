@@ -1,19 +1,23 @@
-import dotenv from 'dotenv';
 import { runTest } from './common.js';
-import mysql from 'mysql2/promise';
 import { createSchemalessAdapter } from '../src/schemaless.js';
-dotenv.config();
-
-const cfg = { host: process.env.MYSQL_HOST, user: process.env.MYSQL_USER, password: process.env.MYSQL_PASS, database: process.env.MYSQL_DB };
+import { createMySQLConn } from './db-helpers.js';
 
 const main = async () => {
-  if (!cfg.host) return;
   let conn;
-  try { conn = await mysql.createConnection(cfg); } catch { return; }
+  let stop = async () => {};
+  try {
+    ({ conn, stop } = await createMySQLConn());
+  } catch (e) {
+    console.error('[mysql.schema.types] database unavailable, skipping:', e?.message || e);
+    return;
+  }
+
   const { adapter } = createSchemalessAdapter(conn, 'mysql');
+  // Note: only _id carries AUTO_INCREMENT — MySQL permits one auto-increment
+  // column per table, and `_id INT AUTO_INCREMENT PRIMARY KEY` is always created.
   const coll = adapter.collection('mysql_schema_types', {
     schema: {
-      tinyintCol: 'TINYINT', tinyintUnsignedCol: 'TINYINT UNSIGNED', smallintCol: 'SMALLINT', mediumintCol: 'MEDIUMINT', intCol: 'INT', bigintCol: 'BIGINT', autoIntCol: 'INT AUTO_INCREMENT',
+      tinyintCol: 'TINYINT', tinyintUnsignedCol: 'TINYINT UNSIGNED', smallintCol: 'SMALLINT', mediumintCol: 'MEDIUMINT', intCol: 'INT', bigintCol: 'BIGINT',
       decimalCol: 'DECIMAL(10,2)', numericCol: 'NUMERIC(15,5)', floatCol: 'FLOAT', doubleCol: 'DOUBLE',
       bitCol: 'BIT(8)',
       charCol: 'CHAR(10)', varcharCol: 'VARCHAR(255)', tinyTextCol: 'TINYTEXT', textCol: 'TEXT', mediumTextCol: 'MEDIUMTEXT', longTextCol: 'LONGTEXT',
@@ -27,14 +31,25 @@ const main = async () => {
     },
   });
 
-  await runTest('mysql schema columns exist', async () => {
-    const s = await adapter.getTableSchema('mysql_schema_types');
-    const c = s.columns || {};
-    const keys = [ 'tinyintCol','tinyintUnsignedCol','smallintCol','mediumintCol','intCol','bigintCol','autoIntCol','decimalCol','numericCol','floatCol','doubleCol','bitCol','charCol','varcharCol','tinyTextCol','textCol','mediumTextCol','longTextCol','binaryCol','varbinaryCol','tinyBlobCol','blobCol','mediumBlobCol','longBlobCol','boolCol','dateCol','datetimeCol','timestampCol','timeCol','yearCol','jsonCol','enumCol','setCol','geometryCol','pointCol','linestringCol','polygonCol','multiPointCol','multiLineStringCol','multiPolygonCol','geometryCollectionCol','uniqueCol','requiredCol','defaultCol','hiddenCol' ];
-    return keys.map(k => ({ [k]: k in c }));
-  }, Array(44).fill(0).map((_,i)=>({}))); 
+  const keys = ['tinyintCol','tinyintUnsignedCol','smallintCol','mediumintCol','intCol','bigintCol','decimalCol','numericCol','floatCol','doubleCol','bitCol','charCol','varcharCol','tinyTextCol','textCol','mediumTextCol','longTextCol','binaryCol','varbinaryCol','tinyBlobCol','blobCol','mediumBlobCol','longBlobCol','boolCol','dateCol','datetimeCol','timestampCol','timeCol','yearCol','jsonCol','enumCol','setCol','geometryCol','pointCol','linestringCol','polygonCol','multiPointCol','multiLineStringCol','multiPolygonCol','geometryCollectionCol','uniqueCol','requiredCol','defaultCol','hiddenCol'];
 
-  await conn.end();
+  try {
+    // Force table + column creation, then insert a row so the schema is real.
+    await coll.insertOne({ requiredCol: 'x' });
+
+    await runTest('mysql schema columns exist', async () => {
+      const s = await adapter.getTableSchema('mysql_schema_types');
+      const c = s.columns || {};
+      return keys.map(k => ({ [k]: k in c }));
+    }, keys.map(k => ({ [k]: true })));
+  } finally {
+    await conn.end().catch(() => {});
+    await stop().catch?.(() => {});
+  }
 };
 
-main().catch(e=>{ process.exitCode = 1; });
+main().catch(e => {
+  console.error('[mysql.schema.types] FAILED');
+  console.error(e);
+  process.exitCode = 1;
+});
