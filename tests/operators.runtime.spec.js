@@ -63,6 +63,9 @@ const setups = [];
   }
 }
 
+// try/finally: a failing test must not skip connection cleanup, otherwise a
+// direct `node <spec>` run (or the suite) hangs forever on leaked handles.
+try {
 for (const s of setups) {
   await s.adapter.dropCollection('users').catch(() => { });
   const u = s.users;
@@ -512,10 +515,13 @@ for (const s of setups) {
   }, [{ tags: ['z'] }]);
 }
 
-for (const s of setups) {
-  try {
-    if (s.client && typeof s.client.end === 'function') await s.client.end();
-    if (s.conn && typeof s.conn.end === 'function') await s.conn.end();
-    if (typeof s.stop === 'function') await s.stop();
-  } catch { }
+} finally {
+  for (const s of setups) {
+    try {
+      if (s.client && typeof s.client.end === 'function') await s.client.end();
+      else if (s.client && typeof s.client.close === 'function') await s.client.close();
+      if (s.conn && typeof s.conn.end === 'function') await s.conn.end();
+      if (typeof s.stop === 'function') await s.stop();
+    } catch { }
+  }
 }

@@ -25,14 +25,36 @@ const walk = (dir) => {
 };
 
 const specs = walk(here).filter(isSpec);
+// A hung spec used to wedge the whole run until the CI job timed out with no
+// clue which file was responsible. Bound each import instead and abort with
+// the culprit named. Override with SPEC_TIMEOUT_MS=<ms> (0 disables).
+const SPEC_TIMEOUT_MS = Number(process.env.SPEC_TIMEOUT_MS || 8 * 60 * 1000);
 let failed = false;
 for (const spec of specs) {
   const url = pathToFileURL(spec).href;
+  let timer;
   try {
-    await import(url);
+    if (SPEC_TIMEOUT_MS > 0) {
+      await Promise.race([
+        import(url),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`spec timed out after ${SPEC_TIMEOUT_MS}ms (hung? leaked await?)`)), SPEC_TIMEOUT_MS);
+        }),
+      ]);
+    } else {
+      await import(url);
+    }
   } catch (e) {
     failed = true;
     console.error('Import failed:', spec, e?.message || e);
+    if (/spec timed out/.test(e?.message || '')) {
+      // The hung import still dangles; continuing would interleave specs, so abort.
+      console.error(`[run-all] aborting run (hung spec): ${spec}`);
+      await new Promise((r) => setTimeout(r, 500)); // let stdio flush
+      process.exit(1);
+    }
+  } finally {
+    clearTimeout(timer);
   }
 }
 
