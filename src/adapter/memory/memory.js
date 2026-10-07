@@ -78,18 +78,18 @@ export const filterOps = {
     $gte: (q, v) => v >= q,
     $lt: (q, v) => v < q,
     $lte: (q, v) => v <= q,
-    
+
     $in: (q, v) => (Array.isArray(q) ? q : [q]).some(x => deepEquals(x, v)),
     $nin: (q, v) => !(Array.isArray(q) ? q : [q]).some(x => deepEquals(x, v)),
-    
+
     $and: (q, v, filter) => q.every(c => filter(c)(v)),
     $or: (q, v, filter) => q.some(c => filter(c)(v)),
     $not: (q, v, filter) => !filter(q)(v),
     $nor: (q, v, filter) => !q.some(c => filter(c)(v)),
-    
+
     $regex: (q, v) => (q instanceof RegExp ? q : new RegExp(q)).test(String(v)),
     $exists: (q, v) => q ? (v !== undefined && v !== null) : (v === undefined || v === null),
-    
+
     $type: (q, v) => ({
         string: typeof v === 'string',
         number: typeof v === 'number',
@@ -100,7 +100,7 @@ export const filterOps = {
         undefined: v === undefined,
         date: v instanceof Date,
     }[q] || false),
-    
+
     $mod: (q, v) => typeof v === 'number' && (v % q[0]) === q[1],
     $elemMatch: (q, v, filter) => Array.isArray(v) && v.some(i => filter(q)(i)),
     $all: (q, v) => Array.isArray(v) && q.every(x => v.some(i => deepEquals(i, x))),
@@ -141,7 +141,7 @@ export const exprOps = {
     },
     $pow: (a, c) => Math.pow(c.expr(a[0]), c.expr(a[1])),
     $sqrt: (a, c) => Math.sqrt(c.expr(a[0])),
-    
+
     // String
     $concat: (a, c) => a.map(x => String(c.expr(x) || '')).join(''),
     $upper: (a, c) => String(c.expr(a[0]) || '').toUpperCase(),
@@ -161,7 +161,7 @@ export const exprOps = {
         return s.replace(new RegExp(srch, 'g'), rep);
     },
     $split: (a, c) => String(c.expr(a[0]) || '').split(String(c.expr(a[1]))),
-    
+
     // Aggregates
     $min: (a, c) => Math.min(...a.map(x => c.expr(x))),
     $max: (a, c) => Math.max(...a.map(x => c.expr(x))),
@@ -170,7 +170,7 @@ export const exprOps = {
         return v.reduce((s, n) => s + n, 0) / v.length;
     },
     $sum: (a, c) => a.map(x => c.expr(x) || 0).reduce((s, n) => s + n, 0),
-    
+
     // Comparison
     $eq: ([a, b], c) => deepEquals(c.expr(a), c.expr(b)),
     $ne: ([a, b], c) => !deepEquals(c.expr(a), c.expr(b)),
@@ -182,7 +182,7 @@ export const exprOps = {
         const [x, y] = [c.expr(a), c.expr(b)];
         return x < y ? -1 : x > y ? 1 : 0;
     },
-    
+
     // Array
     $in: ([v, a], c) => {
         const arr = c.expr(a);
@@ -229,12 +229,12 @@ export const exprOps = {
         if (!Array.isArray(arr)) return c.expr(i);
         return arr.reduce((acc, item) => c.expr(e, { ...c.ctx, value: acc, this: item }), c.expr(i));
     },
-    
+
     // Logical
     $and: (a, c) => a.every(x => c.expr(x)),
     $or: (a, c) => a.some(x => c.expr(x)),
     $not: (a, c) => !c.expr(a[0]),
-    
+
     // Conditional
     $cond: ([cond, t, f], c) => c.expr(cond) ? c.expr(t) : c.expr(f),
     $ifNull: ([e, d], c) => {
@@ -252,7 +252,7 @@ export const exprOps = {
         }
         return cfg.default !== undefined ? c.expr(cfg.default) : null;
     },
-    
+
     // Type
     $type: (a, c) => {
         const v = c.expr(a[0]);
@@ -262,7 +262,7 @@ export const exprOps = {
         if (v instanceof Date) return 'date';
         return typeof v;
     },
-    
+
     // Date/Time
     $year: (a, c) => {
         const d = new Date(c.expr(a[0]));
@@ -307,14 +307,14 @@ export const exprOps = {
         const daysBeforeFirstMonday = (jan1Wday + 6) % 7;
         return Math.floor((yday + 7 - daysBeforeFirstMonday) / 7);
     },
-    
+
     // Type conversion
     $toString: (a, c) => String(c.expr(a[0])),
     $toInt: (a, c) => parseInt(c.expr(a[0])),
     $toDouble: (a, c) => parseFloat(c.expr(a[0])),
     $toBool: (a, c) => Boolean(c.expr(a[0])),
     $toDate: (a, c) => new Date(c.expr(a[0])),
-    
+
     // Literal
     $literal: (a) => a[0],
 };
@@ -328,26 +328,26 @@ export const updateOps = {
     $unset: (f, doc) => Object.keys(f).forEach(k => delPath(doc, k)),
     $inc: (f, doc) => Object.entries(f).forEach(([k, v]) => setPath(doc, k, (getPath(doc, k) || 0) + v)),
     $mul: (f, doc) => Object.entries(f).forEach(([k, v]) => setPath(doc, k, (getPath(doc, k) || 0) * v)),
-    
+
     $min: (f, doc) => Object.entries(f).forEach(([k, v]) => {
         const curr = getPath(doc, k);
         if (curr === undefined || v < curr) setPath(doc, k, v);
     }),
-    
+
     $max: (f, doc) => Object.entries(f).forEach(([k, v]) => {
         const curr = getPath(doc, k);
         if (curr === undefined || v > curr) setPath(doc, k, v);
     }),
-    
+
     $push: (f, doc) => Object.entries(f).forEach(([k, v]) => {
         const curr = getPath(doc, k);
         if (Array.isArray(curr)) {
             if (isObject(v) && v.$each) {
                 const { $each: items, $slice: sl, $sort: srt, $position: pos } = v;
-                
+
                 if (pos !== undefined) curr.splice(pos, 0, ...items);
                 else curr.push(...items);
-                
+
                 if (srt) {
                     if (srt === 1) curr.sort((a, b) => a > b ? 1 : -1);
                     else if (srt === -1) curr.sort((a, b) => a < b ? 1 : -1);
@@ -360,7 +360,7 @@ export const updateOps = {
                         });
                     }
                 }
-                
+
                 if (sl !== undefined) {
                     const sliced = sl < 0 ? curr.slice(sl) : curr.slice(0, sl);
                     curr.length = 0;
@@ -373,7 +373,7 @@ export const updateOps = {
             setPath(doc, k, [v]);
         }
     }),
-    
+
     $pull: (f, doc, filter) => Object.entries(f).forEach(([k, cond]) => {
         const curr = getPath(doc, k);
         if (Array.isArray(curr)) {
@@ -381,14 +381,14 @@ export const updateOps = {
             setPath(doc, k, curr.filter(i => !matches(i)));
         }
     }),
-    
+
     $pullAll: (f, doc) => Object.entries(f).forEach(([k, vals]) => {
         const curr = getPath(doc, k);
         if (Array.isArray(curr) && Array.isArray(vals)) {
             setPath(doc, k, curr.filter(i => !vals.some(v => deepEquals(v, i))));
         }
     }),
-    
+
     $addToSet: (f, doc) => Object.entries(f).forEach(([k, v]) => {
         const curr = getPath(doc, k);
         if (Array.isArray(curr)) {
@@ -403,7 +403,7 @@ export const updateOps = {
             setPath(doc, k, [v]);
         }
     }),
-    
+
     $pop: (f, doc) => Object.entries(f).forEach(([k, v]) => {
         const curr = getPath(doc, k);
         if (Array.isArray(curr)) {
@@ -411,7 +411,7 @@ export const updateOps = {
             else if (v === -1) curr.shift();
         }
     }),
-    
+
     $rename: (f, doc) => Object.entries(f).forEach(([old, neu]) => {
         const v = getPath(doc, old);
         if (v !== undefined) {
@@ -419,9 +419,9 @@ export const updateOps = {
             delPath(doc, old);
         }
     }),
-    
+
     $currentDate: (f, doc) => Object.entries(f).forEach(([k]) => setPath(doc, k, new Date())),
-    
+
     $setOnInsert: (f, doc, isInsert) => {
         if (isInsert) Object.entries(f).forEach(([k, v]) => setPath(doc, k, v));
     },
@@ -433,11 +433,11 @@ export const updateOps = {
 
 export const stageOps = {
     $match: (args, ctx, filter) => filter(args)(ctx) ? ctx : null,
-    
+
     $project: (proj, ctx, expression) => {
         const res = {};
         const excl = Object.entries(proj).filter(([_, v]) => v === 0 || v === false).map(([k]) => k);
-        
+
         if (excl.length > 0) {
             Object.keys(ctx).forEach(k => {
                 if (!excl.includes(k)) res[k] = getPath(ctx, k);
@@ -448,14 +448,14 @@ export const stageOps = {
                 else if (isObject(v) || is$(v)) res[k] = expression(v)(ctx);
                 else res[k] = v;
             });
-            
+
             if (!('_id' in proj) && '_id' in ctx) res._id = ctx._id;
             else if (proj._id === 0 || proj._id === false) delete res._id;
         }
-        
+
         return res;
     },
-    
+
     $addFields: (fields, ctx, expression) => {
         const res = { ...ctx };
         Object.entries(fields).forEach(([k, v]) => {
@@ -463,16 +463,16 @@ export const stageOps = {
         });
         return res;
     },
-    
+
     $set: (fields, ctx, expression) => stageOps.$addFields(fields, ctx, expression),
-    
+
     $unset: (fields, ctx) => {
         const res = { ...ctx };
         const keys = Array.isArray(fields) ? fields : [fields];
         keys.forEach(k => delPath(res, k));
         return res;
     },
-    
+
     $group: ({ _id, ...acc }, ctxArr, expression) => {
         const grps = ctxArr.reduce((a, i) => {
             const k = _id === null ? '__null__' : JSON.stringify(expression(_id)(i));
@@ -480,15 +480,15 @@ export const stageOps = {
             a[k].items.push(i);
             return a;
         }, {});
-        
+
         return Object.values(grps).map(g => {
             const res = { _id: g._id };
-            
+
             Object.entries(acc).forEach(([k, accExpr]) => {
                 if (!isObject(accExpr)) throw new Error(`Accumulator must be object: ${k}`);
-                
+
                 const [op, arg] = Object.entries(accExpr)[0];
-                
+
                 switch (op) {
                     case '$sum':
                         res[k] = arg === 1 ? g.items.length : g.items.reduce((s, i) => s + (expression(arg)(i) || 0), 0);
@@ -529,11 +529,11 @@ export const stageOps = {
                         throw new Error(`Unknown accumulator: ${op}`);
                 }
             });
-            
+
             return res;
         });
     },
-    
+
     $sort: (sObj, ctxArr) => [...ctxArr].sort((a, b) => {
         for (const [k, ord] of Object.entries(sObj)) {
             const av = getPath(a, k);
@@ -546,16 +546,16 @@ export const stageOps = {
         }
         return 0;
     }),
-    
+
     $limit: (cnt, ctxArr) => ctxArr.slice(0, cnt),
     $skip: (cnt, ctxArr) => ctxArr.slice(cnt),
     $count: (field, ctxArr) => [{ [field]: ctxArr.length }],
-    
+
     $unwind: (cfg, ctxArr) => {
         const path = typeof cfg === 'string' ? cfg.replace(/^\$/, '') : cfg.path.replace(/^\$/, '');
         const preserve = isObject(cfg) && cfg.preserveNullAndEmptyArrays;
         const idx = isObject(cfg) ? cfg.includeArrayIndex : null;
-        
+
         const res = [];
         ctxArr.forEach(doc => {
             const arr = getPath(doc, path);
@@ -572,21 +572,21 @@ export const stageOps = {
                 res.push(n);
             }
         });
-        
+
         return res;
     },
-    
+
     $bucket: (cfg, ctxArr, expression) => {
         const { groupBy, boundaries, default: def, output } = cfg;
         if (!Array.isArray(boundaries) || boundaries.length < 2) throw new Error('$bucket requires boundaries');
-        
+
         const getBucket = (v) => {
             for (let i = 0; i < boundaries.length - 1; i++) {
                 if (v >= boundaries[i] && v < boundaries[i + 1]) return boundaries[i];
             }
             return def;
         };
-        
+
         const groups = {};
         ctxArr.forEach(i => {
             const v = expression(groupBy)(i);
@@ -595,7 +595,7 @@ export const stageOps = {
             if (!groups[k]) groups[k] = { _id: b, items: [] };
             groups[k].items.push(i);
         });
-        
+
         const res = Object.values(groups).map(g => {
             const out = { _id: g._id, count: g.items.length };
             if (output && isObject(output)) {
@@ -642,10 +642,10 @@ export const stageOps = {
             }
             return out;
         });
-        
+
         return res;
     },
-    
+
     $sortByCount: (expr, ctxArr, expression) => {
         const keyFn = typeof expr === 'string' && expr.startsWith('$') ? (i) => getPath(i, expr.slice(1)) : (i) => expression(expr)(i);
         const counts = ctxArr.reduce((a, i) => {
@@ -653,7 +653,7 @@ export const stageOps = {
             a[k] = (a[k] || 0) + 1;
             return a;
         }, {});
-        
+
         const res = Object.entries(counts).map(([k, v]) => ({ _id: JSON.parse(k), count: v }));
         return res.sort((a, b) => b.count - a.count);
     },
@@ -667,7 +667,7 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
     // FILTER
     const filter = (q) => (doc) => {
         if (!isObject(q)) throw new Error('Query must be object');
-        
+
         const evalCond = (key, cond, value) => {
             if (isObject(cond)) {
                 return Object.entries(cond).every(([op, arg]) => {
@@ -680,7 +680,7 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
             }
             return deepEquals(cond, value);
         };
-        
+
         return Object.entries(q).every(([k, v]) => {
             if (is$(k)) {
                 if (!fOps[k]) throw new Error(`Unknown filter operator: ${k}`);
@@ -690,7 +690,7 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
             return evalCond(k, v, val);
         });
     };
-    
+
     // EXPRESSION
     const expression = (e, ctx = {}) => (doc) => {
         if (isObject(e)) {
@@ -708,14 +708,14 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
         }
         return e;
     };
-    
+
     // PROJECT
     const project = (doc, proj) => {
         if (!proj) return doc;
-        
+
         const res = {};
         const hasInc = Object.values(proj).some(v => v === 1 || v === true);
-        
+
         if (hasInc) {
             Object.entries(proj).forEach(([k, v]) => {
                 if (v === 1 || v === true) {
@@ -725,7 +725,7 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
                     res[k] = expression(v)(doc);
                 }
             });
-            
+
             if (!('_id' in proj) || proj._id !== 0) {
                 if (doc._id !== undefined) res._id = doc._id;
             }
@@ -735,16 +735,16 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
                 if (v === 0 || v === false) delPath(res, k);
             });
         }
-        
+
         return res;
     };
-    
+
     // AGGREGATE
     const aggregate = (pipe) => (coll) => {
         if (!Array.isArray(pipe)) throw new Error('Pipeline must be array');
-        
+
         let ctxArr = Array.isArray(coll) ? coll : [coll];
-        
+
         for (const stage of pipe) {
             const [op, args] = Object.entries(stage)[0];
             if (!sOps[op]) throw new Error(`Unknown stage: ${op}`);
@@ -758,10 +758,10 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
                 ctxArr = sOps[op](args, ctxArr);
             }
         }
-        
+
         return ctxArr;
     };
-    
+
     // FIND QUERY CLASS
     class FindQuery {
         constructor(data, query, projection) {
@@ -774,13 +774,13 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
             this._dist = false;
             this._cnt = false;
         }
-        
+
         sort(obj) { this._sort = obj; return this; }
         skip(n) { this._skip = n; return this; }
         limit(n) { this._limit = n; return this; }
         distinct() { this._dist = true; return this; }
         count() { this._cnt = true; return this; }
-        
+
         toArray() {
             let res = this._data.filter(filter(this._query));
             if (this._sort) {
@@ -801,7 +801,7 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
             if (this._skip) res = res.slice(this._skip);
             if (this._limit != null) res = res.slice(0, this._limit);
             if (this._cnt) return [{ count: res.length }];
-            
+
             if (this._dist) {
                 const seen = new Set();
                 res = res.filter(d => {
@@ -811,10 +811,12 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
                     return true;
                 });
             }
-            
-            return res;
+
+            return this._proj
+                ? res.map(doc => project(doc, this._proj))
+                : res;
         }
-        
+
         toString() {
             return JSON.stringify({
                 query: this._query,
@@ -825,7 +827,7 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
             });
         }
     }
-    
+
     // COLLECTION CLASS
     class Collection {
         constructor(name, data = [], options = {}) {
@@ -839,14 +841,14 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
             this.idStrategy = this.options.idStrategy || 'auto';
             this.idGenerator = typeof this.options.idGenerator === 'function' ? this.options.idGenerator : null;
         }
-        
+
         _genId() { return this._id++; }
         _genMongoId() {
             const ts = Math.floor(Date.now() / 1000).toString(16).padStart(8, '0');
             const rand = Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
             return (ts + rand).slice(0, 24);
         }
-        
+
         find(q = {}, proj = null, options = null) {
             const fq = new FindQuery(this._data, q, proj);
             if (options && typeof options === 'object') {
@@ -857,16 +859,16 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
             }
             return fq;
         }
-        
+
         findOne(q = {}, proj = null) {
             const res = this.find(q, proj).limit(1).toArray();
             return res.length > 0 ? res[0] : null;
         }
-        
+
         findById(id) {
             return this.findOne({ _id: id });
         }
-        
+
         insertOne(doc) {
             const n = clone(doc);
             const idCol = this.idColumn;
@@ -885,16 +887,16 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
             this._data.push(n);
             return { insertedId: n[idCol], acknowledged: true };
         }
-        
+
         insertMany(docs) {
             if (!Array.isArray(docs)) throw new Error('insertMany requires array');
             const ids = docs.map(d => this.insertOne(d).insertedId);
             return { insertedIds: ids, acknowledged: true };
         }
-        
+
         updateOne(q, upd, opts = {}) {
             const idx = this._data.findIndex(filter(q));
-            
+
             if (idx === -1) {
                 if (opts.upsert) {
                     const n = {};
@@ -907,7 +909,7 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
                 }
                 return { modifiedCount: 0, matchedCount: 0, acknowledged: true };
             }
-            
+
             const c = clone(this._data[idx]);
             Object.entries(upd).forEach(([op, f]) => {
                 if (is$(op)) {
@@ -917,11 +919,11 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
                     setPath(c, op, f);
                 }
             });
-            
+
             this._data[idx] = c;
             return { modifiedCount: 1, matchedCount: 1, acknowledged: true };
         }
-        
+
         updateMany(q, upd, opts = {}) {
             let mod = 0;
             this._data.forEach((doc, i) => {
@@ -941,7 +943,7 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
             });
             return { modifiedCount: mod, matchedCount: mod, acknowledged: true };
         }
-        
+
         replaceOne(q, repl, opts = {}) {
             const idx = this._data.findIndex(filter(q));
             if (idx === -1) {
@@ -955,14 +957,14 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
             this._data[idx] = { ...repl, _id };
             return { modifiedCount: 1, matchedCount: 1, acknowledged: true };
         }
-        
+
         deleteOne(q) {
             const idx = this._data.findIndex(filter(q));
             if (idx === -1) return { deletedCount: 0, acknowledged: true };
             this._data.splice(idx, 1);
             return { deletedCount: 1, acknowledged: true };
         }
-        
+
         deleteMany(q = {}) {
             const init = this._data.length;
             for (let i = this._data.length - 1; i >= 0; i--) {
@@ -970,15 +972,15 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
             }
             return { deletedCount: init - this._data.length, acknowledged: true };
         }
-        
+
         countDocuments(q = {}) {
             return this._data.filter(filter(q)).length;
         }
-        
+
         estimatedDocumentCount() {
             return this._data.length;
         }
-        
+
         distinct(field, q = {}) {
             const vals = this._data.filter(filter(q)).map(d => getPath(d, field)).filter(v => v !== undefined);
             const uniq = [];
@@ -992,55 +994,55 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
             });
             return uniq;
         }
-        
+
         aggregate(pipe) {
             return aggregate(pipe)(this._data);
         }
-        
+
         drop() {
             this._data.length = 0;
             this._id = 1;
             return { acknowledged: true };
         }
-        
+
         getAll() {
             return [...this._data];
         }
-        
+
         size() {
             return this._data.length;
         }
     }
-    
+
     // DATABASE CLASS
     class Database {
         constructor(name) {
             this.name = name;
             this.collections = new Map();
         }
-        
+
         collection(name, initData, options) {
             if (!this.collections.has(name)) {
                 this.collections.set(name, new Collection(name, initData || [], options || {}));
             }
             return this.collections.get(name);
         }
-        
+
         dropCollection(name) {
             return this.collections.delete(name);
         }
-        
+
         listCollections() {
             return Array.from(this.collections.keys());
         }
-        
+
         stats(name) {
             const coll = this.collections.get(name);
             if (!coll) return null;
-            
+
             const data = coll.getAll();
             const size = JSON.stringify(data).length;
-            
+
             return {
                 name: coll.name,
                 count: coll.size(),
@@ -1048,13 +1050,13 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
                 avgObjSize: coll.size() > 0 ? size / coll.size() : 0
             };
         }
-        
+
         dropDatabase() {
             this.collections.clear();
             return { acknowledged: true };
         }
     }
-    
+
     // EXTENSION & EXPORTS
     const extend = {
         filter: (ops) => Object.assign(fOps, ops),
@@ -1062,10 +1064,10 @@ export const createMemoryDB = ({ filterOps: fOps = filterOps, exprOps: eOps = ex
         update: (ops) => Object.assign(uOps, ops),
         stage: (ops) => Object.assign(sOps, ops),
     };
-    
+
     const db = (name) => new Database(name);
     const collection = (name, initData = [], options) => new Collection(name, initData, options);
-    
+
     return {
         filter,
         expression,

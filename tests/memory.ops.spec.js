@@ -127,5 +127,151 @@ const main = async () => {
     { _id: 'Paris', names: ['Alice', 'David'], oneCity: ['Paris'], firstAge: 25, lastAge: 40 },
   ]);
 };
+await runTest(
+  'mem projection include',
+  async () => {
+    const users = collection('users_projection_include', [
+      {
+        _id: 1,
+        name: 'Alice',
+        age: 25,
+        city: 'Paris',
+        active: true,
+        tags: ['a', 'b'],
+        profile: {
+          country: 'France',
+          score: 85
+        }
+      }
+    ]);
+
+    return users.find(
+      { name: 'Alice' },
+      {
+        name: 1,
+        age: 1
+      }
+    ).toArray();
+  },
+  [
+    {
+      _id: 1,
+      name: 'Alice',
+      age: 25
+    }
+  ]
+);
+
+await runTest(
+  'mem projection exclude',
+  async () => {
+    const users = collection('users_projection_exclude', [
+      {
+        _id: 1,
+        name: 'Alice',
+        age: 25,
+        city: 'Paris',
+        active: true,
+        tags: ['a', 'b'],
+        profile: {
+          country: 'France',
+          score: 85
+        }
+      }
+    ]);
+
+    return users.find(
+      { name: 'Alice' },
+      {
+        city: 0,
+        active: 0
+      }
+    ).toArray();
+  },
+  [
+    {
+      _id: 1,
+      name: 'Alice',
+      age: 25,
+      tags: ['a', 'b'],
+      profile: {
+        country: 'France',
+        score: 85
+      }
+    }
+  ]
+);
+
+await runTest(
+  'mem projection exclude _id',
+  async () => {
+    const users = collection('users_projection_id', [
+      {
+        _id: 1,
+        name: 'Alice',
+        age: 25,
+        city: 'Paris',
+        active: true,
+        tags: ['a', 'b'],
+        profile: {
+          country: 'France',
+          score: 85
+        }
+      }
+    ]);
+
+    return users.find(
+      { name: 'Alice' },
+      {
+        name: 1,
+        age: 1,
+        _id: 0
+      }
+    ).toArray();
+  },
+  [
+    {
+      name: 'Alice',
+      age: 25
+    }
+  ]
+);
+
+await runTest(
+  'mem findOne projection',
+  async () => {
+    const users = collection('users_findone_projection', [
+      {
+        _id: 1,
+        name: 'Alice',
+        age: 25,
+        city: 'Paris',
+        active: true,
+        tags: ['a', 'b'],
+        profile: {
+          country: 'France',
+          score: 85
+        }
+      }
+    ]);
+
+    const result = await users.findOne(
+      { name: 'Alice' },
+      {
+        name: 1,
+        age: 1
+      }
+    );
+
+    return [result];
+  },
+  [
+    {
+      _id: 1,
+      name: 'Alice',
+      age: 25
+    }
+  ]
+);
 
 await main().catch(e => { process.exitCode = 1; });
