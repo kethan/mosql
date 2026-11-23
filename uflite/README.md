@@ -161,7 +161,9 @@ except the ones that exercise `flite()` routing and hooks. The two REST-shaped
 cases became assertions on the error the REST layer serialises. Run
 `./verify.sh` (or `--quick` offline, which skips the publish step); CI runs
 it on Linux, macOS and Windows and finishes with `cargo publish --dry-run`.
-The crate depends on `mosql` `0.1` by path, so publish `mosql` first.
+The crate depends on `mosql` `0.1` by path, so publish `mosql` first — until
+it is on crates.io the dry-run reports that single expected failure and the
+gate ignores only it.
 
 ## Not ported
 
