@@ -201,6 +201,10 @@ let sql = Builder::full()
 
 ## What was hard
 
+- **32-bit bare-metal targets have no 64-bit atomics.** `AtomicU64` simply
+  does not exist on Cortex-M or RISC-V-32, and wasm32 does have it, so the wasm
+  build never caught it — only the thumbv7em link in CI did. The engine's fake
+  clock (`$currentDate`) uses `AtomicUsize` for that reason.
 - **`no_std` has no libm.** `f64::floor`, `powf`, `sqrt`, `ceil`, `round`,
   `fract`, `rem_euclid` are all `std`-only. They are reimplemented in
   `float.rs` (`ln` via atanh series + exponent reduction, `exp` via

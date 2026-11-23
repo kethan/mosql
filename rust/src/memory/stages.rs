@@ -267,10 +267,10 @@ fn sort_docs(docs: &mut [Value], sort: &Value) {
             if equal {
                 continue;
             }
-            if av.map_or(true, |v| v.is_null()) {
+            if av.is_none_or(|v| v.is_null()) {
                 return core::cmp::Ordering::Greater;
             }
-            if bv.map_or(true, |v| v.is_null()) {
+            if bv.is_none_or(|v| v.is_null()) {
                 return core::cmp::Ordering::Less;
             }
             let (x, y) = (av.unwrap(), bv.unwrap());

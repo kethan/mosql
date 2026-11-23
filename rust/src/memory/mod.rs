@@ -31,16 +31,20 @@ pub use update::apply_update;
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::value::Value;
 
-static TICK: AtomicU64 = AtomicU64::new(0);
+// `AtomicUsize`, not `AtomicU64`: 32-bit bare-metal targets (Cortex-M,
+// RISC-V-32) have no 64-bit atomics, so `AtomicU64` does not exist there and
+// the crate would not compile. A counter only has to be strictly increasing;
+// on a 32-bit target it wraps after 2^32 calls, which a fake clock never sees.
+static TICK: AtomicUsize = AtomicUsize::new(0);
 
 /// A monotonic fake clock: `no_std` has no wall clock, so `$currentDate`
 /// produces a deterministic, strictly increasing timestamp.
 pub(crate) fn tick_iso() -> String {
-    let n = TICK.fetch_add(1, Ordering::Relaxed);
+    let n = TICK.fetch_add(1, Ordering::Relaxed) as u64;
     let ms = 1_704_067_200_000i64 + n as i64; // 2024-01-01T00:00:00Z
     let days = ms.div_euclid(86_400_000);
     let rem = ms.rem_euclid(86_400_000);

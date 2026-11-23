@@ -185,7 +185,7 @@ impl Collection {
         let mut n = doc;
         let id_col = self.id_column.clone();
 
-        let missing = n.get(&id_col).map_or(true, |v| v.is_null());
+        let missing = n.get(&id_col).is_none_or(|v| v.is_null());
         if missing {
             if self.id_strategy == IdStrategy::Mongo {
                 set_path(&mut n, &id_col, self.gen_mongo_id());

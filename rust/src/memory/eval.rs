@@ -404,7 +404,7 @@ pub fn filter_op(op: &str, q: &Value, v: Option<&Value>) -> Result<bool> {
         "$exists" => Ok(if q.is_truthy() {
             v.is_some_and(|v| !v.is_null())
         } else {
-            v.map_or(true, |v| v.is_null())
+            v.is_none_or(|v| v.is_null())
         }),
 
         "$type" => {
