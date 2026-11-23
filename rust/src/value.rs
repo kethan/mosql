@@ -346,8 +346,11 @@ fn write_json_string(s: &str, out: &mut String) {
 /// matches what `parse_json` produces, so a value read directly from JS
 /// behaves identically to the same value parsed from JSON.
 ///
-/// Only the Node-API converter needs it; the wasm build reads JSON instead.
-#[cfg(not(target_arch = "wasm32"))]
+/// Only the Node-API converter needs it; the wasm build reads JSON instead. It
+/// is gated exactly like `node_api`, its only caller, so that a default build
+/// neither compiles it nor — on Windows — tries to link a bridge that is not
+/// there.
+#[cfg(all(not(target_arch = "wasm32"), feature = "napi"))]
 pub fn from_f64(x: f64) -> Value {
     if x.is_finite() && crate::float::fract(x) == 0.0 && x.abs() < 9.007_199_254_740_992e15 {
         Value::Int(x as i64)

@@ -47,7 +47,12 @@ mod value;
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
-#[cfg(not(target_arch = "wasm32"))]
+// The raw Node-API declarations exist only for the bridge below. They must be
+// gated exactly like it: on Windows a DLL has to resolve every import at link
+// time, so compiling them without the feature (and without Node's symbols)
+// fails to link. Linux and macOS tolerate undefined symbols in a shared
+// object, which is how this went unnoticed until the Windows CI job.
+#[cfg(all(not(target_arch = "wasm32"), feature = "napi"))]
 pub mod node_api;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "napi"))]

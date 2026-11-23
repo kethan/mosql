@@ -230,7 +230,11 @@ let sql = Builder::full()
   ABI details cost real debugging time: `napi_get_cb_info`'s `argc` is
   `size_t*` (not `int*`), and `napi_set_named_property` /
   `napi_throw_error` take **NUL-terminated** C strings while the `_utf8`
-  functions take counted ones.
+  functions take counted ones. And the declarations must be gated behind the
+  `napi` feature exactly like the bridge: Linux and macOS link a shared object
+  with undefined symbols without complaint, but a Windows DLL must resolve every
+  import, so a bridge compiled without its feature fails to link there — the
+  Windows CI job found it.
 - **The wasm allocator.** `wasm32-unknown-unknown` has none. `wasm_alloc.rs` is
   a bump allocator with an exact-size free cache: every block is rounded to a
   16-byte granule and bucketed by granule count, so a lookup is one array index
