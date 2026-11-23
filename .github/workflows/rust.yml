@@ -10,12 +10,16 @@ name: Rust
 #   bridges    builds the wasm modules and the Node addon, replays the corpus
 #              through both ABIs
 #   publishable  cargo publish --dry-run against the live crates.io index
+#   uflite     uflite/verify.sh on Linux, macOS and Windows — the service layer
+#              (db, table, acl, storage) ported on top of the crate: fmt,
+#              clippy, the ported uflite specs, publish dry-run
 
 on:
   push:
     branches: ["main"]
     paths:
       - "rust/**"
+      - "uflite/**"
       # The JS implementation is the oracle for the parity fixtures, so a change
       # to it can make the Rust port drift even though rust/ is untouched.
       - "src/**"
@@ -27,6 +31,7 @@ on:
     branches: ["main"]
     paths:
       - "rust/**"
+      - "uflite/**"
       - "src/**"
       - "lite/**"
       - "tiny/**"
@@ -122,6 +127,29 @@ jobs:
         run: |
           ./build-node.sh
           node node/test.mjs
+
+  uflite:
+    # The service layer depends on the mosql crate by path, so a change to
+    # rust/ can break it even though uflite/ is untouched. Local storage has
+    # platform-specific paths and open flags, hence the full OS matrix.
+    name: uflite (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: uflite
+      - name: Verify
+        shell: bash
+        run: ./uflite/verify.sh
 
   # `cargo publish --dry-run` needs the crates.io index, which the sandbox that
   # developed this crate had no access to. CI has it, so this is the gate that

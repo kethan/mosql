@@ -1,0 +1,18 @@
+[package]
+name = "uflite"
+version = "0.1.0"
+edition = "2021"
+description = "Rust port of uflite's service layer: Feathers-style database services, table/DDL validation, ACL and local/S3 storage, as zero-dependency async traits on top of the mosql crate."
+license = "ISC"
+repository = "https://github.com/kethan/mosql"
+readme = "README.md"
+keywords = ["feathers", "service", "rest", "acl", "storage", "mongodb"]
+categories = ["database", "web-programming"]
+# Keep compiled artifacts out of the tarball, as in the mosql crate.
+include = ["src/**", "tests/**", "examples/**", "README.md", "LICENSE*"]
+
+[dependencies]
+mosql = { version = "0.1", path = "../rust" }
+
+[lib]
+doctest = false
