@@ -156,7 +156,7 @@ Same workload through `createDBService` (node 22, `umosql/memory` 0.3.1) and
 ## Testing
 
 `tests/` ports the uflite specs (`db`, `table`, `acl`, `storage`) and uqry's
-`filter`/`expression` suite — 82 tests, every `it` from the JavaScript files
+`filter`/`expression` suite — 84 tests, every `it` from the JavaScript files
 except the ones that exercise `flite()` routing and hooks. The two REST-shaped
 cases became assertions on the error the REST layer serialises. Run
 `./verify.sh` (or `--quick` offline, which skips the publish step); CI runs

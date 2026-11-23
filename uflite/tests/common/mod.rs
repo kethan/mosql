@@ -142,19 +142,39 @@ pub fn expect_404<T: std::fmt::Debug>(r: Result<T>) -> Error {
     e
 }
 
+/// A private temporary directory for one test.
+///
+/// A timestamp is not enough to name it: `SystemTime` only has microsecond
+/// resolution on macOS, so two storage tests starting in the same microsecond
+/// would share a directory and one test's `Drop` would delete the other's files
+/// mid-test (a `NotFound` on a file that was just written). A process-wide
+/// counter plus an atomic `create_dir` — which fails if the name is taken —
+/// makes the name unique and proves it.
+fn unique_temp_dir() -> std::path::PathBuf {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    for _ in 0..64 {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("uflite-test-{}-{stamp}-{seq}", std::process::id()));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return dir,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => panic!("temporary directory: {e}"),
+        }
+    }
+    panic!("temporary directory: still taken after 64 attempts");
+}
+
 /// A `LocalStorage` in a fresh temporary directory that is removed on drop.
 pub struct TempStorage(LocalStorage);
 
 impl TempStorage {
     pub fn new(options: LocalOptions) -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "uflite-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
+        let dir = unique_temp_dir();
         let service = LocalStorage::new(options.base_path(dir.to_string_lossy().into_owned()))
             .expect("local storage");
         TempStorage(service)

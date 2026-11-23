@@ -1310,3 +1310,27 @@ fn paging_and_encoding_helpers() {
     assert_eq!(form_encode("a b+c&d"), "a+b%2Bc%26d");
     assert_eq!(MAX_LIMIT, 1000);
 }
+
+#[test]
+fn temp_directories_never_collide() {
+    // The macOS runner's clock has microsecond resolution, so naming the
+    // directory by timestamp alone let two parallel tests share one directory;
+    // the first to finish removed the other's files mid-test.
+    let roots: Vec<std::path::PathBuf> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..32)
+            .map(|_| {
+                s.spawn(|| {
+                    TempStorage::new(LocalOptions::default())
+                        .get()
+                        .root()
+                        .to_path_buf()
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let mut unique = roots.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), roots.len(), "temporary directories collided");
+}
