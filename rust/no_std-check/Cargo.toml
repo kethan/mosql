@@ -1,0 +1,17 @@
+# Proves that `mosql` is genuinely `#![no_std]` + `alloc`: this binary provides
+# its own allocator and panic handler (as any `no_std` consumer must) and calls
+# into the crate. Built by ../verify.sh for a bare-metal target.
+[package]
+name = "mosql-no-std-check"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+mosql = { path = "..", default-features = false, features = ["memory"] }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

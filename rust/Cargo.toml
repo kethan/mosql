@@ -1,0 +1,50 @@
+[package]
+name = "mosql"
+version = "0.1.0"
+edition = "2021"
+description = "MongoDB-style queries -> SQL for PostgreSQL, MySQL and SQLite. Zero-dependency Rust port of umosql."
+license = "ISC"
+repository = "https://github.com/kethan/mosql"
+readme = "README.md"
+keywords = ["mongodb", "sql", "query-builder", "postgres", "mysql", "sqlite"]
+categories = ["database"]
+
+# Ship only the library, its tests, and the docs. Without this the published
+# crate would carry the compiled addons (`node/*.node`, `wasm/*.wasm`) and the
+# benchmark scripts — several hundred KB of Linux binaries that are useless to a
+# consumer.
+include = ["src/**", "tests/**", "README.md", "LICENSE*"]
+
+[lib]
+doctest = false
+name = "mosql"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["std", "memory"]
+std = []
+# The in-memory Mongo-style engine. Disable it (together with `std`) for a
+# builder-only wasm binary that is ~40% smaller.
+memory = []
+# Node-API addon (`src/napi.rs`). Off by default so a plain `cargo build`
+# never links the addon surface into an unrelated cdylib.
+napi = []
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Smallest possible wasm binary (used by the JS bridge).
+[profile.wasm]
+inherits = "release"
+opt-level = "z"
+
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"

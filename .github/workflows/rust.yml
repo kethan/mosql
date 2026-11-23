@@ -1,0 +1,141 @@
+name: Rust
+
+# The Rust port lives in rust/ and is verified against the JavaScript
+# implementation as its oracle: every operator is replayed through the same
+# fixtures the JS package uses, and the SQL must match byte for byte.
+#
+#   verify     rust/verify.sh on Linux, macOS and Windows (fmt, clippy, feature
+#              matrix, no_std, wasm32, parity tests, fixture drift, packaging)
+#   no-std     links a real bare-metal binary against the crate
+#   bridges    builds the wasm modules and the Node addon, replays the corpus
+#              through both ABIs
+#   publishable  cargo publish --dry-run against the live crates.io index
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "rust/**"
+      # The JS implementation is the oracle for the parity fixtures, so a change
+      # to it can make the Rust port drift even though rust/ is untouched.
+      - "src/**"
+      - "lite/**"
+      - "tiny/**"
+      - ".github/workflows/rust.yml"
+      - ".gitattributes"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "rust/**"
+      - "src/**"
+      - "lite/**"
+      - "tiny/**"
+      - ".github/workflows/rust.yml"
+      - ".gitattributes"
+  workflow_dispatch:
+
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+
+      - name: Cache build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Set up Node
+        # Only used to regenerate the fixture corpora and prove there is no
+        # drift between the Rust port and the JavaScript oracle.
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Verify
+        shell: bash
+        run: ./rust/verify.sh
+
+  no-std:
+    # `mosql` is `#![no_std]` + `alloc`, so a consumer must supply the
+    # allocator and panic handler. rust/no_std-check does exactly that and calls
+    # into the crate — if a hidden `std` dependency ever appears, this stops
+    # linking. verify.sh skips this step locally when the target is absent.
+    name: no_std (thumbv7em)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Build the bare-metal consumer
+        working-directory: rust
+        run: cargo build --manifest-path no_std-check/Cargo.toml --target thumbv7em-none-eabihf --release
+
+  bridges:
+    name: wasm + addon bridges
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: wasm modules — build and replay the corpus
+        working-directory: rust
+        run: |
+          ./build-wasm.sh
+          node wasm/test.mjs
+      - name: Node addon — build and replay the corpus
+        working-directory: rust
+        run: |
+          ./build-node.sh
+          node node/test.mjs
+
+  # `cargo publish --dry-run` needs the crates.io index, which the sandbox that
+  # developed this crate had no access to. CI has it, so this is the gate that
+  # proves the manifest is actually publishable.
+  publishable:
+    name: publishable
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: cargo publish --dry-run
+        working-directory: rust
+        run: cargo publish --dry-run
