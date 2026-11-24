@@ -47,12 +47,18 @@ stage() {
   status=${PIPESTATUS[0]}
   set -e
   if (( status != 0 )); then
-    # Two lines of context follow each match: a panic's message is on the
-    # line after it, and so is a linker's. Backticks and CRs are removed
-    # because they do not survive the trip as annotations.
-    grep -E -A2 '^(error|warning)(\[|:)|^test .* \.\.\. FAILED|^---- |panicked at|assertion .*failed|^  (left|right):' "$log" \
-      | grep -vE '^--$|^$' | tr -d '`\r' \
-      | head -n 10 | sed "s/^/::error title=$name::/" >&2 || true
+    # The lines that say what went wrong come first — a failing test, a
+    # panic and its message, a compiler diagnostic, a build-script marker —
+    # then cargo's own error lines with context. Duplicates dropped, ten at
+    # most: that is what a step may emit. Backticks and CRs do not survive
+    # the trip as annotations.
+    local important errors
+    important='\[nanobase\]|fatal error|error C[0-9]+|LNK[0-9]+|Could not find|cannot open|not recognized|^test .* \.\.\. FAILED|^---- |panicked at|assertion .*failed|^  (left|right):'
+    errors='^(error|warning)(\[|:)'
+    { grep -E -A1 "$important" "$log"; grep -E -A2 "$errors" "$log"; } \
+      | grep -vE '^--$|^$|^ *note: run with' | tr -d '`\r' \
+      | awk '!seen[$0]++' | head -n 10 \
+      | sed "s/^/::error title=$name::/" >&2 || true
     exit "$status"
   fi
   rm -f "$log"

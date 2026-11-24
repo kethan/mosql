@@ -128,7 +128,7 @@ fn build_msvc(out: &Path, target: &str, src: &Path, obj: &Path, defines: &[&str]
         // Function-level linking, so the linker can drop what is unused.
         "/Gy".to_string(),
         "/c".to_string(),
-        format!("/Fo{}", obj.display()),
+        format!("/Fo{}", win_path(obj)),
     ];
     for d in defines {
         args.push(format!("/D{d}"));
@@ -139,21 +139,43 @@ fn build_msvc(out: &Path, target: &str, src: &Path, obj: &Path, defines: &[&str]
     let src = env::current_dir()
         .expect("cannot read the current directory")
         .join(src);
-    args.push(src.display().to_string());
+    args.push(win_path(&src));
 
+    // Each step says what it is doing, and on failure prints its exit code
+    // and whatever it printed. The build script's output is the only place a
+    // broken toolchain can explain itself, and these lines are what CI shows.
+    let log = out.join("build-sqlite.log");
     let mut script = String::from("@echo off\r\n");
+    script.push_str("[nanobase] setting up the MSVC environment\r\n");
     script.push_str(&format!(
-        "call \"{}\" {arch} >nul\r\nif errorlevel 1 exit /b 1\r\n",
-        vcvarsall().display()
+        "call \"{}\" {arch} >\"{}\" 2>&1\r\n",
+        win_path(&vcvarsall()),
+        win_path(&log)
     ));
+    script.push_str(&format!(
+        "if errorlevel 1 (type \"{}\" & echo [nanobase] vcvarsall failed with exit code %errorlevel% & exit /b 1)\r\n",
+        win_path(&log)
+    ));
+    script.push_str("where cl.exe\r\n");
     let quoted: Vec<String> = args.iter().map(|a| format!("\"{a}\"")).collect();
     script.push_str(&format!("cl.exe {}\r\n", quoted.join(" ")));
+    script.push_str(
+        "if errorlevel 1 (echo [nanobase] cl.exe failed with exit code %errorlevel% & exit /b 1)\r\n",
+    );
+    script.push_str("[nanobase] sqlite3.obj built\r\n");
 
     let script_path = out.join("build-sqlite.bat");
     std::fs::write(&script_path, script).expect("cannot write build-sqlite.bat");
     // Spawning a `.bat` goes through `cmd.exe`, and Rust quotes the script
     // path itself; it takes no arguments, so there is nothing to escape.
-    run(&script_path.display().to_string(), &[]);
+    run(&win_path(&script_path), &[]);
+}
+
+/// A path for `cmd.exe` and `cl.exe`: backslashes only. Cargo's `OUT_DIR`
+/// mixes separators, and a tool that reads `/` as an option prefix should
+/// never be handed one inside a path.
+fn win_path(path: &Path) -> String {
+    path.display().to_string().replace('/', "\\")
 }
 
 /// The `vcvarsall.bat` of the newest Visual Studio with the C++ tools.
