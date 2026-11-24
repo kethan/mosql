@@ -5,6 +5,8 @@ pub mod http;
 pub mod middleware;
 pub mod models;
 pub mod oauth_presets;
+pub mod query;
+pub mod query_server;
 pub mod routes;
 pub mod store;
 

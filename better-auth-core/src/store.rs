@@ -24,6 +24,9 @@ use std::sync::{Mutex, PoisonError};
 use mosql::Value;
 use nanobase::sqlite::{Connection, Row};
 
+pub mod http_store;
+pub mod tcp_store;
+
 use crate::error::{AuthError, AuthResult};
 use crate::models::{self, Record, RecordMap, EXTRA_COLUMN};
 

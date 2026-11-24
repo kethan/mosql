@@ -21,6 +21,15 @@ pub struct Rig {
 }
 
 impl Rig {
+    /// A rig over an engine the caller built, for tests that need a
+    /// particular store.
+    pub fn over(auth: Arc<Auth>) -> Rig {
+        Rig {
+            auth,
+            mailer: Arc::new(MemoryMailer::default()),
+        }
+    }
+
     pub fn new() -> Rig {
         let mut config = AuthConfig::new("https://app.test", SECRET);
         config.password_scrypt_n = 1024;
