@@ -105,7 +105,8 @@ Command line: `--listen ADDR`, `--data PATH`, `--help`, `--version`.
 
 ## Routes
 
-Sixty-two method-and-path pairs, all under `/api/auth`.
+Sixty-two paths, all under `/api/auth` — sixty-four method-and-path
+pairs, because the two callback paths answer both GET and POST.
 
 ### Core
 
@@ -371,7 +372,7 @@ come with it.
 $ cargo test
 ```
 
-112 tests: the unit tests of the engine, and eight integration suites
+116 tests: the unit tests of the engine, and eight integration suites
 that drive the real route table — tokens and sessions, the email flows,
 two-factor, one-time codes and magic links, anonymous sign-in and
 usernames, OAuth, the admin plugin, and the route table itself.

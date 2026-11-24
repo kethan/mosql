@@ -645,7 +645,10 @@ impl Aes256 {
         for (b, k) in block.iter_mut().zip(self.round_keys[0]) {
             *b ^= k;
         }
-        for round in 1..=14 {
+        // Each round adds its own key, and the last one skips the column
+        // mixing. Walking the keys rather than counting the rounds keeps
+        // the two together: the round and its key are one thing.
+        for (round, key) in self.round_keys.iter().enumerate().skip(1) {
             let mut shifted = [0u8; 16];
             for i in 0..16 {
                 shifted[i] = SBOX[usize::from(block[SHIFT_ROWS[i]])];
@@ -668,8 +671,8 @@ impl Aes256 {
                 }
             }
             *block = mixed;
-            for (b, k) in block.iter_mut().zip(self.round_keys[round]) {
-                *b ^= k;
+            for (b, k) in block.iter_mut().zip(key) {
+                *b ^= *k;
             }
         }
     }
