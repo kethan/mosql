@@ -5,7 +5,7 @@ mod common;
 
 use common::{expect_err, json};
 use mosql::Value;
-use uflite::acl::{is_permission, matches_permission, Acl};
+use uflite::acl::{is_permission, matches_permission, Acl, Decision, Effect};
 
 /// `acl(rules)` — an enabled policy with these rules.
 fn acl(rules: &str) -> Acl {
@@ -563,6 +563,7 @@ fn typed_construction_matches_json_construction() {
             name: None,
             permissions: vec!["admin:users:delete".into()],
             check: Some(json(r#"{"user.role": "admin"}"#)),
+            effect: uflite::acl::Effect::Allow,
         }],
     )
     .unwrap();
@@ -586,8 +587,103 @@ fn typed_construction_matches_json_construction() {
             id: String::new(),
             name: None,
             permissions: vec![],
-            check: None
+            check: None,
+            effect: uflite::acl::Effect::Allow,
         }]
     )
     .is_err());
+}
+
+#[test]
+fn rule_without_effect_is_allow() {
+    let acl = Acl::new(&json(
+        r#"{"enabled":true,"rules":[{"id":"r1","permissions":["user:posts:*"]}]}"#,
+    ))
+    .expect("valid policy");
+    assert_eq!(acl.rules()[0].effect, Effect::Allow);
+}
+
+#[test]
+fn deny_overrides_allow() {
+    let acl = acl(r#"[
+        {"id":"a","permissions":["user:posts:*"],"check":{"user.premium":true}},
+        {"id":"b","permissions":["user:posts:*"],"effect":"deny","check":{"user.banned":true}}
+    ]"#);
+    let ctx = json(r#"{"user":{"premium":true,"banned":true}}"#);
+    assert_eq!(acl.decide(&ctx, "user:posts:find").unwrap(), Decision::Deny);
+    assert!(!acl.can(&ctx, "user:posts:find").unwrap());
+}
+
+#[test]
+fn allow_wins_when_deny_does_not_match() {
+    let acl = acl(r#"[
+        {"id":"a","permissions":["user:posts:*"],"check":{"user.premium":true}},
+        {"id":"b","permissions":["user:posts:*"],"effect":"deny","check":{"user.banned":true}}
+    ]"#);
+    let ctx = json(r#"{"user":{"premium":true,"banned":false}}"#);
+    assert_eq!(
+        acl.decide(&ctx, "user:posts:find").unwrap(),
+        Decision::Allow
+    );
+    assert!(acl.can(&ctx, "user:posts:find").unwrap());
+}
+
+#[test]
+fn default_is_deny() {
+    let acl = acl(r#"[
+        {"id":"a","permissions":["admin:users:*"]}
+    ]"#);
+    assert_eq!(
+        acl.decide(&json("{}"), "user:posts:find").unwrap(),
+        Decision::DefaultDeny
+    );
+    assert!(!acl.can(&json("{}"), "user:posts:find").unwrap());
+}
+
+#[test]
+fn deny_rule_with_check_not_matching_grants() {
+    let acl = acl(r#"[
+        {"id":"a","permissions":["user:posts:*"],"check":{"user.premium":true}},
+        {"id":"b","permissions":["user:posts:*"],"effect":"deny","check":{"user.banned":true}}
+    ]"#);
+    let ctx = json(r#"{"user":{"premium":true,"banned":false}}"#);
+    assert!(acl.can(&ctx, "user:posts:find").unwrap());
+}
+
+#[test]
+fn deny_without_check_blocks_every_matching_permission() {
+    let acl = acl(r#"[
+        {"id":"a","permissions":["user:posts:*"]},
+        {"id":"b","permissions":["user:posts:*"],"effect":"deny"}
+    ]"#);
+    assert!(!acl.can(&json("{}"), "user:posts:find").unwrap());
+    assert!(!acl.can(&json("{}"), "user:posts:create").unwrap());
+}
+
+#[test]
+fn invalid_effect_is_rejected() {
+    assert!(Acl::new(&json(
+        r#"{"enabled":true,"rules":[{"id":"a","permissions":["a:b:c"],"effect":"maybe"}]}"#
+    ))
+    .is_err());
+}
+
+#[test]
+fn deny_round_trips_through_json() {
+    let acl = acl(r#"[
+        {"id":"a","permissions":["user:posts:*"],"effect":"deny"}
+    ]"#);
+    assert_eq!(acl.rules()[0].effect, Effect::Deny);
+    assert_eq!(
+        acl.rules()[0].to_value().get("effect"),
+        Some(&json("\"deny\""))
+    );
+}
+
+#[test]
+fn allow_rule_omits_effect_when_serialised() {
+    let acl = acl(r#"[
+        {"id":"a","permissions":["user:posts:*"]}
+    ]"#);
+    assert_eq!(acl.rules()[0].to_value().get("effect"), None);
 }
