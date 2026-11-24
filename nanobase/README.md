@@ -13,7 +13,7 @@ That is a requirement, not an accident: the platform is meant to be small
 enough to ship as a single binary, and it is built in an environment with no
 registry access at all.
 
-Release binary today: **~454 KB**, against a 3 MB budget that
+Release binary today: **~520 KB**, against a 3 MB budget that
 [`verify.sh`](verify.sh) enforces.
 
 ## Status
@@ -22,9 +22,9 @@ Release binary today: **~454 KB**, against a 3 MB budget that
 | --- | --- |
 | App documents (read, validate, write) | done — 44 tests |
 | Secret handling (`SECRET_*`, redaction) | done |
-| CLI: `new`, `validate`, `redact` | done |
-| Platform database, first-run onboarding | next |
-| Auth (email/password, sessions, JWT) | next |
+| Owner account: first run, sign in, tokens | done — 43 tests |
+| Platform store (JSON file today) | done |
+| Creating apps through the platform | next |
 | HTTP server and routes | next |
 
 ## What an app document is
@@ -89,13 +89,63 @@ written in the file is a deliberate choice for that app and wins.
 `null` and `meta.includesSecrets` set to `false` — the version that is safe to
 commit or hand to someone.
 
+## First run
+
+```
+$ nanobase init
+Email: ada@example.com
+Password: ················
+Owner created: ada@example.com
+Platform file: /tmp/nbtest/platform.json
+Next: nanobase login ada@example.com
+
+$ nanobase login ada@example.com --password '…'
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1Y…
+
+$ nanobase me --token eyJhbGci…
+user:  ada@example.com (owner)
+id:    ubf1e7459446e5cc1c4cbe8b9b8f62b17
+expires: 2026-11-25T09:41:19Z
+```
+
+V1 has exactly one account — the owner — and it can do everything. A second
+`init` is refused with a 409.
+
+**The password is never stored.** What lands in the platform file is a PBKDF2
+hash with a random 16-byte salt and 600,000 rounds:
+
+```json
+"password": { "iterations": 600000, "salt": "bfuJ_ffVkL7jAjMZdaw8lA",
+              "hash": "Ilrny-nbmukVxty8A8RJ0PN2isYKk-OlR1z0KXexwpE" }
+```
+
+The iteration count is stored beside the hash, so it can be raised later
+without invalidating passwords already issued.
+
+**A failed login does not say why.** An unknown email and a wrong password
+return the same status and the same message, and an unknown email still runs a
+hash — otherwise the response time reveals which addresses have accounts.
+
+**Tokens are signed, not encrypted**, so they carry only who the caller is:
+id, email, role, issue and expiry. No database URL, no storage key, no rule set
+— a token is handed to a browser, and anyone holding it can read every byte.
+Per-app configuration is resolved server-side from the app id.
+
 ## CLI
 
 ```
-nanobase new <name> [--out <file>]    write a new, empty app document
-nanobase validate <file>              check a document, list every problem
-nanobase redact <file> [--out <file>] copy a document without its secrets
+nanobase init   [--email E] [--password P]   create the owner (prompts if omitted)
+nanobase login  <email> [--password P]       print a session token
+nanobase me     [--token T]                  show who a token belongs to
+nanobase status                            setup state, app count
+nanobase new <name> [--out <file>]           write a new, empty app document
+nanobase validate <file>                     check a document, list every problem
+nanobase redact <file> [--out <file>]        copy a document without its secrets
 ```
+
+All of them take `--data <file>` for the platform's state, defaulting to
+`$NANOBASE_DATA` and then `./data/nanobase.json`. Passwords can come from
+`NANOBASE_PASSWORD` instead of a flag, which keeps them out of a shell history.
 
 `validate` reports **all** problems in one pass, from both reading and
 checking, each with its field path:

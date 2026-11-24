@@ -17,11 +17,19 @@
 //!   validation that decides whether an app may be imported.
 
 pub mod config;
+pub mod crypto;
+pub mod jwt;
+pub mod platform;
 
 pub use config::{
     AclConfig, AppConfig, AppDoc, AppMeta, AppType, AuthConfig, CollectionDef, ColumnDef,
     ColumnType, ConfigError, Data, DatabaseConfig, DbKind, Features, Issue, LocalStorage, Meta,
     Provider, RedisConfig, S3Storage, Schema, Secrets, StorageConfig, StorageKind,
+};
+pub use platform::{
+    check_email, check_password, create_owner, iso8601, issue_token, normalize_email, now_secs,
+    verify_login, AppRecord, BoxFuture, FileStore, MemoryStore, PasswordHash, Platform,
+    PlatformStore, User, MIN_PASSWORD_LEN, PBKDF2_ITERATIONS, ROLE_OWNER, SESSION_TTL_SECS,
 };
 
 /// The version of the platform, from `Cargo.toml`.
