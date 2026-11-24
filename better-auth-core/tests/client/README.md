@@ -27,6 +27,13 @@ in the `set-auth-token` header. `bearer.mjs` is the other half of that
 contract — the twenty lines a native app or a service would write — and it
 is the only piece of code here that is not Better Auth's.
 
+The two hash tests are the interoperability ones. They read the credential
+row straight out of the server's SQLite file — the hash is the one thing
+the server does not hand out over HTTP — and they put Better Auth's own
+`hashPassword` and `verifyPassword` on the other end of it. So the hash the
+Rust server writes is one the JavaScript stack accepts, and the hash the
+JavaScript stack writes is one the Rust server accepts.
+
 | test | what it pins down |
 |---|---|
 | sign-up | `{token, refreshToken, user}`, and no password in the user |
@@ -45,6 +52,8 @@ is the only piece of code here that is not Better Auth's.
 | routes | 404 for an unknown path, 405 for the wrong method |
 | bearer | the token comes back in `set-auth-token`, no cookie is set, and the header and the body agree |
 | bearer | a token sent as `Authorization: Bearer` is accepted |
+| hash | the server writes a hash Better Auth's own `verifyPassword` accepts |
+| hash | the server accepts a hash Better Auth's own `hashPassword` wrote |
 
 ## Note on dependencies
 

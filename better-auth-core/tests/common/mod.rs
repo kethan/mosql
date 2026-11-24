@@ -23,7 +23,7 @@ pub struct Rig {
 impl Rig {
     pub fn new() -> Rig {
         let mut config = AuthConfig::new("https://app.test", SECRET);
-        config.pbkdf2_iterations = 1_000;
+        config.password_scrypt_n = 1024;
         config.allowed_origins = vec!["https://portal.example.com".into()];
         let mailer = Arc::new(MemoryMailer::default());
         let auth = Auth::new(Arc::new(MemoryStore::new()), config).with_mailer(mailer.clone());

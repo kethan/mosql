@@ -302,9 +302,13 @@ pub struct AuthConfig {
     /// Refuse password sign-in until the address is verified.
     pub require_email_verification: bool,
     pub allow_anonymous: bool,
-    /// PBKDF2 rounds for new password hashes. Stored hashes carry their
-    /// own count and verify at it.
-    pub pbkdf2_iterations: u32,
+    /// The cost of a new password hash: scrypt's `N`.
+    ///
+    /// The stored hash does not carry it — Better Auth's format is just
+    /// `<salt>:<key>` — so this has to be the same on both sides of the
+    /// wire, and changing it makes every stored password unverifiable.
+    /// [`crypto::SCRYPT_N`] is what the JavaScript stack uses.
+    pub password_scrypt_n: u32,
     /// Origins allowed for CORS and as redirect targets, besides this
     /// server's own.
     pub allowed_origins: Vec<String>,
@@ -336,7 +340,7 @@ impl AuthConfig {
             oauth_state_ttl_secs: 10 * 60,
             require_email_verification: false,
             allow_anonymous: true,
-            pbkdf2_iterations: crypto::PBKDF2_ITERATIONS,
+            password_scrypt_n: crypto::SCRYPT_N,
             allowed_origins: Vec::new(),
         }
     }
@@ -374,8 +378,8 @@ impl AuthConfig {
         if let Some(secs) = lookup("REFRESH_TTL_SECS").and_then(|v| v.parse().ok()) {
             config.refresh_ttl_secs = secs;
         }
-        if let Some(rounds) = lookup("PBKDF2_ITERATIONS").and_then(|v| v.parse().ok()) {
-            config.pbkdf2_iterations = rounds;
+        if let Some(cost) = lookup("BETTER_AUTH_SCRYPT_N").and_then(|v| v.parse().ok()) {
+            config.password_scrypt_n = cost;
         }
         if let Some(origins) = lookup("BETTER_AUTH_TRUSTED_ORIGINS") {
             config.allowed_origins = origins
@@ -734,7 +738,7 @@ impl Auth {
     /// Set (or replace) the password on a user's credential account.
     pub async fn set_password(&self, user_id: &str, password: &str) -> AuthResult<Account> {
         check_password(password)?;
-        let hash = crypto::hash_password(password, self.config.pbkdf2_iterations);
+        let hash = crypto::hash_password(password, self.config.password_scrypt_n);
         match self.credential_account(user_id).await? {
             Some(account) => {
                 let mut changes = mosql::Object::new();
@@ -768,14 +772,30 @@ impl Auth {
     }
 
     /// Verify `password` against the user's hash, if there is one.
+    ///
+    /// A hash in the old PBKDF2 format is replaced with a scrypt one as
+    /// soon as the password is given correctly, so a table written before
+    /// the change heals itself one sign-in at a time.
     pub async fn verify_password(&self, user_id: &str, password: &str) -> AuthResult<bool> {
-        match self.credential_account(user_id).await? {
-            Some(account) => Ok(account
-                .password
-                .as_deref()
-                .is_some_and(|stored| crypto::verify_password(password, stored))),
-            None => Ok(false),
+        let Some(account) = self.credential_account(user_id).await? else {
+            return Ok(false);
+        };
+        let Some(stored) = account.password.as_deref() else {
+            return Ok(false);
+        };
+        if !crypto::verify_password(password, stored, self.config.password_scrypt_n) {
+            return Ok(false);
         }
+        if crypto::password_is_legacy(stored) {
+            let fresh = crypto::hash_password(password, self.config.password_scrypt_n);
+            let mut changes = mosql::Object::new();
+            changes.set("password", s(fresh));
+            changes.set("updatedAt", s(now_iso()));
+            self.store
+                .update_typed::<Account>(&[WhereClause::id(&account.id)], changes)
+                .await?;
+        }
+        Ok(true)
     }
 
     /// Link a provider account to a user, or update the stored tokens if
@@ -938,7 +958,7 @@ mod tests {
         let mut config = AuthConfig::new("https://app.test", "0123456789abcdef0123456789abcdef");
         // The production count is a 15-second hash per password; tests only
         // need the format.
-        config.pbkdf2_iterations = 1_000;
+        config.password_scrypt_n = 1024;
         config
     }
 
@@ -1023,7 +1043,11 @@ mod tests {
         assert_eq!(short.status, 400);
         let account = auth.set_password(&ada.id, "correct horse battery").await.unwrap();
         assert_eq!(account.provider_id, PROVIDER_CREDENTIAL);
-        assert!(account.password.as_deref().unwrap().starts_with("pbkdf2-sha256$"));
+        // The hash is in Better Auth's format: salt, then key.
+        let stored = account.password.as_deref().unwrap();
+        let (salt, key) = stored.split_once(':').expect("two halves");
+        assert_eq!(salt.len(), 32);
+        assert_eq!(key.len(), 128);
         assert!(auth.verify_password(&ada.id, "correct horse battery").await.unwrap());
         assert!(!auth.verify_password(&ada.id, "wrong").await.unwrap());
         // Replacing keeps one account.

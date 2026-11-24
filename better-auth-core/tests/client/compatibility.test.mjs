@@ -15,9 +15,11 @@
 // call below is checked on both halves.
 
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 import { after, before, describe, test } from "node:test";
 
 import { createAuthClient } from "better-auth/client";
+import { hashPassword, verifyPassword } from "better-auth/crypto";
 import {
 	adminClient,
 	anonymousClient,
@@ -320,6 +322,71 @@ describe("the bearer contract", () => {
 		assert.equal(reply.status, 200);
 		const session = await reply.json();
 		assert.equal(session.user.email, "bearer@example.com");
+	});
+});
+
+describe("the password hash", () => {
+	test("the server writes a hash the JavaScript stack can read", async () => {
+		const own = newClient();
+		await ok(
+			own.signUp.email({
+				email: "hash@example.com",
+				password: PASSWORD,
+				name: "Hash",
+			}),
+		);
+
+		const db = new DatabaseSync(server.dbPath);
+		const row = db
+			.prepare(
+				`SELECT a."password" AS password FROM "account" a
+				 JOIN "user" u ON u."id" = a."userId"
+				 WHERE u."email" = ? AND a."providerId" = 'credential'`,
+			)
+			.get("hash@example.com");
+		db.close();
+
+		assert.ok(row, "the credential account is there");
+		const stored = String(row.password);
+		// Better Auth's own format: the salt, then the key.
+		const [salt, key] = stored.split(":");
+		assert.equal(salt.length, 32);
+		assert.equal(key.length, 128);
+		// And the JavaScript stack can verify it.
+		assert.equal(await verifyPassword({ hash: stored, password: PASSWORD }), true);
+		assert.equal(
+			await verifyPassword({ hash: stored, password: "not the password" }),
+			false,
+		);
+	});
+
+	test("the server reads a hash the JavaScript stack wrote", async () => {
+		const own = newClient();
+		await ok(
+			own.signUp.email({
+				email: "js@example.com",
+				password: PASSWORD,
+				name: "JS",
+			}),
+		);
+
+		// The hash Better Auth itself would have written.
+		const jsHash = await hashPassword(PASSWORD);
+
+		const db = new DatabaseSync(server.dbPath);
+		db.prepare(
+			`UPDATE "account" SET "password" = ?
+			 WHERE "providerId" = 'credential' AND "userId" = (
+				SELECT "id" FROM "user" WHERE "email" = ?)`,
+		).run(jsHash, "js@example.com");
+		db.close();
+
+		// The Rust server has to accept it.
+		const own2 = newClient();
+		const data = await ok(
+			own2.signIn.email({ email: "js@example.com", password: PASSWORD }),
+		);
+		assert.equal(data.user.email, "js@example.com");
 	});
 });
 

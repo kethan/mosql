@@ -202,14 +202,20 @@ pub fn hmac_sha256_parts(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
 // --------------------------------------------------------------- PBKDF2 ---
 
 /// PBKDF2-HMAC-SHA256 (RFC 8018 §5.2).
+///
+/// The key schedule is built once and kept. The key does not change from
+/// one iteration to the next, so re-padding it and re-compressing the two
+/// key blocks every time would be half the work done for nothing: an
+/// iteration is two compressions, not four.
 pub fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32, out_len: usize) -> Vec<u8> {
     let mut out = Vec::with_capacity(out_len);
+    let (inner, outer) = hmac_sha256_key_schedule(password);
     let mut block_index: u32 = 1;
     while out.len() < out_len {
-        let mut h = hmac_sha256_parts(password, &[salt, &block_index.to_be_bytes()]);
+        let mut h = hmac_with(&inner, &outer, &[salt, &block_index.to_be_bytes()]);
         let mut acc = h;
         for _ in 1..iterations {
-            h = hmac_sha256(password, &h);
+            h = hmac_with(&inner, &outer, &[&h]);
             for (a, b) in acc.iter_mut().zip(h) {
                 *a ^= b;
             }
@@ -219,6 +225,201 @@ pub fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32, out_len: usi
     }
     out.truncate(out_len);
     out
+}
+
+/// The two halves of an HMAC-SHA256 key schedule, each already compressed
+/// over its padded key block.
+fn hmac_sha256_key_schedule(password: &[u8]) -> (Sha256, Sha256) {
+    let mut block = [0u8; 64];
+    if password.len() > 64 {
+        block[..32].copy_from_slice(&sha256(password));
+    } else {
+        block[..password.len()].copy_from_slice(password);
+    }
+    let mut inner = Sha256::new();
+    let mut outer = Sha256::new();
+    for b in block.iter() {
+        inner.update(&[b ^ 0x36]);
+        outer.update(&[b ^ 0x5c]);
+    }
+    (inner, outer)
+}
+
+/// HMAC-SHA256 over a key schedule that has already been prepared.
+fn hmac_with(inner: &Sha256, outer: &Sha256, parts: &[&[u8]]) -> [u8; 32] {
+    let mut i = inner.clone();
+    for part in parts {
+        i.update(part);
+    }
+    let mut o = outer.clone();
+    o.update(&i.finalize());
+    o.finalize()
+}
+
+// ---------------------------------------------------------------- scrypt ---
+
+/// scrypt (RFC 7914).
+///
+/// This is what Better Auth hashes passwords with, and the output has to
+/// be byte-for-byte the same as Node's: the two stacks share a database,
+/// so a hash written by one has to verify under the other.
+///
+/// `n` must be a power of two greater than one, and `r * p` must be
+/// small enough that the working set (`128 * r * n` bytes) fits in memory.
+pub fn scrypt(
+    password: &[u8],
+    salt: &[u8],
+    n: usize,
+    r: usize,
+    p: usize,
+    dk_len: usize,
+) -> Vec<u8> {
+    assert!(
+        n.is_power_of_two() && n > 1,
+        "scrypt needs n to be a power of two"
+    );
+    let words = 32 * r;
+    let chunk_bytes = 128 * r;
+
+    // Step 1: stretch the password into p blocks of 128 * r bytes.
+    let mut blocks = pbkdf2_sha256(password, salt, 1, p * chunk_bytes);
+    for chunk in blocks.chunks_mut(chunk_bytes) {
+        let mut x = vec![0u32; words];
+        for (i, word) in x.iter_mut().enumerate() {
+            *word = u32::from_le_bytes([
+                chunk[i * 4],
+                chunk[i * 4 + 1],
+                chunk[i * 4 + 2],
+                chunk[i * 4 + 3],
+            ]);
+        }
+        scrypt_romix(&mut x, n, r);
+        for (i, word) in x.iter().enumerate() {
+            chunk[i * 4..i * 4 + 4].copy_from_slice(&word.to_le_bytes());
+        }
+    }
+
+    // Step 3: the final stretch over the whole thing.
+    pbkdf2_sha256(password, &blocks, 1, dk_len)
+}
+
+/// scryptROMix (RFC 7914 §6).
+fn scrypt_romix(block: &mut [u32], n: usize, r: usize) {
+    let width = 32 * r;
+    let mut v = vec![0u32; width * n];
+    let mut x = vec![0u32; width];
+    let mut y = vec![0u32; width];
+    x.copy_from_slice(block);
+
+    // Fill the table with the chain.
+    for i in 0..n {
+        v[i * width..(i + 1) * width].copy_from_slice(&x);
+        scrypt_block_mix(&x, &mut y, r);
+        std::mem::swap(&mut x, &mut y);
+    }
+
+    // Walk the chain again, mixing in the entry the last block points at.
+    for _ in 0..n {
+        // Integerify: the last 64-byte block read as a little-endian
+        // integer. Only the low bits matter, because n is a power of two.
+        // The block is little-endian words, so its first eight bytes are
+        // its first two words.
+        let j = ((x[width - 16] as u64) | ((x[width - 15] as u64) << 32)) as usize & (n - 1);
+        for k in 0..width {
+            x[k] ^= v[j * width + k];
+        }
+        scrypt_block_mix(&x, &mut y, r);
+        std::mem::swap(&mut x, &mut y);
+    }
+    block.copy_from_slice(&x);
+}
+
+/// scryptBlockMix (RFC 7914 §6).
+fn scrypt_block_mix(input: &[u32], output: &mut [u32], r: usize) {
+    let mut x = [0u32; 16];
+    x.copy_from_slice(&input[(2 * r - 1) * 16..][..16]);
+    let mut y = vec![0u32; 32 * r];
+    for i in 0..2 * r {
+        let block = &input[i * 16..i * 16 + 16];
+        for j in 0..16 {
+            x[j] ^= block[j];
+        }
+        salsa20_8(&mut x);
+        y[i * 16..i * 16 + 16].copy_from_slice(&x);
+    }
+    // The even blocks come first, then the odd ones.
+    for k in 0..r {
+        output[k * 16..k * 16 + 16].copy_from_slice(&y[2 * k * 16..2 * k * 16 + 16]);
+        output[(r + k) * 16..(r + k) * 16 + 16]
+            .copy_from_slice(&y[(2 * k + 1) * 16..(2 * k + 1) * 16 + 16]);
+    }
+}
+
+/// The Salsa20/8 core: eight rounds rather than twenty.
+///
+/// Every one of the rotations and constants is load-bearing. A wrong one
+/// changes every byte of the output, so the vectors in the tests are the
+/// only real check on this function.
+fn salsa20_8(block: &mut [u32; 16]) {
+    let mut x = *block;
+    for _ in 0..4 {
+        // Column round: four quarter-rounds, one per column of the
+        // 4x4 state.
+        x[4] ^= x[0].wrapping_add(x[12]).rotate_left(7);
+        x[8] ^= x[4].wrapping_add(x[0]).rotate_left(9);
+        x[12] ^= x[8].wrapping_add(x[4]).rotate_left(13);
+        x[0] ^= x[12].wrapping_add(x[8]).rotate_left(18);
+
+        x[9] ^= x[5].wrapping_add(x[1]).rotate_left(7);
+        x[13] ^= x[9].wrapping_add(x[5]).rotate_left(9);
+        x[1] ^= x[13].wrapping_add(x[9]).rotate_left(13);
+        x[5] ^= x[1].wrapping_add(x[13]).rotate_left(18);
+
+        x[14] ^= x[10].wrapping_add(x[6]).rotate_left(7);
+        x[2] ^= x[14].wrapping_add(x[10]).rotate_left(9);
+        x[6] ^= x[2].wrapping_add(x[14]).rotate_left(13);
+        x[10] ^= x[6].wrapping_add(x[2]).rotate_left(18);
+
+        x[3] ^= x[15].wrapping_add(x[11]).rotate_left(7);
+        x[7] ^= x[3].wrapping_add(x[15]).rotate_left(9);
+        x[11] ^= x[7].wrapping_add(x[3]).rotate_left(13);
+        x[15] ^= x[11].wrapping_add(x[7]).rotate_left(18);
+
+        // Row round.
+        x[1] ^= x[0].wrapping_add(x[3]).rotate_left(7);
+        x[2] ^= x[1].wrapping_add(x[0]).rotate_left(9);
+        x[3] ^= x[2].wrapping_add(x[1]).rotate_left(13);
+        x[0] ^= x[3].wrapping_add(x[2]).rotate_left(18);
+
+        x[6] ^= x[5].wrapping_add(x[4]).rotate_left(7);
+        x[7] ^= x[6].wrapping_add(x[5]).rotate_left(9);
+        x[4] ^= x[7].wrapping_add(x[6]).rotate_left(13);
+        x[5] ^= x[4].wrapping_add(x[7]).rotate_left(18);
+
+        x[11] ^= x[10].wrapping_add(x[9]).rotate_left(7);
+        x[8] ^= x[11].wrapping_add(x[10]).rotate_left(9);
+        x[9] ^= x[8].wrapping_add(x[11]).rotate_left(13);
+        x[10] ^= x[9].wrapping_add(x[8]).rotate_left(18);
+
+        x[12] ^= x[15].wrapping_add(x[14]).rotate_left(7);
+        x[13] ^= x[12].wrapping_add(x[15]).rotate_left(9);
+        x[14] ^= x[13].wrapping_add(x[12]).rotate_left(13);
+        x[15] ^= x[14].wrapping_add(x[13]).rotate_left(18);
+    }
+    for i in 0..16 {
+        block[i] = x[i].wrapping_add(block[i]);
+    }
+}
+
+/// The parameters Better Auth uses: `N=16384, r=16, p=1`, 64 bytes out.
+pub const SCRYPT_N: usize = 16_384;
+pub const SCRYPT_R: usize = 16;
+pub const SCRYPT_P: usize = 1;
+pub const SCRYPT_DK_LEN: usize = 64;
+
+/// scrypt with the parameters Better Auth uses.
+pub fn scrypt_better_auth(password: &[u8], salt: &[u8]) -> Vec<u8> {
+    scrypt(password, salt, SCRYPT_N, SCRYPT_R, SCRYPT_P, SCRYPT_DK_LEN)
 }
 
 // ------------------------------------------------------ constant-time eq ---
@@ -398,6 +599,111 @@ mod tests {
         assert_eq!(
             hex,
             "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+    }
+
+    #[test]
+    fn pbkdf2_known_answer() {
+        // RFC 7914 §11's PBKDF2-HMAC-SHA256 vector.
+        let out = pbkdf2_sha256(b"passwd", b"salt", 1, 64);
+        let hex: String = out.iter().map(|x| format!("{x:02x}")).collect();
+        assert_eq!(
+            hex,
+            "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc\
+             49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783"
+        );
+        // And the same, with more than one iteration.
+        let out = pbkdf2_sha256(b"Password", b"NaCl", 80000, 64);
+        let hex: String = out.iter().map(|x| format!("{x:02x}")).collect();
+        assert_eq!(
+            hex,
+            "4ddcd8f60b98be21830cee5ef22701f9641a4418d04c0414aeff08876b34ab56\
+             a1d425a1225833549adb841b51c9b3176a272bdebba1d078478f62b397f33c8d"
+        );
+    }
+
+    /// The vectors Node's `crypto.scrypt` produces, which is what Better
+    /// Auth writes. If these drift, the two stacks stop sharing a
+    /// database.
+    #[test]
+    fn scrypt_matches_node() {
+        let hex = |b: &[u8]| -> String { b.iter().map(|x| format!("{x:02x}")).collect() };
+        let salt = |s: &str| -> Vec<u8> {
+            (0..s.len() / 2)
+                .map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).unwrap())
+                .collect()
+        };
+
+        assert_eq!(
+            hex(&scrypt(
+                b"",
+                &salt("00000000000000000000000000000000"),
+                16,
+                16,
+                1,
+                64
+            )),
+            "c036e168676b6a8cf5ed2befc24876d475be8e54881ed75c1a4acf19c3db2344\
+             7c433573aa9a303328370227d2d4826752a16592c8185f00b167af1a0bad0c5c"
+        );
+        assert_eq!(
+            hex(&scrypt(
+                b"password",
+                &salt("00000000000000000000000000000000"),
+                16,
+                16,
+                1,
+                64
+            )),
+            "921ff013407d09c34f5db2226ca143a5bc31786bd30610e089694070022266c1\
+             55bde1bb4db1019f4936e11fecd5a65e599ccad56d753fa7942d58994fe1b7c1"
+        );
+        assert_eq!(
+            hex(&scrypt(
+                b"a good long password",
+                &salt("0123456789abcdef0123456789abcdef"),
+                16,
+                16,
+                1,
+                64
+            )),
+            "ee7dd3cace1bf9928979670a18f63b1de9792746e7f16aced26445fea53b5f8\
+             0174455f5ca5bf99b8e0d1a977c86ef584402114de3df26a0194e093c53924a64"
+        );
+        assert_eq!(
+            hex(&scrypt(
+                b"pleaseletmein",
+                &salt("536f6469756d43686c6f7269646500"),
+                16,
+                8,
+                1,
+                64
+            )),
+            "f2cbf7e7afc42a4aaa826c18df468e363f415161bf75ab033c97b78dbb5e635e9\
+             6c74d7d654650afe02fe7b579f78fd9852559a7d0ba6653d8ca4d293a2252d7"
+        );
+    }
+
+    /// How long a real hash takes. Run with `--release -- --ignored`.
+    #[test]
+    #[ignore]
+    fn scrypt_speed() {
+        let t0 = std::time::Instant::now();
+        let out = scrypt_better_auth(b"a good long password", b"0123456789abcdef");
+        let took = t0.elapsed();
+        println!("scrypt N=16384 r=16 p=1: {:?} ({} bytes)", took, out.len());
+        assert_eq!(out.len(), 64);
+    }
+
+    /// RFC 7914 §12's vector, for the parameters the RFC uses.
+    #[test]
+    fn scrypt_matches_rfc() {
+        let hex = |b: &[u8]| -> String { b.iter().map(|x| format!("{x:02x}")).collect() };
+        let out = scrypt(b"", b"", 16, 1, 1, 64);
+        assert_eq!(
+            hex(&out),
+            "77d6576238657b203b19ca42c18a0497f16b4844e3074ae8dfdffa3fede21442\
+             fcd0069ded0948f8326a753a0fc81f17e8d3e0fb2e0d3628cf35e20c38d18906"
         );
     }
 }

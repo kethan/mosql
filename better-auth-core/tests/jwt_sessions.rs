@@ -80,7 +80,7 @@ fn access_token_claims_and_signature() {
 fn access_token_expiry_is_enforced() {
     let mut config = AuthConfig::new("https://app.test", SECRET);
     config.access_ttl_secs = 1;
-    config.pbkdf2_iterations = 1_000;
+    config.password_scrypt_n = 1024;
     let auth = better_auth_core::auth::Auth::new(Arc::new(MemoryStore::new()), config);
     let user = better_auth_core::models::User {
         id: "u1".into(),

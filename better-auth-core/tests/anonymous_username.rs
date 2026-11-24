@@ -233,7 +233,7 @@ async_test! {
 async_test! {
     async fn anonymous_sign_in_can_be_switched_off() {
         let mut config = better_auth_core::auth::AuthConfig::new("https://app.test", SECRET);
-        config.pbkdf2_iterations = 1_000;
+        config.password_scrypt_n = 1024;
         config.allow_anonymous = false;
         let auth = Arc::new(better_auth_core::auth::Auth::new(
             Arc::new(better_auth_core::store::MemoryStore::new()),

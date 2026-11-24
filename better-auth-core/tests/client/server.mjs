@@ -46,14 +46,19 @@ const SECRET = "0123456789abcdef0123456789abcdef0123456789";
 /**
  * Start the server and wait until it answers.
  *
- * @returns {Promise<{ url: string, stop: () => Promise<void>, output: () => string }>}
+ * The path of the database is handed back as well: the interop test reads
+ * the account row out of it, because the hash it holds is the one thing
+ * the server does not hand out over HTTP.
+ *
+ * @returns {Promise<{ url: string, dbPath: string, stop: () => Promise<void>, output: () => string }>}
  */
 export async function startServer() {
 	const port = await freePort();
 	const dir = await mkdtemp(join(tmpdir(), "ba-client-"));
+	const dbPath = join(dir, "auth.db");
 	const child = spawn(
 		binary(),
-		["--listen", `127.0.0.1:${port}`, "--data", join(dir, "auth.db")],
+		["--listen", `127.0.0.1:${port}`, "--data", dbPath],
 		{
 			env: {
 				...process.env,
@@ -95,6 +100,7 @@ export async function startServer() {
 
 	return {
 		url,
+		dbPath,
 		output: () => output,
 		stop: () =>
 			new Promise((resolveStop) => {

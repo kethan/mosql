@@ -97,7 +97,7 @@ Everything is read from the environment.
 | `BETTER_AUTH_MAILER` | `console` | `console` prints the mail, `none` disables it |
 | `ACCESS_TTL_SECS` | `900` | the life of an access token |
 | `REFRESH_TTL_SECS` | `2592000` | the life of a refresh token |
-| `PBKDF2_ITERATIONS` | `600000` | the cost of the password hash |
+| `BETTER_AUTH_SCRYPT_N` | `16384` | the cost of the password hash |
 
 Command line: `--listen ADDR`, `--data PATH`, `--help`, `--version`.
 
@@ -229,6 +229,14 @@ it.
 ---
 
 ## Sign-in flows
+
+**The password hash is Better Auth's.** scrypt at `N=16384, r=16, p=1`,
+stored as `<salt-hex>:<key-hex>` — the same bytes the JavaScript stack
+writes, so the two can share a table and a user can sign in with either
+one. The salt is the *characters* of the hex string rather than the bytes
+it stands for, because that is what Node's `crypto.scrypt` is handed.
+Hashes written by this crate before it moved to scrypt still verify, and
+are replaced with a scrypt hash the next time the password is given.
 
 **Email and password.** `POST /sign-up/email` with `{email, password,
 name}` creates the user and signs them in. The address is unverified

@@ -123,7 +123,7 @@ impl HttpClient for Stub {
 /// A rig whose provider is configured from a fixed environment.
 fn rig_with(providers: &[(&str, &str, &str)], stub: Arc<Stub>) -> Rig {
     let mut config = AuthConfig::new("https://app.test", SECRET);
-    config.pbkdf2_iterations = 1_000;
+    config.password_scrypt_n = 1024;
     config.allowed_origins = vec!["https://portal.example.com".into()];
     let (registry, problems) = OAuthRegistry::from_env_with(|name| {
         for (id, client_id, client_secret) in providers {

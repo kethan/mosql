@@ -113,8 +113,8 @@ pub async fn sign_in_user(auth: &Auth, req: &Request, user: &User) -> AuthResult
 /// Burn the same time a real password check would, so a missing user is
 /// not visibly faster than a wrong password.
 pub(crate) async fn dummy_password_check(auth: &Auth, password: &str) -> bool {
-    let hash = crate::crypto::hash_password("not-the-password", auth.config.pbkdf2_iterations);
-    crate::crypto::verify_password(password, &hash)
+    let hash = crate::crypto::hash_password("not-the-password", auth.config.password_scrypt_n);
+    crate::crypto::verify_password(password, &hash, auth.config.password_scrypt_n)
 }
 
 /// Mail a verification link, if the address is unverified and mail can go out.

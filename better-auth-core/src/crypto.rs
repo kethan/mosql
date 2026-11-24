@@ -7,19 +7,26 @@
 //! binary. Each piece has its published test vectors in the tests below, so a
 //! mistake in a constant fails a test instead of a login.
 //!
-//! Passwords use PBKDF2-HMAC-SHA256 at 600,000 rounds rather than Argon2id:
-//! the hash never crosses the wire, so this is an internal choice, and
-//! PBKDF2 is the one of the two that can be verified against published
-//! vectors in this build.
+//! Passwords use scrypt, in Better Auth's own format, because the
+//! JavaScript stack shares the database: a hash written by one has to
+//! verify under the other. The parameters are the ones Better Auth uses
+//! (`N=16384, r=16, p=1`), and the output is checked against Node's
+//! `crypto.scrypt` byte for byte.
 
 use mosql::{parse_json, Object, Value};
 pub use nanobase::crypto::{
-    b64url_decode, b64url_encode, ct_eq, hmac_sha256, pbkdf2_sha256, random_bytes, sha256,
+    b64url_decode, b64url_encode, ct_eq, hmac_sha256, pbkdf2_sha256, random_bytes, scrypt, sha256,
 };
 
-use crate::error::{AuthError, AuthResult};
+/// The scrypt parameters Better Auth uses, and therefore the ones a hash
+/// written by the JavaScript stack has to be verified with.
+pub const SCRYPT_R: usize = 16;
+pub const SCRYPT_P: usize = 1;
+pub const SCRYPT_DK_LEN: usize = 64;
+/// The cost parameter: `2^14`, as Better Auth has it.
+pub const SCRYPT_N: u32 = 16_384;
 
-pub const PBKDF2_ITERATIONS: u32 = 600_000;
+use crate::error::{AuthError, AuthResult};
 
 // ------------------------------------------------------------------ hashes ---
 
@@ -260,31 +267,89 @@ pub fn jwt_payload(token: &str) -> Option<Value> {
 
 // ---------------------------------------------------------------- passwords ---
 
-/// `pbkdf2-sha256$<iterations>$<salt>$<hash>`, both halves base64url.
-pub fn hash_password(password: &str, iterations: u32) -> String {
-    let salt = random_bytes(16);
-    let hash = pbkdf2_sha256(password.as_bytes(), &salt, iterations, 32);
-    format!(
-        "pbkdf2-sha256${iterations}${}${}",
-        b64url_encode(&salt),
-        b64url_encode(&hash)
-    )
+/// A password hash in Better Auth's own format: `<salt-hex>:<key-hex>`.
+///
+/// Better Auth hashes with scrypt and hands Node the *hex string* of the
+/// salt, so the bytes that go into scrypt are the characters of that
+/// string rather than the bytes it stands for. The two stacks share a
+/// database, so the format and the salt have to match byte for byte; a
+/// hash written by one has to verify under the other.
+///
+/// The old PBKDF2 hashes still verify (see [`verify_password`]), so an
+/// existing table does not have to be rewritten in one go.
+pub fn hash_password(password: &str, n: u32) -> String {
+    let salt_hex = hex(&random_bytes(16));
+    let key = scrypt(
+        password.as_bytes(),
+        salt_hex.as_bytes(),
+        n as usize,
+        SCRYPT_R,
+        SCRYPT_P,
+        SCRYPT_DK_LEN,
+    );
+    format!("{salt_hex}:{}", hex(&key))
 }
 
-pub fn verify_password(password: &str, stored: &str) -> bool {
-    let Some((iterations, salt, hash)) = parse_password_hash(stored) else {
-        // Run a hash anyway so an unknown format costs the same as a wrong
-        // password; timing is the only thing that could leak from here.
-        let _ = pbkdf2_sha256(password.as_bytes(), b"unknown-format", 1_000, 32);
-        return false;
-    };
-    let candidate = pbkdf2_sha256(password.as_bytes(), &salt, iterations, hash.len());
-    ct_eq(&candidate, &hash)
+/// Check a password against a stored hash.
+///
+/// Both formats are accepted: the scrypt one Better Auth writes, and the
+/// PBKDF2 one this crate used to write.
+pub fn verify_password(password: &str, stored: &str, n: u32) -> bool {
+    if let Some((salt, key)) = parse_scrypt_hash(stored) {
+        let candidate = scrypt(
+            password.as_bytes(),
+            salt.as_bytes(),
+            n as usize,
+            SCRYPT_R,
+            SCRYPT_P,
+            SCRYPT_DK_LEN,
+        );
+        let Some(expected) = unhex(key) else {
+            return false;
+        };
+        return ct_eq(&candidate, &expected);
+    }
+    if let Some((iterations, salt, hash)) = parse_password_hash(stored) {
+        let candidate = pbkdf2_sha256(password.as_bytes(), &salt, iterations, hash.len());
+        return ct_eq(&candidate, &hash);
+    }
+    // Run a hash anyway so an unknown format costs the same as a wrong
+    // password; timing is the only thing that could leak from here.
+    let _ = scrypt(
+        password.as_bytes(),
+        b"unknown-format",
+        n as usize,
+        SCRYPT_R,
+        SCRYPT_P,
+        SCRYPT_DK_LEN,
+    );
+    false
 }
 
-/// The iteration count a hash was made with, for rehashing on sign-in.
+/// Whether a stored hash is in the old PBKDF2 format, and so worth
+/// replacing with a scrypt one the next time the password is given.
+pub fn password_is_legacy(stored: &str) -> bool {
+    parse_password_hash(stored).is_some()
+}
+
+/// The iteration count a legacy hash was made with.
 pub fn password_iterations(stored: &str) -> Option<u32> {
     parse_password_hash(stored).map(|(i, _, _)| i)
+}
+
+/// `<salt-hex>:<key-hex>`, the salt being the hex of sixteen random bytes
+/// and the key the hex of sixty-four.
+fn parse_scrypt_hash(stored: &str) -> Option<(&str, &str)> {
+    let mut parts = stored.split(':');
+    let salt = parts.next()?;
+    let key = parts.next()?;
+    if parts.next().is_some() || salt.len() != 32 || key.len() != 128 {
+        return None;
+    }
+    if !salt.bytes().all(|b| b.is_ascii_hexdigit()) || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some((salt, key))
 }
 
 fn parse_password_hash(stored: &str) -> Option<(u32, Vec<u8>, Vec<u8>)> {
@@ -909,10 +974,53 @@ mod tests {
 
     #[test]
     fn password_hash_verifies_and_rejects() {
-        let stored = hash_password("correct horse", 1_000);
-        assert!(verify_password("correct horse", &stored));
-        assert!(!verify_password("wrong horse", &stored));
-        assert!(!verify_password("correct horse", "garbage"));
+        let stored = hash_password("correct horse", 1_024);
+        assert!(verify_password("correct horse", &stored, 1_024));
+        assert!(!verify_password("wrong horse", &stored, 1_024));
+        assert!(!verify_password("correct horse", "garbage", 1_024));
+        assert!(!password_is_legacy(&stored));
+    }
+
+    /// The format is Better Auth's: `<salt-hex>:<key-hex>`, with the salt
+    /// being the characters of the hex string and not the bytes it stands
+    /// for, because that is what Node's `crypto.scrypt` is handed.
+    #[test]
+    fn password_hash_is_in_better_auths_format() {
+        let stored = hash_password("correct horse", 1_024);
+        let (salt, key) = stored.split_once(':').expect("two halves");
+        assert_eq!(salt.len(), 32);
+        assert_eq!(key.len(), 128);
+        assert!(salt.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert!(key.bytes().all(|b| b.is_ascii_hexdigit()));
+    }
+
+    /// A hash the JavaScript stack wrote has to verify here, and one
+    /// written here has to verify there. The vector is what Node's
+    /// `crypto.scrypt` produces for this salt.
+    #[test]
+    fn password_hash_matches_better_auth() {
+        let salt = "eb79d4fb85ba973993f37f5dbb6538f8";
+        let key = "0e8e5a3294f994196bc39bd7682cb3b43c0c26a6f29c93935eaab80be2c395f\
+                    1b2e0150f80a183c487344d8f359ea1f67aa4a31310666eef68d9573d7abd965a";
+        let stored = format!("{salt}:{key}");
+        assert!(verify_password("a good long password", &stored, SCRYPT_N));
+        assert!(!verify_password("a good long passwore", &stored, SCRYPT_N));
+    }
+
+    /// The old PBKDF2 hashes still verify, so a table written before the
+    /// change does not have to be rewritten in one go.
+    #[test]
+    fn legacy_password_hashes_still_verify() {
+        let salt = random_bytes(16);
+        let hash = pbkdf2_sha256(b"correct horse", &salt, 1_000, 32);
+        let stored = format!(
+            "pbkdf2-sha256$1000${}${}",
+            b64url_encode(&salt),
+            b64url_encode(&hash)
+        );
+        assert!(verify_password("correct horse", &stored, SCRYPT_N));
+        assert!(!verify_password("wrong horse", &stored, SCRYPT_N));
+        assert!(password_is_legacy(&stored));
         assert_eq!(password_iterations(&stored), Some(1_000));
     }
 
