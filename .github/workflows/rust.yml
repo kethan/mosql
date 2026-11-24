@@ -22,7 +22,7 @@ name: Rust
 #              binary's size
 #   auth       better-auth-core/verify.sh on the same matrix — the
 #              authentication engine (bearer JWT sessions, eight plugins,
-#              32 OAuth providers): fmt, clippy, the unit and integration
+#              36 OAuth providers): fmt, clippy, the unit and integration
 #              tests, and a cap on the release binary's size
 
 on:
