@@ -371,7 +371,22 @@ come with it.
 $ cargo test
 ```
 
-112 tests: the unit tests of the engine, and seven integration suites
+112 tests: the unit tests of the engine, and eight integration suites
 that drive the real route table — tokens and sessions, the email flows,
 two-factor, one-time codes and magic links, anonymous sign-in and
-usernames, OAuth, and the admin plugin.
+usernames, OAuth, the admin plugin, and the route table itself.
+
+```console
+$ ./tests/client/run.sh
+```
+
+17 more, against the **published** Better Auth client: `better-auth@1.7.27`
+from npm, the same package an application installs, talking to the
+release binary over HTTP. They pin down the route names, the request
+bodies and the answer shapes — and the `set-auth-token` header that
+carries the session in cookie-free mode. See
+[`tests/client/README.md`](tests/client/README.md).
+
+The Rust crate has no dependencies from a registry, and the client suite
+does not change that: `node_modules` is a test-only dependency and never
+reaches the binary.

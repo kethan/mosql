@@ -1,0 +1,13 @@
+{
+  "name": "better-auth-core-client-tests",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Wire-compatibility tests: the real Better Auth client against the Rust engine.",
+  "scripts": {
+    "test": "node --test compatibility.test.mjs"
+  },
+  "devDependencies": {
+    "better-auth": "1.7.27"
+  }
+}

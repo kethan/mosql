@@ -1,1 +1,3 @@
 target/
+# The compatibility suite installs the published client here.
+tests/client/node_modules/

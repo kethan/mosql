@@ -14,14 +14,14 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-STAGES=(fmt clippy test deps publish size)
+STAGES=(fmt clippy test deps publish size client)
 QUICK=0
 ONLY=()
 
 for arg in "$@"; do
   case "$arg" in
     --quick) QUICK=1 ;;
-    fmt|clippy|test|deps|publish|size) ONLY+=("$arg") ;;
+    fmt|clippy|test|deps|publish|size|client) ONLY+=("$arg") ;;
     *) echo "verify: unknown argument '$arg'" >&2; exit 2 ;;
   esac
 done
@@ -121,6 +121,20 @@ if run size; then
     exit 1
   fi
   echo "size: ok (${SIZE} bytes, budget ${BUDGET})"
+fi
+
+if run client; then
+  echo "== client =="
+  # The published Better Auth client against the server this crate builds.
+  # It needs node and the registry, so it is a stage of its own: a machine
+  # without node skips it rather than failing the gate.
+  if ! command -v node >/dev/null 2>&1; then
+    echo "client: skipped (node is not installed)"
+  elif ! command -v npm >/dev/null 2>&1; then
+    echo "client: skipped (npm is not installed)"
+  else
+    stage client ./tests/client/run.sh
+  fi
 fi
 
 echo "verify: ok"

@@ -270,6 +270,12 @@ jobs:
       - name: size
         shell: bash
         run: ./better-auth-core/verify.sh size
+      # The published Better Auth client against the release binary. It
+      # needs the npm registry, so it is a step of its own: a failure here
+      # is about the wire contract, not about the Rust.
+      - name: client
+        shell: bash
+        run: ./better-auth-core/tests/client/run.sh
 
   # `cargo publish --dry-run` needs the crates.io index, which the sandbox that
   # developed this crate had no access to. CI has it, so this is the gate that
