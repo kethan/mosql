@@ -98,8 +98,37 @@ Everything is read from the environment.
 | `ACCESS_TTL_SECS` | `900` | the life of an access token |
 | `REFRESH_TTL_SECS` | `2592000` | the life of a refresh token |
 | `BETTER_AUTH_SCRYPT_N` | `16384` | the cost of the password hash |
+| `BETTER_AUTH_STORE` | `sqlite` | `sqlite`, `memory`, `http` or `tcp` |
+| `BETTER_AUTH_STORE_URL` | — | the store's address, for `http` and `tcp` |
+| `BETTER_AUTH_STORE_TOKEN` | — | a bearer token for the store, if it wants one |
 
-Command line: `--listen ADDR`, `--data PATH`, `--help`, `--version`.
+Command line: `--listen ADDR`, `--data PATH`, `--store-server [http|tcp]`,
+`--help`, `--version`.
+
+### Storing the data elsewhere
+
+The engine does not have to keep its records in a file next to itself.
+`BETTER_AUTH_STORE` picks where they go:
+
+| store | where the records live |
+|---|---|
+| `sqlite` | the SQLite file named by `--data` |
+| `memory` | in the process, and gone when it stops |
+| `http` | a database service behind an HTTP API |
+| `tcp` | a database service on a socket |
+
+Both remote stores speak one protocol — a JSON request per operation, a
+JSON reply per operation — so a service can answer over HTTP, over TCP,
+or both. The binary serves that protocol itself:
+
+```console
+$ better-auth-core --store-server http --listen 0.0.0.0:8801 --data auth.db
+$ BETTER_AUTH_STORE=http BETTER_AUTH_STORE_URL=http://db.internal:8801 \
+  better-auth-core --listen 0.0.0.0:8787
+```
+
+The rows land in `auth.db` on the other machine, and the engine's routes
+do not know the difference.
 
 ---
 
@@ -367,8 +396,9 @@ let response = routes::respond(Arc::clone(&auth), request).await;
 ```
 
 `AuthStore` is an eight-method async trait, so the engine can sit on
-any storage: `MemoryStore` and `SqliteAuthStore` ship with the crate.
-`HttpClient` and `Mailer` are traits too — `PlainHttpClient`,
+any storage: `MemoryStore` and `SqliteAuthStore` ship with the crate,
+and `HttpAuthStore` and `TcpAuthStore` reach a database service over a
+socket. `HttpClient` and `Mailer` are traits too — `PlainHttpClient`,
 `CurlHttpClient`, `ConsoleMailer` and `MemoryMailer` are the ones that
 come with it.
 

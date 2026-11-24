@@ -26,7 +26,9 @@ budget that [`verify.sh`](verify.sh) enforces.
 | Owner account: first run, sign in, tokens | done — 43 tests |
 | Creating apps: new, import, list, show, export, rename, clone, remove | done — 26 tests |
 | Platform store (SQLite: owner, apps, signing key) | done — 27 tests |
-| HTTP server and routes | next |
+| Service layer: events, hooks, custom methods | done — 7 tests |
+| HTTP API and the server | done — 19 tests |
+| Command line as an API client | done |
 | Querying an app's own database | next |
 
 ## What an app document is
@@ -201,9 +203,65 @@ undone by hand if it was a mistake.
 **Importing over an existing name replaces it** rather than creating a second
 app called the same thing — that is what a user with an edited export means.
 
+## The API
+
+Everything the platform can do is an HTTP route, so the command line is
+one client among others and a program that embeds the platform reaches
+the same operations.
+
+```
+nanobase serve [--host H] [--port P]        run the API (default 0.0.0.0:8090)
+```
+
+| route | what it does |
+|---|---|
+| `GET /api/health` | is it up |
+| `POST /api/auth/login` | email and password in, a bearer token out |
+| `GET /api/auth/me` | who the token belongs to |
+| `GET /api/apps` | the apps |
+| `POST /api/apps` | make one — `{"name": "todos"}` or a whole document |
+| `GET /api/apps/{id}` | one app, by id or name |
+| `PUT /api/apps/{id}` | replace its document |
+| `PATCH /api/apps/{id}` | change part of its document |
+| `DELETE /api/apps/{id}` | remove it — `{"confirm": "<id>"}` |
+| `GET /api/apps/{id}/methods` | the custom methods |
+| `POST /api/apps/{id}/methods/{name}` | call one — `{"args": ["…"]}` |
+| `GET /api/events` | the events a successful change fires |
+
+Every route but `health` and `login` wants `Authorization: Bearer <token>`.
+
+```console
+$ curl -s -X POST localhost:8090/api/auth/login \
+    -H 'content-type: application/json' \
+    -d '{"email":"ada@example.com","password":"correct horse"}'
+{"token":"eyJ…","user":{"id":"…","email":"ada@example.com",…}}
+```
+
+## Events, hooks and custom methods
+
+The service is the one path every change takes, whether it comes from the
+command line, the API, or a program that embeds the platform. It fires an
+event after a successful change — `created`, `updated`, `patched`,
+`removed` — runs `before` and `after` hooks around a call, and hosts
+custom methods.
+
+```rust
+use std::sync::Arc;
+use nanobase::{Event, Service};
+
+let service = Arc::new(Service::new("apps", store)?);
+service.on(Event::Created, Arc::new(move |ctx| {
+    println!("created {:?}", ctx.id);
+}));
+service.method("count", Arc::new(|svc, _args| {
+    Ok(mosql::Value::Int(svc.list()?.len() as i64))
+}));
+```
+
 ## CLI
 
 ```
+nanobase serve   [--host H] [--port P]              run the HTTP API
 nanobase init   [--email E] [--password P]   create the owner (prompts if omitted)
 nanobase login  <email> [--password P]       print a session token
 nanobase me     [--token T]                  show who a token belongs to
@@ -224,6 +282,17 @@ nanobase redact <file> [--out <file>]        copy a document without its secrets
 All of them take `--data <file>` for the platform's state, defaulting to
 `$NANOBASE_DATA` and then `./data/nanobase.db`. Passwords can come from
 `NANOBASE_PASSWORD` instead of a flag, which keeps them out of a shell history.
+
+The app commands can also talk to a running platform instead of the local
+file, which makes them thin API clients:
+
+```
+nanobase app list --url http://localhost:8090 --token "$TOKEN"
+```
+
+`--url` (or `$NANOBASE_URL`) picks the platform; `--token` (or
+`$NANOBASE_TOKEN`) is the bearer token to send. Without them the command
+works on the local database.
 
 `validate` reports **all** problems in one pass, from both reading and
 checking, each with its field path:
