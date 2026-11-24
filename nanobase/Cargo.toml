@@ -9,7 +9,16 @@ readme = "README.md"
 keywords = ["backend", "baas", "database", "sqlite", "serverless"]
 categories = ["database", "web-programming::http-server"]
 # Keep compiled artifacts out of the tarball, as in the other crates.
-include = ["src/**", "tests/**", "README.md", "LICENSE*"]
+# `vendor/` and `build.rs` are needed to compile SQLite from source, so they
+# have to be in the tarball.
+include = [
+  "src/**",
+  "tests/**",
+  "vendor/**",
+  "build.rs",
+  "README.md",
+  "LICENSE*",
+]
 
 [lib]
 doctest = false
@@ -20,8 +29,10 @@ path = "src/lib.rs"
 name = "nanobase"
 path = "src/main.rs"
 
-# No external dependencies on purpose: crates.io is unreachable in the build
-# sandbox, and every dependency is binary size the platform does not need.
+# The only dependencies are the two sibling crates. SQLite is not a crate
+# dependency: `build.rs` compiles it from the vendored amalgamation so its
+# optional features can be omitted at the preprocessor level and nothing is
+# downloaded at build time.
 # Both are path dependencies for development and version requirements for
 # publishing: `cargo publish` refuses a dependency with no version, because the
 # published crate has to resolve it from the registry.

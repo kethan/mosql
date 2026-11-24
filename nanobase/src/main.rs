@@ -11,7 +11,8 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use nanobase::platform::{FileStore, PlatformStore};
+use nanobase::platform::PlatformStore;
+use nanobase::SqliteStore;
 use nanobase::{
     check_email, create_owner, issue_token, now_secs, verify_login, AppDoc, ConfigError, Platform,
     Secrets, VERSION,
@@ -41,13 +42,13 @@ APPS:
     nanobase --version
     nanobase --help
 
-PLATFORM FILE:
-    --data FILE       where the platform keeps its state
+PLATFORM DATABASE:
+    --data FILE       where the platform keeps its state (SQLite)
     NANOBASE_DATA     used when --data is absent
-    ./data/nanobase.json   the default
+    ./data/nanobase.db     the default
 
-    The file holds the owner's password hash and the key tokens are signed
-    with. Protect it like a database: anyone who can read it can sign in.
+    The database holds the owner's password hash and the key tokens are
+    signed with. Protect it: anyone who can read it can sign in.
 
 EXAMPLES:
     nanobase init
@@ -165,16 +166,23 @@ fn parse_args(rest: &[String], valued: &[&str], flags: &[&str]) -> Parsed {
 }
 
 /// Where the platform's state lives: `--data`, then `NANOBASE_DATA`, then
-/// `./data/nanobase.json`.
+/// `./data/nanobase.db`.
 fn data_path(parsed: &Parsed) -> PathBuf {
     parsed
         .get("data")
         .map(PathBuf::from)
         .or_else(|| std::env::var("NANOBASE_DATA").ok().map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("./data/nanobase.json"))
+        .unwrap_or_else(|| PathBuf::from("./data/nanobase.db"))
 }
 
-fn load_platform(store: &FileStore) -> Result<Platform, u8> {
+fn load_platform(store: &SqliteStore) -> Result<Platform, u8> {
+    // An install that predates SQLite kept its state in a JSON file beside
+    // where the database now lives. Bring it across once, before the first
+    // read; the file is renamed so this cannot run twice.
+    if let Err(e) = store.migrate_from_json() {
+        eprintln!("nanobase: {e}");
+        return Err(1);
+    }
     block_on(store.load()).map_err(|e| {
         eprintln!("nanobase: {e}");
         1
@@ -189,7 +197,7 @@ fn cmd_init(rest: &[String]) -> u8 {
         eprintln!("nanobase init: {e}");
         return 2;
     }
-    let store = FileStore::new(data_path(&parsed));
+    let store = SqliteStore::new(data_path(&parsed));
     let mut platform = match load_platform(&store) {
         Ok(p) => p,
         Err(code) => return code,
@@ -258,7 +266,7 @@ fn cmd_init(rest: &[String]) -> u8 {
     }
 
     println!("Owner created: {}", user.email);
-    println!("Platform file: {}", store.path().display());
+    println!("Platform database: {}", store.path().display());
     println!("Next: nanobase login {}", user.email);
     0
 }
@@ -274,7 +282,7 @@ fn cmd_login(rest: &[String]) -> u8 {
         eprintln!("example: nanobase login ada@example.com");
         return 2;
     };
-    let store = FileStore::new(data_path(&parsed));
+    let store = SqliteStore::new(data_path(&parsed));
     let platform = match load_platform(&store) {
         Ok(p) => p,
         Err(code) => return code,
@@ -332,7 +340,7 @@ fn cmd_me(rest: &[String]) -> u8 {
         eprintln!("nanobase me: a token is required (--token or NANOBASE_TOKEN)");
         return 2;
     };
-    let store = FileStore::new(data_path(&parsed));
+    let store = SqliteStore::new(data_path(&parsed));
     let platform = match load_platform(&store) {
         Ok(p) => p,
         Err(code) => return code,
@@ -357,12 +365,12 @@ fn cmd_status(rest: &[String]) -> u8 {
         eprintln!("nanobase status: {e}");
         return 2;
     }
-    let store = FileStore::new(data_path(&parsed));
+    let store = SqliteStore::new(data_path(&parsed));
     let platform = match load_platform(&store) {
         Ok(p) => p,
         Err(code) => return code,
     };
-    println!("platform file: {}", store.path().display());
+    println!("platform database: {}", store.path().display());
     if platform.needs_setup() {
         println!("owner:         none — run `nanobase init`");
     } else {
@@ -563,7 +571,7 @@ fn cmd_app(rest: &[String]) -> u8 {
 
 /// Load the platform, or report why that is impossible.
 fn platform_or_exit(parsed: &Parsed) -> Option<Platform> {
-    let store = FileStore::new(data_path(parsed));
+    let store = SqliteStore::new(data_path(parsed));
     match load_platform(&store) {
         Ok(p) => Some(p),
         Err(code) => {
@@ -574,7 +582,7 @@ fn platform_or_exit(parsed: &Parsed) -> Option<Platform> {
 }
 
 fn save_or_exit(parsed: &Parsed, platform: &Platform) -> Option<()> {
-    let store = FileStore::new(data_path(parsed));
+    let store = SqliteStore::new(data_path(parsed));
     match block_on(store.save(platform)) {
         Ok(()) => Some(()),
         Err(e) => {
@@ -628,7 +636,7 @@ fn app_new(rest: &[String]) -> u8 {
     println!("  created:   {created}");
     println!(
         "  data:      {}",
-        FileStore::new(data_path(&parsed))
+        SqliteStore::new(data_path(&parsed))
             .root()
             .join("apps")
             .join(&id)
@@ -746,7 +754,7 @@ fn app_show(rest: &[String]) -> u8 {
         eprintln!("nanobase: no app for {key:?}");
         return 1;
     };
-    let root = FileStore::new(data_path(&parsed)).root();
+    let root = SqliteStore::new(data_path(&parsed)).root();
     println!("name:       {}", app.doc.app.name);
     println!("id:         {}", app.id);
     println!("type:       {}", app.doc.app.app_type.as_str());
@@ -900,7 +908,7 @@ fn app_remove(rest: &[String]) -> u8 {
     println!(
         "  {}",
         removed
-            .data_dir(&FileStore::new(data_path(&parsed)).root())
+            .data_dir(&SqliteStore::new(data_path(&parsed)).root())
             .display()
     );
     0

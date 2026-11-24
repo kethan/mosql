@@ -20,6 +20,8 @@ pub mod config;
 pub mod crypto;
 pub mod jwt;
 pub mod platform;
+pub mod sqlite;
+pub mod store;
 
 pub use config::{
     AclConfig, AppConfig, AppDoc, AppMeta, AppType, AuthConfig, CollectionDef, ColumnDef,
@@ -31,6 +33,8 @@ pub use platform::{
     verify_login, AppRecord, BoxFuture, FileStore, MemoryStore, PasswordHash, Platform,
     PlatformStore, User, MIN_PASSWORD_LEN, PBKDF2_ITERATIONS, ROLE_OWNER, SESSION_TTL_SECS,
 };
+pub use sqlite::{Connection, Row, Statement};
+pub use store::SqliteStore;
 
 /// The version of the platform, from `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

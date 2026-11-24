@@ -274,7 +274,11 @@ pub trait PlatformStore: Send + Sync {
     fn save(&self, platform: &Platform) -> BoxFuture<'_, Result<()>>;
 }
 
-/// A single JSON file. The default.
+/// A single JSON file: the format the first release used.
+///
+/// Kept only so an existing platform can be imported into SQLite by
+/// [`SqliteStore::migrate_from_json`](crate::store::SqliteStore::migrate_from_json).
+/// It is not the default store: platform state belongs in a database.
 pub struct FileStore {
     path: PathBuf,
 }
@@ -287,30 +291,44 @@ impl FileStore {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// The directory the platform file sits in — the root that per-app data
+    /// directories hang off.
+    pub fn root(&self) -> PathBuf {
+        self.path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+
+    /// The synchronous form of [`PlatformStore::load`].
+    ///
+    /// The JSON store exists only to import a platform written by an earlier
+    /// version, and that import happens during startup where there is no
+    /// executor to block on.
+    pub fn load_now(&self) -> Result<Platform> {
+        let text = match std::fs::read_to_string(&self.path) {
+            Ok(t) => t,
+            // A missing file is a platform that has not been set up yet,
+            // not an error.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Platform::default()),
+            Err(e) => {
+                return Err(Error::internal(format!(
+                    "cannot read {}: {e}",
+                    self.path.display()
+                )))
+            }
+        };
+        let v = mosql::parse_json(&text).map_err(|e| {
+            Error::internal(format!("{} is not valid JSON: {e}", self.path.display()))
+        })?;
+        Platform::from_value(&v)
+    }
 }
 
 impl PlatformStore for FileStore {
     fn load(&self) -> BoxFuture<'_, Result<Platform>> {
-        Box::pin(async move {
-            let text = match std::fs::read_to_string(&self.path) {
-                Ok(t) => t,
-                // A missing file is a platform that has not been set up yet,
-                // not an error.
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    return Ok(Platform::default())
-                }
-                Err(e) => {
-                    return Err(Error::internal(format!(
-                        "cannot read {}: {e}",
-                        self.path.display()
-                    )))
-                }
-            };
-            let v = mosql::parse_json(&text).map_err(|e| {
-                Error::internal(format!("{} is not valid JSON: {e}", self.path.display()))
-            })?;
-            Platform::from_value(&v)
-        })
+        Box::pin(async move { self.load_now() })
     }
 
     fn save(&self, platform: &Platform) -> BoxFuture<'_, Result<()>> {
@@ -694,16 +712,5 @@ impl AppRecord {
     /// explicit path.
     pub fn sqlite_path(&self, root: &Path) -> PathBuf {
         self.data_dir(root).join("app.db")
-    }
-}
-
-impl FileStore {
-    /// The directory the platform file sits in — the root that per-app data
-    /// directories hang off.
-    pub fn root(&self) -> PathBuf {
-        self.path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."))
     }
 }

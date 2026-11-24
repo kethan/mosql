@@ -6,15 +6,16 @@ One binary. It keeps a platform database of **apps**, and each app brings its
 own database, auth providers, storage bucket and permission rules. The runtime
 API is per-app: `/api/v1/apps/{appId}`.
 
-**This crate has no external dependencies.** Everything it needs — JSON, the
-query builder, the in-memory engine, permission evaluation — comes from
-[`mosql`](../rust) and [`uflite`](../uflite), which are also dependency-free.
-That is a requirement, not an accident: the platform is meant to be small
-enough to ship as a single binary, and it is built in an environment with no
-registry access at all.
+**No crates.io dependencies.** JSON, the query builder, the in-memory engine
+and permission evaluation come from [`mosql`](../rust) and [`uflite`](../uflite).
+SQLite is compiled into the binary from the official amalgamation in
+[`vendor/sqlite`](vendor/sqlite) (public domain, the same copy `rusqlite`
+ships), with every optional feature omitted at the preprocessor level — that is
+the lever a prebuilt library does not give. Building needs a C compiler; that
+is the only tool beyond Rust itself.
 
-Release binary today: **~548 KB**, against a 3 MB budget that
-[`verify.sh`](verify.sh) enforces.
+Release binary today: **~1.4 MB** (SQLite is ~0.9 MB of it), against a 3 MB
+budget that [`verify.sh`](verify.sh) enforces.
 
 ## Status
 
@@ -24,7 +25,7 @@ Release binary today: **~548 KB**, against a 3 MB budget that
 | Secret handling (`SECRET_*`, redaction) | done |
 | Owner account: first run, sign in, tokens | done — 43 tests |
 | Creating apps: new, import, list, show, export, rename, clone, remove | done — 26 tests |
-| Platform store (JSON file today) | done |
+| Platform store (SQLite: owner, apps, signing key) | done — 27 tests |
 | HTTP server and routes | next |
 | Querying an app's own database | next |
 
@@ -97,7 +98,7 @@ $ nanobase init
 Email: ada@example.com
 Password: ················
 Owner created: ada@example.com
-Platform file: /tmp/nbtest/platform.json
+Platform database: /tmp/nbtest/nanobase.db
 Next: nanobase login ada@example.com
 
 $ nanobase login ada@example.com --password '…'
@@ -112,13 +113,9 @@ expires: 2026-11-25T09:41:19Z
 V1 has exactly one account — the owner — and it can do everything. A second
 `init` is refused with a 409.
 
-**The password is never stored.** What lands in the platform file is a PBKDF2
-hash with a random 16-byte salt and 600,000 rounds:
-
-```json
-"password": { "iterations": 600000, "salt": "bfuJ_ffVkL7jAjMZdaw8lA",
-              "hash": "Ilrny-nbmukVxty8A8RJ0PN2isYKk-OlR1z0KXexwpE" }
-```
+**The password is never stored.** What lands in the platform database's
+`users` table is a PBKDF2 hash with a random 16-byte salt and 600,000 rounds,
+as three columns — `iterations`, `salt`, `hash` (base64url):
 
 The iteration count is stored beside the hash, so it can be raised later
 without invalidating passwords already issued.
@@ -131,6 +128,28 @@ hash — otherwise the response time reveals which addresses have accounts.
 id, email, role, issue and expiry. No database URL, no storage key, no rule set
 — a token is handed to a browser, and anyone holding it can read every byte.
 Per-app configuration is resolved server-side from the app id.
+
+## Platform state
+
+The platform keeps its own state in **one SQLite file** (`--data`, default
+`./data/nanobase.db`), with three tables:
+
+| table | holds |
+| --- | --- |
+| `meta` | the key tokens are signed with |
+| `users` | the owner: id, email, PBKDF2 parameters and hash, created time |
+| `apps` | one row per app: `id`, `name` (unique, case-insensitive), `created_at`, and the app document as JSON |
+
+The app document is stored whole rather than split into columns, because the
+platform never queries inside it — it hands it to whatever serves the app. The
+database runs in WAL mode with a 5 s busy timeout, so the CLI and a server can
+use it at the same time. A save is one transaction that rewrites all three
+tables; a crash midway leaves the previous state intact.
+
+Installs from the first release kept their state in a JSON file. If a
+`nanobase.json` sits beside the database and the database has no owner yet, it
+is imported once on the next command and the file is renamed to
+`nanobase.json.migrated`. It is never imported over a database that is in use.
 
 ## Apps
 
@@ -203,7 +222,7 @@ nanobase redact <file> [--out <file>]        copy a document without its secrets
 ```
 
 All of them take `--data <file>` for the platform's state, defaulting to
-`$NANOBASE_DATA` and then `./data/nanobase.json`. Passwords can come from
+`$NANOBASE_DATA` and then `./data/nanobase.db`. Passwords can come from
 `NANOBASE_PASSWORD` instead of a flag, which keeps them out of a shell history.
 
 `validate` reports **all** problems in one pass, from both reading and
@@ -227,4 +246,5 @@ nanobase: 5 problem(s)
 ```
 
 The last step of `verify.sh` fails if the release binary grows past 3 MB. It is
-a tripwire for an accidental dependency, not a target to shave bytes against.
+a tripwire for an accidental dependency, not a target to shave bytes against;
+the room left is for the HTTP server and the query runtime.
