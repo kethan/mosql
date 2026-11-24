@@ -12,11 +12,12 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use mosql::Value;
 use nanobase::platform::PlatformStore;
 use nanobase::SqliteStore;
 use nanobase::{
-    check_email, create_owner, issue_token, now_secs, verify_login, AppDoc, ConfigError, Platform,
-    Secrets, Service, VERSION,
+    check_email, create_owner, issue_token, now_secs, verify_login, Api, ApiClient, AppDoc,
+    ConfigError, Platform, Secrets, Service, VERSION,
 };
 use uflite::db::block_on;
 
@@ -27,6 +28,10 @@ USAGE:
     nanobase login  <email> [--password P] [--data FILE]       print a session token
     nanobase me     [--token T] [--data FILE]                  show who a token belongs to
     nanobase status [--data FILE]                              setup state, app count
+
+SERVER:
+    nanobase serve [--host H] [--port P] [--data FILE]        run the HTTP API
+    nanobase serve --host 0.0.0.0 --port 8090
 
 APPS:
     nanobase app new <name>                                   create an empty app
@@ -48,10 +53,18 @@ PLATFORM DATABASE:
     NANOBASE_DATA     used when --data is absent
     ./data/nanobase.db     the default
 
+REMOTE PLATFORM:
+    --url URL         talk to a running platform instead of the local file
+    NANOBASE_URL      used when --url is absent
+    --token TOKEN     the bearer token to send
+    NANOBASE_TOKEN    used when --token is absent
+
     The database holds the owner's password hash and the key tokens are
     signed with. Protect it: anyone who can read it can sign in.
 
 EXAMPLES:
+    nanobase serve --port 8090
+    nanobase app list --url http://localhost:8090 --token "$TOKEN"
     nanobase init
     nanobase init --email ada@example.com --password "$(cat ~/.nanobase-pass)"
     nanobase login ada@example.com
@@ -78,6 +91,7 @@ fn main() -> ExitCode {
             println!("nanobase {VERSION}");
             0
         }
+        "serve" => cmd_serve(rest),
         "init" => cmd_init(rest),
         "login" => cmd_login(rest),
         "me" => cmd_me(rest),
@@ -93,6 +107,60 @@ fn main() -> ExitCode {
         }
     };
     ExitCode::from(code)
+}
+
+/// Run the HTTP API.
+///
+/// The platform serves the same operations the command line runs, so an
+/// operator with `curl`, a script, and the `nanobase` binary all reach one
+/// implementation. The listener binds every interface by default: this is a
+/// server, and the address to reach it from is the operator's business.
+fn cmd_serve(rest: &[String]) -> u8 {
+    let parsed = parse_args(rest, &["host", "port", "data", "url"], &[]);
+    if let Some(e) = parsed.error {
+        eprintln!("nanobase serve: {e}");
+        return 2;
+    }
+    let host = parsed
+        .get("host")
+        .map(str::to_string)
+        .or_else(|| std::env::var("NANOBASE_HOST").ok())
+        .unwrap_or_else(|| "0.0.0.0".to_string());
+    let port: u16 = match parsed.get("port").map(str::to_string) {
+        Some(p) => match p.parse() {
+            Ok(port) => port,
+            Err(_) => {
+                eprintln!("nanobase serve: --port needs a number");
+                return 2;
+            }
+        },
+        None => 8090,
+    };
+    let store = Arc::new(SqliteStore::new(data_path(&parsed)));
+    let service = match Service::new("apps", store as Arc<dyn PlatformStore>) {
+        Ok(service) => Arc::new(service),
+        Err(e) => {
+            eprintln!("nanobase serve: {e}");
+            return 1;
+        }
+    };
+    let api = Api::new(Arc::clone(&service));
+    let addr = format!("{host}:{port}");
+    let socket = match addr.parse::<std::net::SocketAddr>() {
+        Ok(socket) => socket,
+        Err(_) => {
+            eprintln!("nanobase serve: {addr} is not an address");
+            return 2;
+        }
+    };
+    println!("nanobase {VERSION} serving on http://{addr}");
+    println!("  api:  http://{addr}/api");
+    let result = nanobase::http::serve(socket, 8, move |req| api.handle(req));
+    if let Err(e) = result {
+        eprintln!("nanobase serve: {e}");
+        return 1;
+    }
+    0
 }
 
 // ------------------------------------------------------------------ args ---
@@ -586,6 +654,109 @@ fn service_or_exit(parsed: &Parsed) -> Option<Service> {
     }
 }
 
+/// The API client, when the command is pointed at a running platform.
+///
+/// `--url` (or `NANOBASE_URL`) makes the command a thin client: it asks the
+/// platform over HTTP instead of opening the database, so a script and the
+/// platform's own API reach exactly the same code.
+fn api_client(parsed: &Parsed) -> Option<ApiClient> {
+    ApiClient::from_options(parsed.get("url"), parsed.get("token"))
+}
+
+/// One app, as the commands print it.
+///
+/// The same shape whether it came from the local database or from the API,
+/// so a command prints the same thing either way.
+struct AppView {
+    id: String,
+    name: String,
+    app_type: String,
+    database: String,
+    storage: String,
+    auth: bool,
+    acl: bool,
+    created_at: String,
+    schema: Vec<(String, usize)>,
+    seed_rows: usize,
+    doc: AppDoc,
+}
+
+impl AppView {
+    /// A view of an app in the local database.
+    fn of(record: &nanobase::platform::AppRecord) -> AppView {
+        let doc = record.doc.clone();
+        let schema = doc
+            .schema
+            .iter()
+            .map(|(name, def)| (name.clone(), def.columns.len()))
+            .collect();
+        let seed_rows = doc.data.values().map(Vec::len).sum();
+        AppView {
+            id: record.id.clone(),
+            name: doc.app.name.clone(),
+            app_type: doc.app.app_type.as_str().to_string(),
+            database: doc.config.database.raw_type.clone(),
+            storage: doc.config.storage.kind.as_str().to_string(),
+            auth: doc.config.auth.is_enabled(),
+            acl: doc.config.acl.enabled,
+            created_at: record.created_at.clone(),
+            schema,
+            seed_rows,
+            doc,
+        }
+    }
+
+    /// A view of an app as the API returns it.
+    fn from_value(value: &Value) -> Option<AppView> {
+        let id = value.get("id")?.as_str()?.to_string();
+        let created_at = value
+            .get("createdAt")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let doc = AppDoc::from_value(value.get("doc")?).ok()?;
+        let schema = doc
+            .schema
+            .iter()
+            .map(|(name, def)| (name.clone(), def.columns.len()))
+            .collect();
+        let seed_rows = doc.data.values().map(Vec::len).sum();
+        Some(AppView {
+            id,
+            name: doc.app.name.clone(),
+            app_type: doc.app.app_type.as_str().to_string(),
+            database: doc.config.database.raw_type.clone(),
+            storage: doc.config.storage.kind.as_str().to_string(),
+            auth: doc.config.auth.is_enabled(),
+            acl: doc.config.acl.enabled,
+            created_at,
+            schema,
+            seed_rows,
+            doc,
+        })
+    }
+}
+
+/// Print the app's details, the way `app show` does.
+fn print_app(view: &AppView, root: Option<&std::path::Path>) {
+    println!("name:       {}", view.name);
+    println!("id:         {}", view.id);
+    println!("type:       {}", view.app_type);
+    println!("created:    {}", view.created_at);
+    println!("database:   {}", view.database);
+    println!("storage:    {}", view.storage);
+    println!("auth:       {}", if view.auth { "enabled" } else { "off" });
+    println!("acl:        {}", if view.acl { "enabled" } else { "off" });
+    if let Some(root) = root {
+        println!("data dir:   {}", root.join(&view.id).display());
+    }
+    println!("schema:     {} collection(s)", view.schema.len());
+    for (name, columns) in &view.schema {
+        println!("  {name}: {columns} column(s)");
+    }
+    println!("seed rows:  {}", view.seed_rows);
+}
+
 fn platform_or_exit(parsed: &Parsed) -> Option<Platform> {
     let store = SqliteStore::new(data_path(parsed));
     match load_platform(&store) {
@@ -609,7 +780,7 @@ fn save_or_exit(parsed: &Parsed, platform: &Platform) -> Option<()> {
 }
 
 fn app_new(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["data"], &[]);
+    let parsed = parse_args(rest, &["data", "url", "token"], &[]);
     if let Some(e) = parsed.error {
         eprintln!("nanobase app new: {e}");
         return 2;
@@ -622,6 +793,27 @@ fn app_new(rest: &[String]) -> u8 {
     if let Some(problem) = nanobase::config::check_app_name(&name) {
         eprintln!("nanobase app new: app name {problem}");
         return 1;
+    }
+    if let Some(client) = api_client(&parsed) {
+        // The platform makes the app; the command only asks and prints.
+        let mut body = mosql::Object::new();
+        body.set("name", Value::str(name.clone()));
+        let value = match client.request("POST", "/api/apps", Some(&Value::Object(body))) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("nanobase: {e}");
+                return 1;
+            }
+        };
+        let Some(view) = AppView::from_value(&value) else {
+            eprintln!("nanobase: the platform sent an app this command cannot read");
+            return 1;
+        };
+        println!("Created {}", view.name);
+        println!("  id:        {}", view.id);
+        println!("  created:   {}", view.created_at);
+        println!("  database:  {}", view.database);
+        return 0;
     }
     let service = match service_or_exit(&parsed) {
         Some(svc) => svc,
@@ -672,7 +864,7 @@ fn app_new(rest: &[String]) -> u8 {
 }
 
 fn app_import(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["data"], &[]);
+    let parsed = parse_args(rest, &["data", "url", "token"], &[]);
     if let Some(e) = parsed.error {
         eprintln!("nanobase app import: {e}");
         return 2;
@@ -694,6 +886,20 @@ fn app_import(rest: &[String]) -> u8 {
         Ok(d) => d,
         Err(e) => return report_config(&e),
     };
+    if let Some(client) = api_client(&parsed) {
+        // The platform holds the apps; the document goes to it whole.
+        let value = match client.request("POST", "/api/apps", Some(&doc.to_value())) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("nanobase: {e}");
+                return 1;
+            }
+        };
+        let id = value.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+        println!("Imported {}", doc.app.name);
+        println!("  id: {id}");
+        return 0;
+    }
     let mut platform = match platform_or_exit(&parsed) {
         Some(p) => p,
         None => return 1,
@@ -734,35 +940,54 @@ fn app_import(rest: &[String]) -> u8 {
 }
 
 fn app_list(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["data"], &[]);
+    let parsed = parse_args(rest, &["data", "url", "token"], &[]);
     if let Some(e) = parsed.error {
         eprintln!("nanobase app list: {e}");
         return 2;
     }
-    let platform = match platform_or_exit(&parsed) {
-        Some(p) => p,
-        None => return 1,
-    };
-    if platform.apps.is_empty() {
+    let mut views: Vec<AppView> = Vec::new();
+    if let Some(client) = api_client(&parsed) {
+        let value = match client.request("GET", "/api/apps", None) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("nanobase: {e}");
+                return 1;
+            }
+        };
+        if let Some(items) = value.get("items").and_then(|v| v.as_array()) {
+            for item in items {
+                if let Some(view) = AppView::from_value(item) {
+                    views.push(view);
+                }
+            }
+        }
+    } else {
+        let platform = match platform_or_exit(&parsed) {
+            Some(p) => p,
+            None => return 1,
+        };
+        for name in platform.app_names() {
+            if let Some(app) = platform.app_by_name(name) {
+                views.push(AppView::of(app));
+            }
+        }
+    }
+    if views.is_empty() {
         println!("no apps yet — `nanobase app new <name>` creates one");
         return 0;
     }
     println!("NAME                           ID                       TYPE       DATABASE");
-    for name in platform.app_names() {
-        let app = platform.app_by_name(name).expect("listed name exists");
+    for view in &views {
         println!(
             "{:<30} {:<24} {:<10} {}",
-            app.doc.app.name,
-            app.id,
-            app.doc.app.app_type.as_str(),
-            app.doc.config.database.raw_type
+            view.name, view.id, view.app_type, view.database
         );
     }
     0
 }
 
 fn app_show(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["data"], &[]);
+    let parsed = parse_args(rest, &["data", "url", "token"], &[]);
     if let Some(e) = parsed.error {
         eprintln!("nanobase app show: {e}");
         return 2;
@@ -771,6 +996,21 @@ fn app_show(rest: &[String]) -> u8 {
         eprintln!("nanobase app show: an app id or name is required");
         return 2;
     };
+    if let Some(client) = api_client(&parsed) {
+        let value = match client.request("GET", &format!("/api/apps/{key}"), None) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("nanobase: {e}");
+                return 1;
+            }
+        };
+        let Some(view) = AppView::from_value(&value) else {
+            eprintln!("nanobase: the platform sent an app this command cannot read");
+            return 1;
+        };
+        print_app(&view, None);
+        return 0;
+    }
     let platform = match platform_or_exit(&parsed) {
         Some(p) => p,
         None => return 1,
@@ -780,40 +1020,13 @@ fn app_show(rest: &[String]) -> u8 {
         return 1;
     };
     let root = SqliteStore::new(data_path(&parsed)).root();
-    println!("name:       {}", app.doc.app.name);
-    println!("id:         {}", app.id);
-    println!("type:       {}", app.doc.app.app_type.as_str());
-    println!("created:    {}", app.created_at);
-    println!("database:   {}", app.doc.config.database.raw_type);
-    println!("storage:    {}", app.doc.config.storage.kind.as_str());
-    println!(
-        "auth:       {}",
-        if app.doc.config.auth.is_enabled() {
-            "enabled"
-        } else {
-            "off"
-        }
-    );
-    println!(
-        "acl:        {}",
-        if app.doc.config.acl.enabled {
-            "enabled"
-        } else {
-            "off"
-        }
-    );
-    println!("data dir:   {}", app.data_dir(&root).display());
-    println!("schema:     {} collection(s)", app.doc.schema.len());
-    for (name, def) in &app.doc.schema {
-        println!("  {name}: {} column(s)", def.columns.len());
-    }
-    let rows: usize = app.doc.data.values().map(Vec::len).sum();
-    println!("seed rows:  {rows}");
+    let view = AppView::of(app);
+    print_app(&view, Some(&root.join("apps")));
     0
 }
 
 fn app_export(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["out", "data"], &["redact"]);
+    let parsed = parse_args(rest, &["out", "data", "url", "token"], &["redact"]);
     if let Some(e) = parsed.error {
         eprintln!("nanobase app export: {e}");
         return 2;
@@ -822,24 +1035,42 @@ fn app_export(rest: &[String]) -> u8 {
         eprintln!("nanobase app export: an app id or name is required");
         return 2;
     };
-    let platform = match platform_or_exit(&parsed) {
-        Some(p) => p,
-        None => return 1,
-    };
-    let Some(app) = platform.find_app(&key) else {
-        eprintln!("nanobase: no app for {key:?}");
-        return 1;
+    let doc = if let Some(client) = api_client(&parsed) {
+        let value = match client.request("GET", &format!("/api/apps/{key}"), None) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("nanobase: {e}");
+                return 1;
+            }
+        };
+        match AppView::from_value(&value) {
+            Some(view) => view.doc,
+            None => {
+                eprintln!("nanobase: the platform sent an app this command cannot read");
+                return 1;
+            }
+        }
+    } else {
+        let platform = match platform_or_exit(&parsed) {
+            Some(p) => p,
+            None => return 1,
+        };
+        let Some(app) = platform.find_app(&key) else {
+            eprintln!("nanobase: no app for {key:?}");
+            return 1;
+        };
+        app.doc.clone()
     };
     let body = if parsed.has("redact") {
-        app.doc.to_json_pretty_redacted()
+        doc.to_json_pretty_redacted()
     } else {
-        app.doc.to_json_pretty()
+        doc.to_json_pretty()
     };
     write_out(parsed.get("out"), &body)
 }
 
 fn app_rename(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["data"], &[]);
+    let parsed = parse_args(rest, &["data", "url", "token"], &[]);
     if let Some(e) = parsed.error {
         eprintln!("nanobase app rename: {e}");
         return 2;
@@ -852,6 +1083,26 @@ fn app_rename(rest: &[String]) -> u8 {
         eprintln!("example: nanobase app rename todos todo-list");
         return 2;
     };
+    if let Some(client) = api_client(&parsed) {
+        let mut app = mosql::Object::new();
+        app.set("name", Value::str(new_name.clone()));
+        let mut body = mosql::Object::new();
+        body.set("app", Value::Object(app));
+        let value = match client.request(
+            "PATCH",
+            &format!("/api/apps/{key}"),
+            Some(&Value::Object(body)),
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("nanobase: {e}");
+                return 1;
+            }
+        };
+        let id = value.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+        println!("Renamed to {new_name} ({id})");
+        return 0;
+    }
     let mut platform = match platform_or_exit(&parsed) {
         Some(p) => p,
         None => return 1,
@@ -871,7 +1122,7 @@ fn app_rename(rest: &[String]) -> u8 {
 }
 
 fn app_clone(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["data"], &[]);
+    let parsed = parse_args(rest, &["data", "url", "token"], &[]);
     if let Some(e) = parsed.error {
         eprintln!("nanobase app clone: {e}");
         return 2;
@@ -884,6 +1135,43 @@ fn app_clone(rest: &[String]) -> u8 {
         eprintln!("example: nanobase app clone todos todos-staging");
         return 2;
     };
+    if let Some(client) = api_client(&parsed) {
+        let value = match client.request("GET", &format!("/api/apps/{key}"), None) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("nanobase: {e}");
+                return 1;
+            }
+        };
+        let Some(view) = AppView::from_value(&value) else {
+            eprintln!("nanobase: the platform sent an app this command cannot read");
+            return 1;
+        };
+        let mut doc = view.doc.to_value();
+        if let Some(app) = doc.get("app").and_then(|v| v.as_object()) {
+            let mut copy = app.clone();
+            copy.set("name", Value::str(new_name.clone()));
+            if let Some(root) = doc.as_object() {
+                let mut updated = root.clone();
+                updated.set("app", Value::Object(copy));
+                doc = Value::Object(updated);
+            }
+        }
+        let created = match client.request("POST", "/api/apps", Some(&doc)) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("nanobase: {e}");
+                return 1;
+            }
+        };
+        let id = created
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        println!("Cloned to {new_name} ({id})");
+        println!("  configuration and schema only; rows were not copied");
+        return 0;
+    }
     let mut platform = match platform_or_exit(&parsed) {
         Some(p) => p,
         None => return 1,
@@ -904,7 +1192,7 @@ fn app_clone(rest: &[String]) -> u8 {
 }
 
 fn app_remove(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["confirm", "data"], &[]);
+    let parsed = parse_args(rest, &["confirm", "data", "url", "token"], &[]);
     if let Some(e) = parsed.error {
         eprintln!("nanobase app remove: {e}");
         return 2;
@@ -913,12 +1201,34 @@ fn app_remove(rest: &[String]) -> u8 {
         eprintln!("nanobase app remove: an app id or name is required");
         return 2;
     };
+    let confirm = parsed.get("confirm").unwrap_or_default().to_string();
+    if let Some(client) = api_client(&parsed) {
+        let mut body = mosql::Object::new();
+        body.set("confirm", Value::str(confirm.clone()));
+        let value = match client.request(
+            "DELETE",
+            &format!("/api/apps/{key}"),
+            Some(&Value::Object(body)),
+        ) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("nanobase: {e}");
+                return 1;
+            }
+        };
+        let id = value.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+        let name = AppView::from_value(&value)
+            .map(|v| v.name)
+            .unwrap_or_else(|| key.clone());
+        println!("Deleted {name} ({id})");
+        println!("  the app's data directory was left in place");
+        return 0;
+    }
     let service = match service_or_exit(&parsed) {
         Some(svc) => svc,
         None => return 1,
     };
-    let confirm = parsed.get("confirm").unwrap_or_default();
-    let removed = match service.remove(&key, confirm) {
+    let removed = match service.remove(&key, &confirm) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("nanobase: {e}");

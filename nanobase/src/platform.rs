@@ -117,7 +117,8 @@ pub struct User {
 }
 
 impl User {
-    fn to_value(&self) -> Value {
+    /// The user as a value: never the password hash.
+    pub fn to_value(&self) -> Value {
         let mut o = Object::new();
         o.set("id", Value::str(self.id.clone()));
         o.set("email", Value::str(self.email.clone()));
