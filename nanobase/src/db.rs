@@ -296,16 +296,44 @@ impl DbResponse {
 /// their own, and what the remote adapters are tested against.
 pub struct DbServer {
     db: Arc<dyn AppDb>,
+    /// The token a caller has to offer, when the service wants one.
+    token: Option<String>,
 }
 
 impl DbServer {
     pub fn new(db: Arc<dyn AppDb>) -> Self {
-        DbServer { db }
+        DbServer { db, token: None }
+    }
+
+    /// Ask callers for a bearer token.
+    ///
+    /// A request without the right token is refused, whether it arrives
+    /// over HTTP or over a socket.
+    pub fn with_token(mut self, token: impl Into<String>) -> Self {
+        self.token = Some(token.into());
+        self
     }
 
     /// The database this server is over.
     pub fn db(&self) -> &Arc<dyn AppDb> {
         &self.db
+    }
+
+    /// Whether a caller may in.
+    ///
+    /// The header is read as HTTP would: `Bearer <token>`.
+    pub fn allowed(&self, authorization: Option<&str>) -> bool {
+        let offered = authorization
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .or_else(|| {
+                authorization.and_then(|value| {
+                    value
+                        .split_once(' ')
+                        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
+                        .map(|(_, token)| token.trim())
+                })
+            });
+        crate::wire::token_ok(self.token.as_deref(), offered)
     }
 
     /// Run one request and answer it.
@@ -353,6 +381,12 @@ impl DbServer {
                 &error_value("METHOD_NOT_ALLOWED", "only POST is allowed"),
             );
         }
+        if !self.allowed(req.header("authorization")) {
+            return Response::json(
+                401,
+                &error_value("UNAUTHORIZED", "the service wants a bearer token"),
+            );
+        }
         let body = match req.json() {
             Ok(body) => body,
             Err(e) => return Response::json(400, &error_value("INVALID_REQUEST", &e.message)),
@@ -387,27 +421,30 @@ pub fn serve_tcp(server: Arc<DbServer>, listener: std::net::TcpListener) -> std:
 }
 
 /// Answer one request on a connection; returns whether to keep it open.
+///
+/// A request is a JSON line, optionally preceded by header lines — the
+/// token rides in one of them, the way HTTP would carry it.
 fn handle_line(
     server: &Arc<DbServer>,
     reader: &mut std::io::BufReader<std::net::TcpStream>,
     writer: &mut std::net::TcpStream,
 ) -> bool {
-    use std::io::{BufRead, Write};
-    let mut line = String::new();
-    match reader.read_line(&mut line) {
-        Ok(0) | Err(_) => return false,
-        Ok(_) => {}
-    }
-    let line = line.trim();
-    if line.is_empty() {
-        return false;
-    }
-    let reply = match mosql::parse_json(line) {
-        Ok(value) => match DbRequest::from_value(&value) {
-            Ok(request) => server.handle(&request).to_value(),
-            Err(e) => error_value("INVALID_REQUEST", &e.message),
-        },
-        Err(e) => error_value("INVALID_REQUEST", &format!("not valid JSON: {e}")),
+    use std::io::Write;
+    let frame = match crate::wire::read_frame(reader) {
+        Ok(Some(frame)) => frame,
+        Ok(None) => return false,
+        Err(_) => return false,
+    };
+    let reply = if !crate::wire::token_ok(server.token.as_deref(), frame.token.as_deref()) {
+        error_value("UNAUTHORIZED", "the service wants a bearer token")
+    } else {
+        match mosql::parse_json(&frame.json) {
+            Ok(value) => match DbRequest::from_value(&value) {
+                Ok(request) => server.handle(&request).to_value(),
+                Err(e) => error_value("INVALID_REQUEST", &e.message),
+            },
+            Err(e) => error_value("INVALID_REQUEST", &format!("not valid JSON: {e}")),
+        }
     };
     let mut out = mosql::to_json(&reply);
     out.push('\n');
@@ -419,10 +456,14 @@ fn handle_line(
 }
 
 /// The error body the server answers with.
+///
+/// The message is in `message` for a reader that shows it and in `error`
+/// for the database protocol, which carries its failures that way.
 fn error_value(code: &str, message: &str) -> Value {
     let mut body = mosql::Object::new();
     body.set("code", Value::str(code));
     body.set("message", Value::str(message));
+    body.set("error", Value::str(message));
     Value::Object(body)
 }
 

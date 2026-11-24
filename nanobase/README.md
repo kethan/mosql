@@ -262,6 +262,18 @@ a JSON reply per operation, over HTTP or over a socket. `DbServer` is the
 other end of it, over any `AppDb`, so a deployment can put an app's rows
 on another machine.
 
+A service that holds an app's rows can ask for a token, and over a socket
+the token rides in a header line before the request, the way HTTP would
+carry it:
+
+```text
+authorization: Bearer s3cret
+{"op":"find","collection":"todos","query":{"done":false}}
+```
+
+A request without the right token is refused, over HTTP and over a
+socket alike.
+
 ## Events, hooks and custom methods
 
 The service is the one path every change takes, whether it comes from the

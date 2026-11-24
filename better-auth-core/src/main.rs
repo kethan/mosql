@@ -115,7 +115,8 @@ fn usage() -> String {
          STORE:\n    \
          BETTER_AUTH_STORE          sqlite | memory | http | tcp (default: sqlite)\n    \
          BETTER_AUTH_STORE_URL      the store's address, for http and tcp\n    \
-         BETTER_AUTH_STORE_TOKEN    a bearer token for the store, if it wants one\n\n\
+         BETTER_AUTH_STORE_TOKEN    a bearer token for the store, if it wants one\n\
+         BETTER_AUTH_STORE_SERVER_TOKEN  a bearer token the store server asks for\n\n\
          OAUTH PROVIDERS  (set <NAME>_CLIENT_ID and <NAME>_CLIENT_SECRET):\n    {}\n\n\
          Routes hang off /api/auth; see the README for the full table.",
         env!("CARGO_PKG_VERSION"),
@@ -253,9 +254,13 @@ fn run_store_server(data: &str, addr: SocketAddr, kind: &str) -> Result<(), Stri
         SqliteAuthStore::open(&path)
     }
     .map_err(|e| format!("cannot open {data}: {e}"))?;
-    let server = Arc::new(better_auth_core::query_server::QueryServer::new(
-        Arc::new(store) as Arc<dyn AuthStore>,
-    ));
+    let mut server =
+        better_auth_core::query_server::QueryServer::new(Arc::new(store) as Arc<dyn AuthStore>);
+    // The service asks for a token when the environment names one.
+    if let Some(token) = env("BETTER_AUTH_STORE_SERVER_TOKEN") {
+        server = server.with_token(token);
+    }
+    let server = Arc::new(server);
     eprintln!(
         "better-auth-core {} store server ({kind}) on {addr}  data={data}",
         env!("CARGO_PKG_VERSION"),

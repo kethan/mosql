@@ -9,7 +9,7 @@
 //! database service runs this, the engine talks to it over the network, and
 //! neither has to know about the other's transport.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 
@@ -23,16 +23,40 @@ use crate::store::{AuthStore, FindManyQuery};
 /// A server over a store.
 pub struct QueryServer {
     store: Arc<dyn AuthStore>,
+    /// The token a caller has to offer, when the service wants one.
+    token: Option<String>,
 }
 
 impl QueryServer {
     pub fn new(store: Arc<dyn AuthStore>) -> Self {
-        QueryServer { store }
+        QueryServer { store, token: None }
+    }
+
+    /// Ask callers for a bearer token.
+    ///
+    /// A request without the right token is refused, whether it arrives
+    /// over HTTP or over a socket.
+    pub fn with_token(mut self, token: impl Into<String>) -> Self {
+        self.token = Some(token.into());
+        self
     }
 
     /// The store this server is over.
     pub fn store(&self) -> &Arc<dyn AuthStore> {
         &self.store
+    }
+
+    /// Whether a caller may in.
+    ///
+    /// The header is read as HTTP would: `Bearer <token>`.
+    pub fn allowed(&self, authorization: Option<&str>) -> bool {
+        let offered = authorization.and_then(|value| {
+            value
+                .split_once(' ')
+                .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
+                .map(|(_, token)| token.trim())
+        });
+        nanobase::wire::token_ok(self.token.as_deref(), offered)
     }
 
     /// Run one request and answer it.
@@ -114,6 +138,12 @@ impl QueryServer {
                 &error_value("METHOD_NOT_ALLOWED", "only POST is allowed"),
             );
         }
+        if !self.allowed(req.header("authorization")) {
+            return Response::json(
+                401,
+                &error_value("UNAUTHORIZED", "the service wants a bearer token"),
+            );
+        }
         let body = match req.json() {
             Ok(body) => body,
             Err(e) => return Response::json(400, &error_value("INVALID_REQUEST", &e.message)),
@@ -130,24 +160,26 @@ impl QueryServer {
     ///
     /// Returns whether the connection should stay open.
     pub fn handle_tcp(&self, reader: &mut BufReader<TcpStream>, writer: &mut TcpStream) -> bool {
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) | Err(_) => return false,
-            Ok(_) => {}
-        }
-        let line = line.trim();
-        if line.is_empty() {
-            return false;
-        }
-        let reply = match mosql::parse_json(line) {
-            Ok(value) => match QueryRequest::from_value(&value) {
-                Ok(request) => {
-                    let response = self.handle(&request);
-                    response.to_value()
-                }
-                Err(e) => error_value("INVALID_REQUEST", &e.message),
-            },
-            Err(e) => error_value("INVALID_REQUEST", &format!("not valid JSON: {e}")),
+        // A request is a JSON line, optionally preceded by header lines —
+        // the token rides in one of them, the way HTTP would carry it.
+        let frame = match nanobase::wire::read_frame(reader) {
+            Ok(Some(frame)) => frame,
+            Ok(None) => return false,
+            Err(_) => return false,
+        };
+        let reply = if !nanobase::wire::token_ok(self.token.as_deref(), frame.token.as_deref()) {
+            error_value("UNAUTHORIZED", "the service wants a bearer token")
+        } else {
+            match mosql::parse_json(&frame.json) {
+                Ok(value) => match QueryRequest::from_value(&value) {
+                    Ok(request) => {
+                        let response = self.handle(&request);
+                        response.to_value()
+                    }
+                    Err(e) => error_value("INVALID_REQUEST", &e.message),
+                },
+                Err(e) => error_value("INVALID_REQUEST", &format!("not valid JSON: {e}")),
+            }
         };
         let mut out = mosql::to_json(&reply);
         out.push('\n');
@@ -160,10 +192,14 @@ impl QueryServer {
 }
 
 /// The error body the server answers with.
+///
+/// The message is in `message` for a reader that shows it and in `error`
+/// for the store protocol, which carries its failures that way.
 fn error_value(code: &str, message: &str) -> Value {
     let mut body = mosql::Object::new();
     body.set("code", Value::str(code));
     body.set("message", Value::str(message));
+    body.set("error", Value::str(message));
     Value::Object(body)
 }
 

@@ -9,7 +9,7 @@
 //! calls are short and infrequent, and a pool would need a reaper for
 //! connections a peer dropped without saying so.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader};
 use std::net::TcpStream;
 use std::time::Duration;
 
@@ -59,20 +59,12 @@ impl TcpAuthStore {
         })?;
         stream.set_read_timeout(Some(self.timeout)).ok();
         stream.set_write_timeout(Some(self.timeout)).ok();
-        let mut line = mosql::to_json(&request.to_value());
-        line.push('\n');
-        if let Some(token) = &self.token {
-            // The token rides in a header line before the request, the way
-            // HTTP would carry it, so the service can tell one caller from
-            // another.
-            let mut head = format!("authorization: Bearer {token}\n");
-            head.push_str(&line);
-            line = head;
-        }
-        stream
-            .write_all(line.as_bytes())
+        // The token rides in a header line before the request, the way
+        // HTTP would carry it, so the service can tell one caller from
+        // another.
+        let line = mosql::to_json(&request.to_value());
+        nanobase::wire::write_frame(&mut stream, self.token.as_deref(), &line)
             .map_err(|e| AuthError::internal(format!("cannot send to the store: {e}")))?;
-        stream.flush().ok();
         let mut reader = BufReader::new(
             stream
                 .try_clone()

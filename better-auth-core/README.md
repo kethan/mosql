@@ -101,6 +101,7 @@ Everything is read from the environment.
 | `BETTER_AUTH_STORE` | `sqlite` | `sqlite`, `memory`, `http` or `tcp` |
 | `BETTER_AUTH_STORE_URL` | — | the store's address, for `http` and `tcp` |
 | `BETTER_AUTH_STORE_TOKEN` | — | a bearer token for the store, if it wants one |
+| `BETTER_AUTH_STORE_SERVER_TOKEN` | — | a bearer token the store server asks for |
 
 Command line: `--listen ADDR`, `--data PATH`, `--store-server [http|tcp]`,
 `--help`, `--version`.
@@ -129,6 +130,31 @@ $ BETTER_AUTH_STORE=http BETTER_AUTH_STORE_URL=http://db.internal:8801 \
 
 The rows land in `auth.db` on the other machine, and the engine's routes
 do not know the difference.
+
+### Putting a token on the door
+
+A store service that holds somebody else's data wants to know who is
+asking. Set `BETTER_AUTH_STORE_SERVER_TOKEN` on the service, and
+`BETTER_AUTH_STORE_TOKEN` on the engine, and only the two that agree get
+in:
+
+```console
+$ BETTER_AUTH_STORE_SERVER_TOKEN=s3cret better-auth-core --store-server tcp \
+    --listen 0.0.0.0:8801 --data auth.db
+$ BETTER_AUTH_STORE=tcp BETTER_AUTH_STORE_URL=db.internal:8801 \
+  BETTER_AUTH_STORE_TOKEN=s3cret better-auth-core --listen 0.0.0.0:8787
+```
+
+Over a socket the token rides in a header line before the request, the
+way HTTP would carry it:
+
+```text
+authorization: Bearer s3cret
+{"op":"count","model":"user"}
+```
+
+A request without the right token is refused, whether it arrives over
+HTTP or over a socket.
 
 ---
 

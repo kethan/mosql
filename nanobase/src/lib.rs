@@ -28,6 +28,7 @@ pub mod platform;
 pub mod service;
 pub mod sqlite;
 pub mod store;
+pub mod wire;
 
 pub use api::Api;
 pub use client::ApiClient;
