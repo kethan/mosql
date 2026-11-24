@@ -205,9 +205,27 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: nanobase
-      - name: Verify
+      # One step per stage rather than a single "verify" step: a red X beside
+      # the stage that broke is worth far more than one beside the whole job,
+      # and these jobs are written where Actions logs cannot be read at all.
+      - name: fmt
         shell: bash
-        run: ./nanobase/verify.sh
+        run: ./nanobase/verify.sh fmt
+      - name: clippy
+        shell: bash
+        run: ./nanobase/verify.sh clippy
+      - name: test
+        shell: bash
+        run: ./nanobase/verify.sh test
+      - name: dependencies
+        shell: bash
+        run: ./nanobase/verify.sh deps
+      - name: size
+        shell: bash
+        run: ./nanobase/verify.sh size
+      - name: publish dry-run
+        shell: bash
+        run: ./nanobase/verify.sh publish
 
   # `cargo publish --dry-run` needs the crates.io index, which the sandbox that
   # developed this crate had no access to. CI has it, so this is the gate that
