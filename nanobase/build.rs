@@ -7,9 +7,13 @@
 //! no version to drift: the amalgamation is the official distribution (public
 //! domain), copied from `libsqlite3-sys`, which is what `rusqlite` ships.
 //!
-//! The object file is handed to the linker directly instead of being archived
-//! into `.a`/`.lib`: that avoids needing `ar` on Unix and `lib.exe` on Windows,
-//! neither of which is guaranteed to be on `PATH` from a build script.
+//! The object is archived into `libsqlite3.a` (Unix) or `sqlite3.lib` (MSVC)
+//! and linked with `rustc-link-lib`. An archive is what rustc propagates to
+//! every crate that depends on this one; a bare object passed with
+//! `rustc-link-arg` reaches only this package's own binaries, so a crate
+//! built on top of `nanobase` would fail to link with every `sqlite3_*`
+//! symbol undefined. `ar` ships with every gcc toolchain and `lib.exe` sits
+//! beside `cl.exe`, so neither needs to be installed.
 //!
 //! Flags are chosen for a small, fast, single-tenant engine: everything
 //! optional is omitted, and double-quoted string literals are refused
@@ -57,6 +61,13 @@ fn main() {
         build_unix(&target, &src, &obj, defines);
     }
 
+    // Archive the object, so the linker can be told to link a library
+    // rather than given a file. This is what makes the symbols reach the
+    // crates that depend on this one.
+    archive(&target, &obj, &out, msvc);
+    println!("cargo:rustc-link-search=native={}", out.display());
+    println!("cargo:rustc-link-lib=static=sqlite3");
+
     // Drop unreferenced code. Without this, `-ffunction-sections` splits
     // everything up but nothing is thrown away. The flags differ by linker:
     // GNU ld and lld take `--gc-sections`, Apple's takes `-dead_strip`, and
@@ -68,7 +79,58 @@ fn main() {
     } else if !msvc {
         println!("cargo:rustc-link-arg=-Wl,--gc-sections");
     }
-    println!("cargo:rustc-link-arg={}", obj.display());
+}
+
+/// Put the object into a static library.
+///
+/// Unix: `ar crs libsqlite3.a sqlite3.o`. The `s` writes an index, without
+/// which the linker cannot pull a member out of the archive.
+///
+/// MSVC: `lib.exe /NOLOGO /OUT:sqlite3.lib sqlite3.obj`. `lib.exe` sits
+/// beside `cl.exe`, so the same directory that holds the compiler holds the
+/// archiver.
+fn archive(target: &str, obj: &Path, out: &Path, msvc: bool) {
+    if msvc {
+        let lib = out.join("sqlite3.lib");
+        let mut command = match msvc_toolchain(arch_of(target)) {
+            Some((_, vars)) => {
+                let mut c = Command::new("lib.exe");
+                c.envs(vars);
+                c
+            }
+            None => Command::new("lib.exe"),
+        };
+        command.args([
+            "/NOLOGO",
+            &format!("/OUT:{}", win_path(&lib)),
+            &win_path(obj),
+        ]);
+        run(&mut command, "lib.exe");
+        return;
+    }
+    let ar = env::var(format!("AR_{}", target.to_lowercase().replace('-', "_")))
+        .or_else(|_| env::var("TARGET_AR"))
+        .or_else(|_| env::var("AR"))
+        .unwrap_or_else(|_| "ar".to_string());
+    let archive = out.join("libsqlite3.a");
+    let mut command = Command::new(&ar);
+    command.args([
+        "crs",
+        &archive.display().to_string(),
+        &obj.display().to_string(),
+    ]);
+    run(&mut command, &format!("the archiver ({ar})"));
+}
+
+/// The MSVC tool directory name for a target: `x64`, `arm64` or `x86`.
+fn arch_of(target: &str) -> &'static str {
+    if target.starts_with("aarch64") {
+        "arm64"
+    } else if target.starts_with("i686") || target.starts_with("thumbv7a") {
+        "x86"
+    } else {
+        "x64"
+    }
 }
 
 /// gcc, clang, and anything else that takes the usual flags.
@@ -116,13 +178,7 @@ fn build_unix(target: &str, src: &Path, obj: &Path, defines: &[&str]) {
 /// An environment that already has `INCLUDE` and `LIB` — a Developer
 /// Command Prompt — is used as is.
 fn build_msvc(target: &str, src: &Path, obj: &Path, defines: &[&str]) {
-    let arch = if target.starts_with("aarch64") {
-        "arm64"
-    } else if target.starts_with("i686") || target.starts_with("thumbv7a") {
-        "x86"
-    } else {
-        "x64"
-    };
+    let arch = arch_of(target);
 
     let mut args = vec![
         "/nologo".to_string(),
