@@ -1410,13 +1410,19 @@ impl OAuthRegistry {
     ) -> (Vec<ProviderConfig>, Vec<ConfigError>) {
         let mut providers = Vec::new();
         let mut problems = Vec::new();
-        // A provider is named by its client-id variable: `OAUTH_ACME_CLIENT_ID`.
+        // A provider is named by its client-id or client-secret variable:
+        // `OAUTH_ACME_CLIENT_ID` or `OAUTH_ACME_CLIENT_SECRET`. Both are
+        // looked for, so a provider that is only half described is still
+        // seen — and can be reported.
         let mut seen: Vec<String> = Vec::new();
         for name in names("OAUTH_") {
             let Some(rest) = name.strip_prefix("OAUTH_") else {
                 continue;
             };
-            let Some(id) = rest.strip_suffix("_CLIENT_ID") else {
+            let Some(id) = rest
+                .strip_suffix("_CLIENT_ID")
+                .or_else(|| rest.strip_suffix("_CLIENT_SECRET"))
+            else {
                 continue;
             };
             if id.is_empty() || seen.iter().any(|s| s == id) {
@@ -1428,11 +1434,17 @@ impl OAuthRegistry {
             let client_secret = lookup(&format!("OAUTH_{}_CLIENT_SECRET", id.to_uppercase()));
             let (Some(client_id), Some(client_secret)) = (client_id.clone(), client_secret.clone())
             else {
-                // Half a provider is a mistake worth reporting.
+                // Half a provider is a mistake worth reporting, and the
+                // report names the variable that is missing.
                 if client_id.is_some() || client_secret.is_some() {
+                    let missing = if client_id.is_none() {
+                        "CLIENT_ID"
+                    } else {
+                        "CLIENT_SECRET"
+                    };
                     problems.push(ConfigError::MissingCredential {
                         provider: id.clone(),
-                        variable: format!("OAUTH_{}_CLIENT_SECRET", id.to_uppercase()),
+                        variable: format!("OAUTH_{}_{missing}", id.to_uppercase()),
                     });
                 }
                 continue;
@@ -2436,6 +2448,22 @@ mod tests {
         assert!(providers.is_empty());
         assert_eq!(problems.len(), 1);
         assert!(problems[0].to_string().contains("CLIENT_SECRET"));
+    }
+
+    #[test]
+    fn a_provider_with_only_a_secret_names_the_id_that_is_missing() {
+        let (providers, problems) = OAuthRegistry::from_env_generic(
+            |name| match name {
+                "OAUTH_ACME_CLIENT_SECRET" => Some("sec".into()),
+                _ => None,
+            },
+            |_| vec!["OAUTH_ACME_CLIENT_SECRET".into()],
+        );
+        assert!(providers.is_empty());
+        assert_eq!(problems.len(), 1);
+        let problem = problems[0].to_string();
+        assert!(problem.contains("OAUTH_ACME_CLIENT_ID"), "{problem}");
+        assert!(!problem.contains("CLIENT_SECRET"), "{problem}");
     }
 
     #[test]
