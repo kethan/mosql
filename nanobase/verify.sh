@@ -47,7 +47,11 @@ stage() {
   status=${PIPESTATUS[0]}
   set -e
   if (( status != 0 )); then
-    grep -E '^(error|warning)(\[|:)|^test .* \.\.\. FAILED|^---- |panicked at|assertion .*failed|^  (left|right):' "$log" \
+    # Two lines of context follow each match: a panic's message is on the
+    # line after it, and so is a linker's. Backticks and CRs are removed
+    # because they do not survive the trip as annotations.
+    grep -E -A2 '^(error|warning)(\[|:)|^test .* \.\.\. FAILED|^---- |panicked at|assertion .*failed|^  (left|right):' "$log" \
+      | grep -vE '^--$|^$' | tr -d '`\r' \
       | head -n 10 | sed "s/^/::error title=$name::/" >&2 || true
     exit "$status"
   fi

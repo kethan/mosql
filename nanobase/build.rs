@@ -57,10 +57,15 @@ fn main() {
         build_unix(&target, &src, &obj, defines);
     }
 
-    // Drop unreferenced code on Unix. Without this, `-ffunction-sections`
-    // splits everything up but nothing is thrown away. (The MSVC linker
-    // discards unreferenced COMDATs on its own, given `/Gy`.)
-    if !msvc {
+    // Drop unreferenced code. Without this, `-ffunction-sections` splits
+    // everything up but nothing is thrown away. The flags differ by linker:
+    // GNU ld and lld take `--gc-sections`, Apple's takes `-dead_strip`, and
+    // the MSVC linker discards unreferenced COMDATs on its own given `/Gy`.
+    // Passing the GNU flag to Apple's linker is a hard error, not a warning.
+    let apple = target.contains("apple");
+    if !msvc && apple {
+        println!("cargo:rustc-link-arg=-Wl,-dead_strip");
+    } else if !msvc {
         println!("cargo:rustc-link-arg=-Wl,--gc-sections");
     }
     println!("cargo:rustc-link-arg={}", obj.display());
@@ -128,10 +133,12 @@ fn build_msvc(out: &Path, target: &str, src: &Path, obj: &Path, defines: &[&str]
     for d in defines {
         args.push(format!("/D{d}"));
     }
-    // Absolute, because the batch file does not change directory but there
-    // is no reason for the source path to depend on where cargo ran us.
-    let src =
-        std::fs::canonicalize(src).unwrap_or_else(|e| panic!("cannot find {}: {e}", src.display()));
+    // Absolute, because there is no reason for the source path to depend on
+    // where cargo ran us. Not `canonicalize`: on Windows it yields a
+    // `\\?\D:\…` verbatim path, which cl.exe refuses to open.
+    let src = env::current_dir()
+        .expect("cannot read the current directory")
+        .join(src);
     args.push(src.display().to_string());
 
     let mut script = String::from("@echo off\r\n");
