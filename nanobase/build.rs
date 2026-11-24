@@ -52,7 +52,7 @@ fn main() {
     let obj = out.join(if msvc { "sqlite3.obj" } else { "sqlite3.o" });
 
     if msvc {
-        build_msvc(&out, &target, &src, &obj, defines);
+        build_msvc(&target, &src, &obj, defines);
     } else {
         build_unix(&target, &src, &obj, defines);
     }
@@ -97,21 +97,25 @@ fn build_unix(target: &str, src: &Path, obj: &Path, defines: &[&str]) {
     for d in defines {
         args.push(format!("-D{d}"));
     }
-    run(&cc, &args);
+    run(Command::new(cc).args(&args), "the C compiler");
 }
 
-/// MSVC: `cl.exe`, with its environment set up by `vcvarsall.bat`.
+/// MSVC: `cl.exe`, given the environment a Developer Command Prompt would have.
 ///
-/// `cl.exe` is not on `PATH` on a clean machine — it needs the `INCLUDE`,
-/// `LIB` and `PATH` that `vcvarsall.bat` exports, and cargo's own builds find
-/// that script through `vswhere`, which sits at a fixed path in every Visual
-/// Studio 2017+ install (Build Tools included). Same route here, so the build
-/// needs nothing but a Visual Studio install and no third-party crate.
+/// `cl.exe` is not on `PATH` on a clean machine, and it needs `INCLUDE` and
+/// `LIB` to point at the MSVC headers and the Windows SDK. The usual way to
+/// get those is `vcvarsall.bat`, but that is a chain of batch files whose
+/// behaviour depends on how it was launched — and when it fails, it fails
+/// from inside a build script with a message that names nothing. So the
+/// paths are computed here instead, from the two facts vcvarsall itself
+/// starts from: where Visual Studio is, which `vswhere` tells (it sits at a
+/// fixed path in every Visual Studio 2017+ install, Build Tools included),
+/// and where the Windows SDK is. Every failure is then a plain statement of
+/// what was looked for and where.
 ///
-/// The commands are written to a batch file rather than passed through
-/// `cmd /C` as one string: every path is then quoted once, by us, instead of
-/// being re-parsed by the shell with its own rules.
-fn build_msvc(out: &Path, target: &str, src: &Path, obj: &Path, defines: &[&str]) {
+/// An environment that already has `INCLUDE` and `LIB` — a Developer
+/// Command Prompt — is used as is.
+fn build_msvc(target: &str, src: &Path, obj: &Path, defines: &[&str]) {
     let arch = if target.starts_with("aarch64") {
         "arm64"
     } else if target.starts_with("i686") || target.starts_with("thumbv7a") {
@@ -141,51 +145,89 @@ fn build_msvc(out: &Path, target: &str, src: &Path, obj: &Path, defines: &[&str]
         .join(src);
     args.push(win_path(&src));
 
-    // Each step says what it is doing, and on failure prints its exit code
-    // and whatever it printed. The build script's output is the only place a
-    // broken toolchain can explain itself, and these lines are what CI shows.
-    let log = out.join("build-sqlite.log");
-    let mut script = String::from("@echo off\r\n");
-    script.push_str("echo [nanobase] setting up the MSVC environment\r\n");
-    script.push_str(&format!(
-        "call \"{}\" {arch} >\"{}\" 2>&1\r\n",
-        win_path(&vcvarsall()),
-        win_path(&log)
-    ));
-    script.push_str(&format!(
-        "if errorlevel 1 (type \"{}\" & echo [nanobase] vcvarsall failed with exit code %errorlevel% & exit /b 1)\r\n",
-        win_path(&log)
-    ));
-    script.push_str("where cl.exe\r\n");
-    let quoted: Vec<String> = args.iter().map(|a| format!("\"{a}\"")).collect();
-    script.push_str(&format!("cl.exe {}\r\n", quoted.join(" ")));
-    script.push_str(
-        "if errorlevel 1 (echo [nanobase] cl.exe failed with exit code %errorlevel% & exit /b 1)\r\n",
-    );
-    script.push_str("echo [nanobase] sqlite3.obj built\r\n");
-
-    let script_path = out.join("build-sqlite.bat");
-    std::fs::write(&script_path, script).expect("cannot write build-sqlite.bat");
-    // Spawning a `.bat` goes through `cmd.exe`, and Rust quotes the script
-    // path itself; it takes no arguments, so there is nothing to escape.
-    run(&win_path(&script_path), &[]);
+    let mut command = match msvc_toolchain(arch) {
+        Some((cl, vars)) => {
+            let mut c = Command::new(cl);
+            c.envs(vars);
+            c
+        }
+        None => Command::new("cl.exe"),
+    };
+    command.args(&args);
+    run(&mut command, "cl.exe");
 }
 
-/// A path for `cmd.exe` and `cl.exe`: backslashes only. Cargo's `OUT_DIR`
-/// mixes separators, and a tool that reads `/` as an option prefix should
-/// never be handed one inside a path.
-fn win_path(path: &Path) -> String {
-    path.display().to_string().replace('/', "\\")
+/// The newest Visual Studio's `cl.exe` for `arch`, with the `INCLUDE`,
+/// `LIB` and `PATH` it needs — or `None` when the environment is already
+/// set up.
+fn msvc_toolchain(arch: &str) -> Option<(PathBuf, Vec<(&'static str, std::ffi::OsString)>)> {
+    if env::var_os("INCLUDE").is_some() && env::var_os("LIB").is_some() {
+        return None;
+    }
+
+    let host = match env::consts::ARCH {
+        "x86_64" => "Hostx64",
+        "aarch64" => "Hostarm64",
+        "x86" => "Hostx86",
+        other => panic!("no MSVC host directory for {other}"),
+    };
+
+    let vs = vs_install_dir();
+    let tools = vs.join("VC").join("Tools").join("MSVC");
+    let version = newest_version(&tools, "the MSVC tools (VC\\Tools\\MSVC)");
+    let msvc = tools.join(&version);
+    let bin = msvc.join("bin").join(host).join(arch);
+    let cl = bin.join("cl.exe");
+    if !cl.is_file() {
+        panic!("{} does not exist: no cl.exe for {arch}", cl.display());
+    }
+
+    let kits = windows_kits_dir();
+    let sdk = newest_version(&kits.join("Include"), "the Windows SDK (Include)");
+
+    let include = vec![
+        msvc.join("include"),
+        kits.join("Include").join(&sdk).join("ucrt"),
+        kits.join("Include").join(&sdk).join("shared"),
+        kits.join("Include").join(&sdk).join("um"),
+    ];
+    let lib = vec![
+        msvc.join("lib").join(arch),
+        kits.join("Lib").join(&sdk).join("ucrt").join(arch),
+        kits.join("Lib").join(&sdk).join("um").join(arch),
+    ];
+    // Checked one by one, so a missing directory is named here rather than
+    // reported by cl.exe as "cannot open include file".
+    for dir in include.iter().chain(lib.iter()) {
+        assert!(dir.is_dir(), "{} does not exist", dir.display());
+    }
+    let list = |dirs: &[PathBuf]| -> std::ffi::OsString {
+        env::join_paths(dirs).expect("an MSVC path contains a quote character")
+    };
+    let path = env::join_paths(
+        std::iter::once(bin).chain(env::split_paths(&env::var_os("PATH").unwrap_or_default())),
+    )
+    .expect("an MSVC path contains a quote character");
+
+    Some((
+        cl,
+        vec![
+            ("INCLUDE", list(&include)),
+            ("LIB", list(&lib)),
+            ("PATH", path),
+        ],
+    ))
 }
 
-/// The `vcvarsall.bat` of the newest Visual Studio with the C++ tools.
+/// The installation directory of the newest Visual Studio with the C++
+/// tools, as `vswhere` reports it.
 ///
-/// `vswhere` is asked for the installation path and the answer is checked
-/// rather than trusted: its help text and error messages also go to stdout,
-/// and a path that is pasted into a batch file unchecked turns those lines
-/// into commands. If nothing in the output is a Visual Studio, the whole
-/// output is the error message — it is the only thing that can explain why.
-fn vcvarsall() -> PathBuf {
+/// The answer is checked rather than trusted: vswhere's banner and error
+/// messages also go to stdout, and a line of help text pasted into a path
+/// fails somewhere far from the cause. If nothing in the output is a Visual
+/// Studio, the whole output becomes the error message — it is the only thing
+/// that can explain why.
+fn vs_install_dir() -> PathBuf {
     let program_files = env::var_os("ProgramFiles(x86)")
         .or_else(|| env::var_os("ProgramFiles"))
         .map(PathBuf::from)
@@ -208,13 +250,9 @@ fn vcvarsall() -> PathBuf {
         .unwrap_or_else(|e| panic!("cannot run {}: {e}", vswhere.display()));
     let stdout = String::from_utf8_lossy(&output.stdout);
     for line in stdout.lines().map(str::trim).filter(|l| !l.is_empty()) {
-        let vcvars = PathBuf::from(line)
-            .join("VC")
-            .join("Auxiliary")
-            .join("Build")
-            .join("vcvarsall.bat");
-        if vcvars.is_file() {
-            return PathBuf::from(line);
+        let install = PathBuf::from(line);
+        if install.join("VC").join("Tools").join("MSVC").is_dir() {
+            return install;
         }
     }
     panic!(
@@ -225,12 +263,54 @@ fn vcvarsall() -> PathBuf {
     )
 }
 
-fn run(compiler: &str, args: &[String]) {
-    let status = Command::new(compiler)
-        .args(args)
+/// Where the Windows SDK is installed: `%WindowsSdkDir%` if the environment
+/// has it, else the default location shared by every SDK since Windows 10.
+fn windows_kits_dir() -> PathBuf {
+    if let Some(dir) = env::var_os("WindowsSdkDir").map(PathBuf::from) {
+        return dir;
+    }
+    let program_files = env::var_os("ProgramFiles(x86)")
+        .or_else(|| env::var_os("ProgramFiles"))
+        .map(PathBuf::from)
+        .expect("neither ProgramFiles(x86) nor ProgramFiles is set");
+    program_files.join("Windows Kits").join("10")
+}
+
+/// The name of the highest-versioned subdirectory of `dir` — `14.44.35207`
+/// under `VC\Tools\MSVC`, `10.0.26100.0` under a Windows SDK's `Include`.
+fn newest_version(dir: &Path, what: &str) -> String {
+    let entries = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("cannot read {what} at {}: {e}", dir.display()));
+    let mut newest: Option<(Vec<u64>, String)> = None;
+    for entry in entries.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let parts: Option<Vec<u64>> = name.split('.').map(|p| p.parse().ok()).collect();
+        let Some(parts) = parts else { continue };
+        if newest.as_ref().is_none_or(|(best, _)| parts > *best) {
+            newest = Some((parts, name));
+        }
+    }
+    match newest {
+        Some((_, name)) => name,
+        None => panic!("no versioned directory under {} ({what})", dir.display()),
+    }
+}
+
+/// A path for cl.exe: backslashes only. Cargo's `OUT_DIR` mixes separators,
+/// and a tool that reads `/` as an option prefix should never be handed one
+/// inside a path.
+fn win_path(path: &Path) -> String {
+    path.display().to_string().replace('/', "\\")
+}
+
+fn run(command: &mut Command, what: &str) {
+    let status = command
         .status()
-        .unwrap_or_else(|e| panic!("cannot run {compiler}: {e}"));
+        .unwrap_or_else(|e| panic!("cannot run {what}: {e}"));
     if !status.success() {
-        panic!("{compiler} failed with {status}");
+        panic!("{what} failed with {status}");
     }
 }
