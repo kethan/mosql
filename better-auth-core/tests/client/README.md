@@ -43,6 +43,8 @@ is the only piece of code here that is not Better Auth's.
 | magic link | 400 `MAIL_NOT_CONFIGURED` when there is no mailer |
 | admin | 403 `YOU_ARE_NOT_ALLOWED_TO_ACCESS_THIS` |
 | routes | 404 for an unknown path, 405 for the wrong method |
+| bearer | the token comes back in `set-auth-token`, no cookie is set, and the header and the body agree |
+| bearer | a token sent as `Authorization: Bearer` is accepted |
 
 ## Note on dependencies
 

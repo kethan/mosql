@@ -381,7 +381,7 @@ usernames, OAuth, the admin plugin, and the route table itself.
 $ ./tests/client/run.sh
 ```
 
-17 more, against the **published** Better Auth client: `better-auth@1.7.27`
+20 more, against the **published** Better Auth client: `better-auth@1.7.27`
 from npm, the same package an application installs, talking to the
 release binary over HTTP. They pin down the route names, the request
 bodies and the answer shapes — and the `set-auth-token` header that

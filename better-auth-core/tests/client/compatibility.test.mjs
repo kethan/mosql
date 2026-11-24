@@ -277,6 +277,52 @@ describe("the admin routes", () => {
 	});
 });
 
+describe("the bearer contract", () => {
+	test("the token comes back in a header, and no cookie is set", async () => {
+		const reply = await fetch(`${server.url}/api/auth/sign-up/email`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				email: "bearer@example.com",
+				password: PASSWORD,
+				name: "Bearer",
+			}),
+		});
+		assert.equal(reply.status, 200);
+		const token = reply.headers.get("set-auth-token");
+		assert.equal(typeof token, "string");
+		assert.ok(token.length > 40, "the header carries the token");
+		// The session is not kept by a cookie: there is none.
+		assert.equal(reply.headers.get("set-cookie"), null);
+	});
+
+	test("the token in the header is the one in the body", async () => {
+		const reply = await fetch(`${server.url}/api/auth/sign-in/email`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ email: "bearer@example.com", password: PASSWORD }),
+		});
+		assert.equal(reply.status, 200);
+		const body = await reply.json();
+		assert.equal(reply.headers.get("set-auth-token"), body.token);
+	});
+
+	test("a token sent as a bearer is accepted", async () => {
+		const signed = await fetch(`${server.url}/api/auth/sign-in/email`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ email: "bearer@example.com", password: PASSWORD }),
+		});
+		const { token } = await signed.json();
+		const reply = await fetch(`${server.url}/api/auth/get-session`, {
+			headers: { authorization: `Bearer ${token}` },
+		});
+		assert.equal(reply.status, 200);
+		const session = await reply.json();
+		assert.equal(session.user.email, "bearer@example.com");
+	});
+});
+
 describe("the routes themselves", () => {
 	test("the health route answers", async () => {
 		const data = await ok(client.$fetch("/ok"));
