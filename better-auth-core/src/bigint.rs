@@ -139,8 +139,8 @@ impl BigUint {
         debug_assert!(self.compare(other) != Ordering::Less);
         let mut limbs = Vec::with_capacity(self.limbs.len());
         let mut borrow = 0i64;
-        for index in 0..self.limbs.len() {
-            let a = self.limbs[index] as i64;
+        for (index, limb) in self.limbs.iter().enumerate() {
+            let a = *limb as i64;
             let b = *other.limbs.get(index).unwrap_or(&0) as i64;
             let mut difference = a - b - borrow;
             if difference < 0 {
