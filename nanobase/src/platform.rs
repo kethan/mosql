@@ -527,3 +527,183 @@ pub fn iso8601(secs: i64) -> String {
 
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
+
+// ------------------------------------------------------------------- apps ---
+
+/// A new app id: `app_` and 24 hex characters.
+fn new_app_id() -> String {
+    let bytes = random_bytes(12);
+    let mut s = String::with_capacity(28);
+    s.push_str("app_");
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
+impl Platform {
+    /// The index of an app, by id first and then by name.
+    ///
+    /// Ids are authoritative: a name can change, and a name is something a
+    /// person types, so it is only a fallback.
+    fn find_app_index(&self, key: &str) -> Option<usize> {
+        if let Some(index) = self.apps.iter().position(|a| a.id == key) {
+            return Some(index);
+        }
+        let wanted = key.trim().to_ascii_lowercase();
+        self.apps
+            .iter()
+            .position(|a| a.doc.app.name.trim().to_ascii_lowercase() == wanted)
+    }
+
+    /// An app by id, or by name when no id matches.
+    pub fn find_app(&self, key: &str) -> Option<&AppRecord> {
+        self.find_app_index(key).map(|i| &self.apps[i])
+    }
+
+    /// An app by name, case-insensitively, so `Todos` and `todos` are one app.
+    pub fn app_by_name(&self, name: &str) -> Option<&AppRecord> {
+        let wanted = name.trim().to_ascii_lowercase();
+        self.apps
+            .iter()
+            .find(|a| a.doc.app.name.trim().to_ascii_lowercase() == wanted)
+    }
+
+    /// Create an app from a document.
+    ///
+    /// The document is checked again here even though a caller usually reads it
+    /// through [`AppDoc::load`](crate::config::AppDoc::load): a document built
+    /// in code, or handed over by a future API route, has to pass the same gate
+    /// as one read from a file.
+    pub fn create_app(&mut self, doc: AppDoc, now: i64) -> Result<&AppRecord> {
+        doc.validate()?;
+        if let Some(problem) = crate::config::check_app_name(&doc.app.name) {
+            return Err(Error::unprocessable(format!("app name {problem}")));
+        }
+        let name = doc.app.name.trim().to_string();
+        if let Some(existing) = self.app_by_name(&name) {
+            return Err(Error::conflict(format!(
+                "an app named {:?} already exists ({})",
+                existing.doc.app.name, existing.id
+            )));
+        }
+        self.apps.push(AppRecord {
+            id: new_app_id(),
+            created_at: iso8601(now),
+            doc,
+        });
+        Ok(self.apps.last().expect("just pushed an app"))
+    }
+
+    /// Rename an app. The id does not change, so anything referring to the app
+    /// — a token, a config, a URL path — keeps working.
+    pub fn rename_app(&mut self, key: &str, new_name: &str) -> Result<&AppRecord> {
+        let index = self
+            .find_app_index(key)
+            .ok_or_else(|| Error::not_found(format!("no app for {key:?}")))?;
+        if let Some(problem) = crate::config::check_app_name(new_name) {
+            return Err(Error::unprocessable(format!("app name {problem}")));
+        }
+        let new_name = new_name.trim().to_string();
+        if let Some(other) = self.app_by_name(&new_name) {
+            if other.id != self.apps[index].id {
+                return Err(Error::conflict(format!(
+                    "an app named {new_name:?} already exists ({})",
+                    other.id
+                )));
+            }
+        }
+        self.apps[index].doc.app.name = new_name;
+        Ok(&self.apps[index])
+    }
+
+    /// Copy an app's configuration and schema to a new app, without its rows.
+    ///
+    /// Data is deliberately not copied: a clone is for trying a schema change
+    /// or standing up a staging copy of the shape, and duplicating a live
+    /// table is the surprise, not the expectation.
+    pub fn clone_app(&mut self, key: &str, new_name: &str, now: i64) -> Result<&AppRecord> {
+        let source = self
+            .find_app(key)
+            .ok_or_else(|| Error::not_found(format!("no app for {key:?}")))?;
+        let mut doc = source.doc.clone();
+        doc.app.name = new_name.trim().to_string();
+        doc.data.clear();
+        doc.meta.includes_data = false;
+        self.create_app(doc, now)
+    }
+
+    /// Delete an app.
+    ///
+    /// `confirm` must be the app's id. Deleting an app deletes its data, and
+    /// an id is not something a person types by accident — a name is, which is
+    /// exactly why a name is not accepted here.
+    pub fn remove_app(&mut self, key: &str, confirm: &str) -> Result<AppRecord> {
+        let index = self
+            .find_app_index(key)
+            .ok_or_else(|| Error::not_found(format!("no app for {key:?}")))?;
+        let id = self.apps[index].id.clone();
+        if confirm != id {
+            return Err(Error::bad_request(format!(
+                "refusing to delete {id}: pass --confirm {id}"
+            )));
+        }
+        Ok(self.apps.remove(index))
+    }
+
+    /// Replace an app's document, keeping its id and creation time.
+    ///
+    /// The import-over-an-existing-app path: a user with an edited export
+    /// wants the app to become that, not to gain a second app.
+    pub fn replace_app(&mut self, key: &str, doc: AppDoc) -> Result<&AppRecord> {
+        let index = self
+            .find_app_index(key)
+            .ok_or_else(|| Error::not_found(format!("no app for {key:?}")))?;
+        doc.validate()?;
+        let name = doc.app.name.trim().to_string();
+        if let Some(other) = self.app_by_name(&name) {
+            if other.id != self.apps[index].id {
+                return Err(Error::conflict(format!(
+                    "an app named {name:?} already exists ({})",
+                    other.id
+                )));
+            }
+        }
+        self.apps[index].doc = doc;
+        Ok(&self.apps[index])
+    }
+
+    /// App names, sorted case-insensitively, for listing.
+    pub fn app_names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self.apps.iter().map(|a| a.doc.app.name.as_str()).collect();
+        names.sort_unstable_by_key(|n| n.to_ascii_lowercase());
+        names
+    }
+}
+
+impl AppRecord {
+    /// Where this app's own data lives, under the platform's root.
+    ///
+    /// Each app gets a directory of its own, which is what "each app gets its
+    /// own database" means for the engines that are files rather than servers.
+    pub fn data_dir(&self, root: &Path) -> PathBuf {
+        root.join("apps").join(&self.id)
+    }
+
+    /// The SQLite file for this app, when its database is `sqlite` with no
+    /// explicit path.
+    pub fn sqlite_path(&self, root: &Path) -> PathBuf {
+        self.data_dir(root).join("app.db")
+    }
+}
+
+impl FileStore {
+    /// The directory the platform file sits in — the root that per-app data
+    /// directories hang off.
+    pub fn root(&self) -> PathBuf {
+        self.path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+}

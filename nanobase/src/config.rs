@@ -134,6 +134,16 @@ impl fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
+/// A document problem is the caller's mistake, so it becomes the 422 the
+/// platform answers with. Every field path travels in the message, which is
+/// what makes the error actionable; [`ConfigError::to_wire`] is the form that
+/// also carries them as a map.
+impl From<ConfigError> for uflite::error::Error {
+    fn from(e: ConfigError) -> Self {
+        uflite::error::Error::unprocessable(e.to_string())
+    }
+}
+
 /// `meta` — what wrote the file, and what it contains.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Meta {
@@ -740,6 +750,27 @@ fn req_str<'a>(o: &'a Object, key: &str, path: &str, issues: &mut Vec<Issue>) ->
     }
 }
 
+/// The rule an app's display name follows, shared by the config validator and
+/// by the platform's rename and create paths so the two cannot disagree.
+///
+/// Returns the problem when there is one. Letters, digits, spaces, `-` and `_`
+/// are allowed: this is a name a person types, not a database identifier.
+pub fn check_app_name(name: &str) -> Option<&'static str> {
+    if name.is_empty() {
+        return Some("is required");
+    }
+    if name.chars().count() > 63 {
+        return Some("must be 63 characters or fewer");
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_'))
+    {
+        return Some("may only contain letters, digits, spaces, - and _");
+    }
+    None
+}
+
 /// `[A-Za-z][A-Za-z0-9_]{0,62}` — a name that is safe as a table or column
 /// on every engine once quoted, which `mosql` does.
 ///
@@ -778,22 +809,8 @@ impl AppDoc {
     }
 
     fn check(&self, issues: &mut Vec<Issue>) {
-        let name = &self.app.name;
-        if name.is_empty() {
-            issues.push(Issue::new("app.name", "is required"));
-        } else {
-            if name.chars().count() > 63 {
-                issues.push(Issue::new("app.name", "must be 63 characters or fewer"));
-            }
-            if !name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_'))
-            {
-                issues.push(Issue::new(
-                    "app.name",
-                    "may only contain letters, digits, spaces, - and _",
-                ));
-            }
+        if let Some(problem) = check_app_name(&self.app.name) {
+            issues.push(Issue::new("app.name", problem));
         }
 
         if self.config.auth.is_enabled() {

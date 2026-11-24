@@ -13,7 +13,7 @@ That is a requirement, not an accident: the platform is meant to be small
 enough to ship as a single binary, and it is built in an environment with no
 registry access at all.
 
-Release binary today: **~520 KB**, against a 3 MB budget that
+Release binary today: **~548 KB**, against a 3 MB budget that
 [`verify.sh`](verify.sh) enforces.
 
 ## Status
@@ -23,9 +23,10 @@ Release binary today: **~520 KB**, against a 3 MB budget that
 | App documents (read, validate, write) | done — 44 tests |
 | Secret handling (`SECRET_*`, redaction) | done |
 | Owner account: first run, sign in, tokens | done — 43 tests |
+| Creating apps: new, import, list, show, export, rename, clone, remove | done — 26 tests |
 | Platform store (JSON file today) | done |
-| Creating apps through the platform | next |
 | HTTP server and routes | next |
+| Querying an app's own database | next |
 
 ## What an app document is
 
@@ -131,6 +132,56 @@ id, email, role, issue and expiry. No database URL, no storage key, no rule set
 — a token is handed to a browser, and anyone holding it can read every byte.
 Per-app configuration is resolved server-side from the app id.
 
+## Apps
+
+An app is one document plus an identity: an id, a name, and a directory of its
+own for whatever data it holds.
+
+```
+$ nanobase app new todos
+Created todos
+  id:        app_e553fa2d3fb4fabf580ff7be
+  data:      /tmp/nb2/apps/app_e553fa2d3fb4fabf580ff7be
+  database:  sqlite (default — edit the document to change it)
+
+$ nanobase app import notes.json
+Imported notes
+  id: app_e4ad43bf1f84c6c5a2bfa212
+
+$ nanobase app list
+NAME                           ID                       TYPE       DATABASE
+notes                          app_e4ad43bf1f84c6c5a2bfa212 local      sqlite
+todo-list                      app_e553fa2d3fb4fabf580ff7be local      sqlite
+```
+
+**Each app gets its own directory** under the platform's root — that is what
+"each app gets its own database" means for the engines that are files rather
+than servers. For SQLite with no explicit path the app's database is
+`apps/<id>/app.db`.
+
+**Names are unique, ids are forever.** Renaming keeps the id, so a token, a
+config or a URL path referring to the app keeps working. Name comparisons are
+case-insensitive: `Todos` and `todos` are one app.
+
+**`clone` copies the shape, not the rows.** It is for trying a schema change or
+standing up a staging copy of the structure; duplicating a live table is the
+surprise, not the expectation.
+
+**Deleting needs the id, not the name.** Deleting removes data, and a name is
+something a person types by accident — an id is not.
+
+```
+$ nanobase app remove notes
+nanobase: refusing to delete app_e4ad43bf1f84c6c5a2bfa212:
+          pass --confirm app_e4ad43bf1f84c6c5a2bfa212
+```
+
+The app's data directory is deliberately left in place, so a deletion can be
+undone by hand if it was a mistake.
+
+**Importing over an existing name replaces it** rather than creating a second
+app called the same thing — that is what a user with an edited export means.
+
 ## CLI
 
 ```
@@ -138,6 +189,14 @@ nanobase init   [--email E] [--password P]   create the owner (prompts if omitte
 nanobase login  <email> [--password P]       print a session token
 nanobase me     [--token T]                  show who a token belongs to
 nanobase status                            setup state, app count
+nanobase app new <name>                    create an empty app
+nanobase app import <file>                 create an app from a document
+nanobase app list                          id, name, engine
+nanobase app show <id|name>                everything about one app
+nanobase app export <id|name> [--out F] [--redact]
+nanobase app rename <id|name> <new-name>
+nanobase app clone <id|name> <new-name>
+nanobase app remove <id|name> --confirm <id>
 nanobase new <name> [--out <file>]           write a new, empty app document
 nanobase validate <file>                     check a document, list every problem
 nanobase redact <file> [--out <file>]        copy a document without its secrets

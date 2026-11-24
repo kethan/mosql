@@ -25,6 +25,16 @@ USAGE:
     nanobase login  <email> [--password P] [--data FILE]       print a session token
     nanobase me     [--token T] [--data FILE]                  show who a token belongs to
     nanobase status [--data FILE]                              setup state, app count
+
+APPS:
+    nanobase app new <name>                                   create an empty app
+    nanobase app import <file>                                create an app from a document
+    nanobase app list                                         id, name, engine
+    nanobase app show <id|name>                               everything about one app
+    nanobase app export <id|name> [--out F] [--redact]        write an app's document
+    nanobase app rename <id|name> <new-name>
+    nanobase app clone <id|name> <new-name>                   copy config and schema, not rows
+    nanobase app remove <id|name> --confirm <id>
     nanobase new <name> [--out <file>]                         write a new, empty app document
     nanobase validate <file>                                   check a document, list every problem
     nanobase redact <file> [--out <file>]                      copy a document without its secrets
@@ -43,7 +53,9 @@ EXAMPLES:
     nanobase init
     nanobase init --email ada@example.com --password "$(cat ~/.nanobase-pass)"
     nanobase login ada@example.com
-    nanobase new todos --out todos.json
+    nanobase app new todos
+    nanobase app import todos.json
+    nanobase app export todos --out todos.json --redact
     nanobase validate todos.json
 "#;
 
@@ -68,6 +80,7 @@ fn main() -> ExitCode {
         "login" => cmd_login(rest),
         "me" => cmd_me(rest),
         "status" => cmd_status(rest),
+        "app" => cmd_app(rest),
         "new" => cmd_new(rest),
         "validate" => cmd_validate(rest),
         "redact" => cmd_redact(rest),
@@ -82,55 +95,70 @@ fn main() -> ExitCode {
 
 // ------------------------------------------------------------------ args ---
 
-/// Split `--flag value` pairs from positional arguments.
+/// Split flags from positional arguments.
 ///
-/// Returns the flags seen, the positionals, and whether an unknown flag or a
-/// missing value was passed — the caller turns that into a usage error rather
-/// than every command re-implementing the check.
+/// `--flag value` and a bare `--flag` are different things, so both lists are
+/// given: flags that take a value, and flags that stand alone. A caller that
+/// forgets one gets a usage error instead of a silent misparse.
 struct Parsed {
-    flags: Vec<(String, String)>,
+    values: Vec<(String, String)>,
+    flags: Vec<String>,
     positional: Vec<String>,
     error: Option<String>,
 }
 
 impl Parsed {
     fn get(&self, name: &str) -> Option<&str> {
-        self.flags
+        self.values
             .iter()
             .find(|(k, _)| k == name)
             .map(|(_, v)| v.as_str())
     }
 
+    fn has(&self, name: &str) -> bool {
+        self.flags.iter().any(|f| f == name)
+    }
+
     fn first(&self) -> Option<&str> {
         self.positional.first().map(String::as_str)
     }
+
+    fn second(&self) -> Option<&str> {
+        self.positional.get(1).map(String::as_str)
+    }
 }
 
-fn parse_args(rest: &[String], known: &[&str]) -> Parsed {
-    let mut flags = Vec::new();
+fn parse_args(rest: &[String], valued: &[&str], flags: &[&str]) -> Parsed {
+    let mut values = Vec::new();
+    let mut seen_flags = Vec::new();
     let mut positional = Vec::new();
     let mut error = None;
     let mut i = 0;
     while i < rest.len() {
         let arg = rest[i].as_str();
         if let Some(name) = arg.strip_prefix("--") {
-            if !known.contains(&name) {
+            if valued.contains(&name) {
+                if i + 1 >= rest.len() {
+                    error = Some(format!("--{name} needs a value"));
+                    break;
+                }
+                values.push((name.to_string(), rest[i + 1].clone()));
+                i += 2;
+            } else if flags.contains(&name) {
+                seen_flags.push(name.to_string());
+                i += 1;
+            } else {
                 error = Some(format!("unknown option --{name}"));
                 break;
             }
-            if i + 1 >= rest.len() {
-                error = Some(format!("--{name} needs a value"));
-                break;
-            }
-            flags.push((name.to_string(), rest[i + 1].clone()));
-            i += 2;
         } else {
             positional.push(arg.to_string());
             i += 1;
         }
     }
     Parsed {
-        flags,
+        values,
+        flags: seen_flags,
         positional,
         error,
     }
@@ -156,7 +184,7 @@ fn load_platform(store: &FileStore) -> Result<Platform, u8> {
 // -------------------------------------------------------------- platform ---
 
 fn cmd_init(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["email", "password", "data"]);
+    let parsed = parse_args(rest, &["email", "password", "data"], &[]);
     if let Some(e) = parsed.error {
         eprintln!("nanobase init: {e}");
         return 2;
@@ -236,7 +264,7 @@ fn cmd_init(rest: &[String]) -> u8 {
 }
 
 fn cmd_login(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["password", "data"]);
+    let parsed = parse_args(rest, &["password", "data"], &[]);
     if let Some(e) = parsed.error {
         eprintln!("nanobase login: {e}");
         return 2;
@@ -291,7 +319,7 @@ fn cmd_login(rest: &[String]) -> u8 {
 }
 
 fn cmd_me(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["token", "data"]);
+    let parsed = parse_args(rest, &["token", "data"], &[]);
     if let Some(e) = parsed.error {
         eprintln!("nanobase me: {e}");
         return 2;
@@ -324,7 +352,7 @@ fn cmd_me(rest: &[String]) -> u8 {
 }
 
 fn cmd_status(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["data"]);
+    let parsed = parse_args(rest, &["data"], &[]);
     if let Some(e) = parsed.error {
         eprintln!("nanobase status: {e}");
         return 2;
@@ -375,7 +403,7 @@ fn prompt(label: &str) -> Option<String> {
 // ----------------------------------------------------------- app documents ---
 
 fn cmd_new(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["out"]);
+    let parsed = parse_args(rest, &["out"], &[]);
     if let Some(e) = parsed.error {
         eprintln!("nanobase new: {e}");
         return 2;
@@ -393,7 +421,7 @@ fn cmd_new(rest: &[String]) -> u8 {
 }
 
 fn cmd_validate(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["out"]);
+    let parsed = parse_args(rest, &["out"], &[]);
     if let Some(e) = parsed.error {
         eprintln!("nanobase validate: {e}");
         return 2;
@@ -456,7 +484,7 @@ fn cmd_validate(rest: &[String]) -> u8 {
 }
 
 fn cmd_redact(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["out"]);
+    let parsed = parse_args(rest, &["out"], &[]);
     if let Some(e) = parsed.error {
         eprintln!("nanobase redact: {e}");
         return 2;
@@ -503,4 +531,377 @@ fn write_out(path: Option<&str>, body: &str) -> u8 {
             }
         },
     }
+}
+
+// ------------------------------------------------------------------- apps ---
+
+fn cmd_app(rest: &[String]) -> u8 {
+    let Some(sub) = rest.first().map(String::as_str) else {
+        eprintln!("nanobase app: a subcommand is required\n");
+        eprintln!("  new <name> | import <file> | list | show <id|name> | export <id|name>");
+        eprintln!("  rename <id|name> <new-name> | clone <id|name> <new-name>");
+        eprintln!("  remove <id|name> --confirm <id>");
+        return 2;
+    };
+    let args = &rest[1..];
+    match sub {
+        "new" => app_new(args),
+        "import" => app_import(args),
+        "list" => app_list(args),
+        "show" => app_show(args),
+        "export" => app_export(args),
+        "rename" => app_rename(args),
+        "clone" => app_clone(args),
+        "remove" | "rm" | "delete" => app_remove(args),
+        other => {
+            eprintln!("nanobase app: unknown subcommand {other:?}\n");
+            eprintln!("  new | import | list | show | export | rename | clone | remove");
+            2
+        }
+    }
+}
+
+/// Load the platform, or report why that is impossible.
+fn platform_or_exit(parsed: &Parsed) -> Option<Platform> {
+    let store = FileStore::new(data_path(parsed));
+    match load_platform(&store) {
+        Ok(p) => Some(p),
+        Err(code) => {
+            let _ = code;
+            None
+        }
+    }
+}
+
+fn save_or_exit(parsed: &Parsed, platform: &Platform) -> Option<()> {
+    let store = FileStore::new(data_path(parsed));
+    match block_on(store.save(platform)) {
+        Ok(()) => Some(()),
+        Err(e) => {
+            eprintln!("nanobase: {e}");
+            None
+        }
+    }
+}
+
+fn app_new(rest: &[String]) -> u8 {
+    let parsed = parse_args(rest, &["data"], &[]);
+    if let Some(e) = parsed.error {
+        eprintln!("nanobase app new: {e}");
+        return 2;
+    }
+    let Some(name) = parsed.first().map(str::to_string) else {
+        eprintln!("nanobase app new: an app name is required\n");
+        eprintln!("example: nanobase app new todos");
+        return 2;
+    };
+    if let Some(problem) = nanobase::config::check_app_name(&name) {
+        eprintln!("nanobase app new: app name {problem}");
+        return 1;
+    }
+    let mut platform = match platform_or_exit(&parsed) {
+        Some(p) => p,
+        None => return 1,
+    };
+    if platform.needs_setup() {
+        eprintln!("nanobase: this platform has no owner yet; run `nanobase init` first.");
+        return 1;
+    }
+    let doc = AppDoc::empty(name);
+    // The borrow of `platform` ends with the match, so it can be saved after.
+    let (id, name, created) = match platform.create_app(doc, now_secs()) {
+        Ok(app) => (
+            app.id.clone(),
+            app.doc.app.name.clone(),
+            app.created_at.clone(),
+        ),
+        Err(e) => {
+            eprintln!("nanobase: {e}");
+            return 1;
+        }
+    };
+    if save_or_exit(&parsed, &platform).is_none() {
+        return 1;
+    }
+    println!("Created {name}");
+    println!("  id:        {id}");
+    println!("  created:   {created}");
+    println!(
+        "  data:      {}",
+        FileStore::new(data_path(&parsed))
+            .root()
+            .join("apps")
+            .join(&id)
+            .display()
+    );
+    println!("  database:  sqlite (default — edit the document to change it)");
+    0
+}
+
+fn app_import(rest: &[String]) -> u8 {
+    let parsed = parse_args(rest, &["data"], &[]);
+    if let Some(e) = parsed.error {
+        eprintln!("nanobase app import: {e}");
+        return 2;
+    }
+    let Some(path) = parsed.first().map(str::to_string) else {
+        eprintln!("nanobase app import: a file path is required\n");
+        eprintln!("example: nanobase app import todos.json");
+        return 2;
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("nanobase: cannot read {path}: {e}");
+            return 1;
+        }
+    };
+    let secrets = Secrets::from_env();
+    let doc = match AppDoc::load(&text, &secrets) {
+        Ok(d) => d,
+        Err(e) => return report_config(&e),
+    };
+    let mut platform = match platform_or_exit(&parsed) {
+        Some(p) => p,
+        None => return 1,
+    };
+    if platform.needs_setup() {
+        eprintln!("nanobase: this platform has no owner yet; run `nanobase init` first.");
+        return 1;
+    }
+    // Importing over an app of the same name replaces it: that is what a user
+    // with an edited export means, and creating a second app called the same
+    // thing would be the surprise.
+    if let Some(existing) = platform.app_by_name(&doc.app.name) {
+        let id = existing.id.clone();
+        let name = doc.app.name.clone();
+        if let Err(e) = platform.replace_app(&id, doc) {
+            eprintln!("nanobase: {e}");
+            return 1;
+        }
+        if save_or_exit(&parsed, &platform).is_none() {
+            return 1;
+        }
+        println!("Updated {name} ({id})");
+        return 0;
+    }
+    let (name, id) = match platform.create_app(doc, now_secs()) {
+        Ok(app) => (app.doc.app.name.clone(), app.id.clone()),
+        Err(e) => {
+            eprintln!("nanobase: {e}");
+            return 1;
+        }
+    };
+    if save_or_exit(&parsed, &platform).is_none() {
+        return 1;
+    }
+    println!("Imported {name}");
+    println!("  id: {id}");
+    0
+}
+
+fn app_list(rest: &[String]) -> u8 {
+    let parsed = parse_args(rest, &["data"], &[]);
+    if let Some(e) = parsed.error {
+        eprintln!("nanobase app list: {e}");
+        return 2;
+    }
+    let platform = match platform_or_exit(&parsed) {
+        Some(p) => p,
+        None => return 1,
+    };
+    if platform.apps.is_empty() {
+        println!("no apps yet — `nanobase app new <name>` creates one");
+        return 0;
+    }
+    println!("NAME                           ID                       TYPE       DATABASE");
+    for name in platform.app_names() {
+        let app = platform.app_by_name(name).expect("listed name exists");
+        println!(
+            "{:<30} {:<24} {:<10} {}",
+            app.doc.app.name,
+            app.id,
+            app.doc.app.app_type.as_str(),
+            app.doc.config.database.raw_type
+        );
+    }
+    0
+}
+
+fn app_show(rest: &[String]) -> u8 {
+    let parsed = parse_args(rest, &["data"], &[]);
+    if let Some(e) = parsed.error {
+        eprintln!("nanobase app show: {e}");
+        return 2;
+    }
+    let Some(key) = parsed.first().map(str::to_string) else {
+        eprintln!("nanobase app show: an app id or name is required");
+        return 2;
+    };
+    let platform = match platform_or_exit(&parsed) {
+        Some(p) => p,
+        None => return 1,
+    };
+    let Some(app) = platform.find_app(&key) else {
+        eprintln!("nanobase: no app for {key:?}");
+        return 1;
+    };
+    let root = FileStore::new(data_path(&parsed)).root();
+    println!("name:       {}", app.doc.app.name);
+    println!("id:         {}", app.id);
+    println!("type:       {}", app.doc.app.app_type.as_str());
+    println!("created:    {}", app.created_at);
+    println!("database:   {}", app.doc.config.database.raw_type);
+    println!("storage:    {}", app.doc.config.storage.kind.as_str());
+    println!(
+        "auth:       {}",
+        if app.doc.config.auth.is_enabled() {
+            "enabled"
+        } else {
+            "off"
+        }
+    );
+    println!(
+        "acl:        {}",
+        if app.doc.config.acl.enabled {
+            "enabled"
+        } else {
+            "off"
+        }
+    );
+    println!("data dir:   {}", app.data_dir(&root).display());
+    println!("schema:     {} collection(s)", app.doc.schema.len());
+    for (name, def) in &app.doc.schema {
+        println!("  {name}: {} column(s)", def.columns.len());
+    }
+    let rows: usize = app.doc.data.values().map(Vec::len).sum();
+    println!("seed rows:  {rows}");
+    0
+}
+
+fn app_export(rest: &[String]) -> u8 {
+    let parsed = parse_args(rest, &["out", "data"], &["redact"]);
+    if let Some(e) = parsed.error {
+        eprintln!("nanobase app export: {e}");
+        return 2;
+    }
+    let Some(key) = parsed.first().map(str::to_string) else {
+        eprintln!("nanobase app export: an app id or name is required");
+        return 2;
+    };
+    let platform = match platform_or_exit(&parsed) {
+        Some(p) => p,
+        None => return 1,
+    };
+    let Some(app) = platform.find_app(&key) else {
+        eprintln!("nanobase: no app for {key:?}");
+        return 1;
+    };
+    let body = if parsed.has("redact") {
+        app.doc.to_json_pretty_redacted()
+    } else {
+        app.doc.to_json_pretty()
+    };
+    write_out(parsed.get("out"), &body)
+}
+
+fn app_rename(rest: &[String]) -> u8 {
+    let parsed = parse_args(rest, &["data"], &[]);
+    if let Some(e) = parsed.error {
+        eprintln!("nanobase app rename: {e}");
+        return 2;
+    }
+    let (Some(key), Some(new_name)) = (
+        parsed.first().map(str::to_string),
+        parsed.second().map(str::to_string),
+    ) else {
+        eprintln!("nanobase app rename: needs an app and a new name\n");
+        eprintln!("example: nanobase app rename todos todo-list");
+        return 2;
+    };
+    let mut platform = match platform_or_exit(&parsed) {
+        Some(p) => p,
+        None => return 1,
+    };
+    let id = match platform.rename_app(&key, &new_name) {
+        Ok(app) => app.id.clone(),
+        Err(e) => {
+            eprintln!("nanobase: {e}");
+            return 1;
+        }
+    };
+    if save_or_exit(&parsed, &platform).is_none() {
+        return 1;
+    }
+    println!("Renamed to {new_name} ({id})");
+    0
+}
+
+fn app_clone(rest: &[String]) -> u8 {
+    let parsed = parse_args(rest, &["data"], &[]);
+    if let Some(e) = parsed.error {
+        eprintln!("nanobase app clone: {e}");
+        return 2;
+    }
+    let (Some(key), Some(new_name)) = (
+        parsed.first().map(str::to_string),
+        parsed.second().map(str::to_string),
+    ) else {
+        eprintln!("nanobase app clone: needs an app and a new name\n");
+        eprintln!("example: nanobase app clone todos todos-staging");
+        return 2;
+    };
+    let mut platform = match platform_or_exit(&parsed) {
+        Some(p) => p,
+        None => return 1,
+    };
+    let (id, name) = match platform.clone_app(&key, &new_name, now_secs()) {
+        Ok(app) => (app.id.clone(), app.doc.app.name.clone()),
+        Err(e) => {
+            eprintln!("nanobase: {e}");
+            return 1;
+        }
+    };
+    if save_or_exit(&parsed, &platform).is_none() {
+        return 1;
+    }
+    println!("Cloned to {name} ({id})");
+    println!("  configuration and schema only; rows were not copied");
+    0
+}
+
+fn app_remove(rest: &[String]) -> u8 {
+    let parsed = parse_args(rest, &["confirm", "data"], &[]);
+    if let Some(e) = parsed.error {
+        eprintln!("nanobase app remove: {e}");
+        return 2;
+    }
+    let Some(key) = parsed.first().map(str::to_string) else {
+        eprintln!("nanobase app remove: an app id or name is required");
+        return 2;
+    };
+    let mut platform = match platform_or_exit(&parsed) {
+        Some(p) => p,
+        None => return 1,
+    };
+    let confirm = parsed.get("confirm").unwrap_or_default();
+    let removed = match platform.remove_app(&key, confirm) {
+        Ok(app) => app,
+        Err(e) => {
+            eprintln!("nanobase: {e}");
+            return 1;
+        }
+    };
+    if save_or_exit(&parsed, &platform).is_none() {
+        return 1;
+    }
+    println!("Deleted {} ({})", removed.doc.app.name, removed.id);
+    println!("  the app's data directory was left in place:");
+    println!(
+        "  {}",
+        removed
+            .data_dir(&FileStore::new(data_path(&parsed)).root())
+            .display()
+    );
+    0
 }
