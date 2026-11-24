@@ -20,6 +20,7 @@ pub mod config;
 pub mod crypto;
 pub mod jwt;
 pub mod platform;
+pub mod service;
 pub mod sqlite;
 pub mod store;
 
@@ -33,6 +34,7 @@ pub use platform::{
     verify_login, AppRecord, BoxFuture, FileStore, MemoryStore, PasswordHash, Platform,
     PlatformStore, User, MIN_PASSWORD_LEN, PBKDF2_ITERATIONS, ROLE_OWNER, SESSION_TTL_SECS,
 };
+pub use service::{CustomMethod, Event, EventContext, Hook, Hooks, Listener, Phase, Service};
 pub use sqlite::{Connection, Row, Statement};
 pub use store::SqliteStore;
 

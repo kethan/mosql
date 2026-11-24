@@ -10,12 +10,13 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use nanobase::platform::PlatformStore;
 use nanobase::SqliteStore;
 use nanobase::{
     check_email, create_owner, issue_token, now_secs, verify_login, AppDoc, ConfigError, Platform,
-    Secrets, VERSION,
+    Secrets, Service, VERSION,
 };
 use uflite::db::block_on;
 
@@ -570,6 +571,21 @@ fn cmd_app(rest: &[String]) -> u8 {
 }
 
 /// Load the platform, or report why that is impossible.
+/// The app service, over the same store the command line uses.
+///
+/// Every app command goes through it, so the command line and the API are
+/// one code path: an event fires for a change made either way.
+fn service_or_exit(parsed: &Parsed) -> Option<Service> {
+    let store = SqliteStore::new(data_path(parsed));
+    match Service::new("apps", Arc::new(store)) {
+        Ok(svc) => Some(svc),
+        Err(e) => {
+            eprintln!("nanobase: {e}");
+            None
+        }
+    }
+}
+
 fn platform_or_exit(parsed: &Parsed) -> Option<Platform> {
     let store = SqliteStore::new(data_path(parsed));
     match load_platform(&store) {
@@ -607,30 +623,39 @@ fn app_new(rest: &[String]) -> u8 {
         eprintln!("nanobase app new: app name {problem}");
         return 1;
     }
-    let mut platform = match platform_or_exit(&parsed) {
-        Some(p) => p,
+    let service = match service_or_exit(&parsed) {
+        Some(svc) => svc,
         None => return 1,
     };
-    if platform.needs_setup() {
+    if service.platform().map(|p| p.needs_setup()).unwrap_or(false) {
         eprintln!("nanobase: this platform has no owner yet; run `nanobase init` first.");
         return 1;
     }
     let doc = AppDoc::empty(name);
-    // The borrow of `platform` ends with the match, so it can be saved after.
-    let (id, name, created) = match platform.create_app(doc, now_secs()) {
-        Ok(app) => (
-            app.id.clone(),
-            app.doc.app.name.clone(),
-            app.created_at.clone(),
-        ),
+    let record = match service.create(doc) {
+        Ok(r) => r,
         Err(e) => {
             eprintln!("nanobase: {e}");
             return 1;
         }
     };
-    if save_or_exit(&parsed, &platform).is_none() {
-        return 1;
-    }
+    let id = record
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let name = record
+        .get("doc")
+        .and_then(|d| d.get("app"))
+        .and_then(|a| a.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let created = record
+        .get("createdAt")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
     println!("Created {name}");
     println!("  id:        {id}");
     println!("  created:   {created}");
@@ -888,27 +913,38 @@ fn app_remove(rest: &[String]) -> u8 {
         eprintln!("nanobase app remove: an app id or name is required");
         return 2;
     };
-    let mut platform = match platform_or_exit(&parsed) {
-        Some(p) => p,
+    let service = match service_or_exit(&parsed) {
+        Some(svc) => svc,
         None => return 1,
     };
     let confirm = parsed.get("confirm").unwrap_or_default();
-    let removed = match platform.remove_app(&key, confirm) {
-        Ok(app) => app,
+    let removed = match service.remove(&key, confirm) {
+        Ok(r) => r,
         Err(e) => {
             eprintln!("nanobase: {e}");
             return 1;
         }
     };
-    if save_or_exit(&parsed, &platform).is_none() {
-        return 1;
-    }
-    println!("Deleted {} ({})", removed.doc.app.name, removed.id);
+    let id = removed
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let name = removed
+        .get("doc")
+        .and_then(|d| d.get("app"))
+        .and_then(|a| a.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    println!("Deleted {name} ({id})");
     println!("  the app's data directory was left in place:");
     println!(
         "  {}",
-        removed
-            .data_dir(&SqliteStore::new(data_path(&parsed)).root())
+        SqliteStore::new(data_path(&parsed))
+            .root()
+            .join("apps")
+            .join(&id)
             .display()
     );
     0
