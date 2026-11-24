@@ -41,11 +41,15 @@ stage() {
   status=${PIPESTATUS[0]}
   set -e
   if (( status != 0 )); then
+    # The colour codes have to go first: Actions runs cargo in colour, and
+    # a line that begins with an escape sequence matches nothing at all.
+    sed -i 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$log"
     local important errors
-    important='\[better-auth-core\]|fatal error|error C[0-9]+|LNK[0-9]+|Could not find|cannot open|not recognized|^test .* \.\.\. FAILED|^---- |panicked at|assertion .*failed|^  (left|right):'
+    important='fatal error|error C[0-9]+|LNK[0-9]+|Could not find|cannot open|not recognized|^test .* \.\.\. FAILED|^---- |panicked at|assertion .*failed|^  (left|right):'
     errors='^(error|warning)(\[|:)'
-    { grep -E -A1 "$important" "$log"; grep -E -A2 "$errors" "$log"; } \
-      | grep -vE '^--$|^$|^ *note: run with' | tr -d '`\r' \
+    { grep -E -A1 "$important" "$log"; grep -E -A3 "$errors" "$log"; } \
+      | grep -vE '^--$|^$|^ *note: run with|^ *= note:|^ *\||^[0-9]+ *\|' \
+      | tr -d '`' \
       | awk '!seen[$0]++' | head -n 10 \
       | sed "s/^/::error title=$name::/" >&2 || true
     exit "$status"
