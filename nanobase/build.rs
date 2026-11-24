@@ -146,7 +146,7 @@ fn build_msvc(out: &Path, target: &str, src: &Path, obj: &Path, defines: &[&str]
     // broken toolchain can explain itself, and these lines are what CI shows.
     let log = out.join("build-sqlite.log");
     let mut script = String::from("@echo off\r\n");
-    script.push_str("[nanobase] setting up the MSVC environment\r\n");
+    script.push_str("echo [nanobase] setting up the MSVC environment\r\n");
     script.push_str(&format!(
         "call \"{}\" {arch} >\"{}\" 2>&1\r\n",
         win_path(&vcvarsall()),
@@ -162,7 +162,7 @@ fn build_msvc(out: &Path, target: &str, src: &Path, obj: &Path, defines: &[&str]
     script.push_str(
         "if errorlevel 1 (echo [nanobase] cl.exe failed with exit code %errorlevel% & exit /b 1)\r\n",
     );
-    script.push_str("[nanobase] sqlite3.obj built\r\n");
+    script.push_str("echo [nanobase] sqlite3.obj built\r\n");
 
     let script_path = out.join("build-sqlite.bat");
     std::fs::write(&script_path, script).expect("cannot write build-sqlite.bat");
@@ -179,6 +179,12 @@ fn win_path(path: &Path) -> String {
 }
 
 /// The `vcvarsall.bat` of the newest Visual Studio with the C++ tools.
+///
+/// `vswhere` is asked for the installation path and the answer is checked
+/// rather than trusted: its help text and error messages also go to stdout,
+/// and a path that is pasted into a batch file unchecked turns those lines
+/// into commands. If nothing in the output is a Visual Studio, the whole
+/// output is the error message — it is the only thing that can explain why.
 fn vcvarsall() -> PathBuf {
     let program_files = env::var_os("ProgramFiles(x86)")
         .or_else(|| env::var_os("ProgramFiles"))
@@ -193,9 +199,6 @@ fn vcvarsall() -> PathBuf {
             "-latest",
             "-products",
             "*",
-            // UTF-8 regardless of the console's code page, so the path below
-            // is read correctly even when it contains non-ASCII characters.
-            "-utf",
             "-requires",
             "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
             "-property",
@@ -203,17 +206,23 @@ fn vcvarsall() -> PathBuf {
         ])
         .output()
         .unwrap_or_else(|e| panic!("cannot run {}: {e}", vswhere.display()));
-    let install = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    assert!(
-        !install.is_empty(),
-        "{} found no Visual Studio with the C++ tools",
-        vswhere.display()
-    );
-    PathBuf::from(install)
-        .join("VC")
-        .join("Auxiliary")
-        .join("Build")
-        .join("vcvarsall.bat")
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let vcvars = PathBuf::from(line)
+            .join("VC")
+            .join("Auxiliary")
+            .join("Build")
+            .join("vcvarsall.bat");
+        if vcvars.is_file() {
+            return PathBuf::from(line);
+        }
+    }
+    panic!(
+        "{} found no Visual Studio with the C++ tools. It said:\n{}\n{}",
+        vswhere.display(),
+        stdout.trim(),
+        String::from_utf8_lossy(&output.stderr).trim()
+    )
 }
 
 fn run(compiler: &str, args: &[String]) {
