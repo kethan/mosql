@@ -20,6 +20,7 @@ pub mod api;
 pub mod client;
 pub mod config;
 pub mod crypto;
+pub mod db;
 pub mod http;
 pub mod httpclient;
 pub mod jwt;
@@ -35,6 +36,7 @@ pub use config::{
     ColumnType, ConfigError, Data, DatabaseConfig, DbKind, Features, Issue, LocalStorage, Meta,
     Provider, RedisConfig, S3Storage, Schema, Secrets, StorageConfig, StorageKind,
 };
+pub use db::{AppDb, DbOp, DbRequest, DbResponse, DbServer};
 pub use http::{ApiError, Incoming, Request, Response};
 pub use httpclient::{CurlHttpClient, HttpClient, HttpRequest, HttpResponse, PlainHttpClient};
 pub use platform::{

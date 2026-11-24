@@ -29,7 +29,9 @@ budget that [`verify.sh`](verify.sh) enforces.
 | Service layer: events, hooks, custom methods | done — 7 tests |
 | HTTP API and the server | done — 19 tests |
 | Command line as an API client | done |
-| Querying an app's own database | next |
+| App database: memory, SQLite, HTTP, TCP | done — 6 tests |
+| Serving an app's rows over the API | next |
+| SQL engines (Postgres, MySQL) | next — needs a driver |
 
 ## What an app document is
 
@@ -236,6 +238,29 @@ $ curl -s -X POST localhost:8090/api/auth/login \
     -d '{"email":"ada@example.com","password":"correct horse"}'
 {"token":"eyJ…","user":{"id":"…","email":"ada@example.com",…}}
 ```
+
+## Where an app's rows live
+
+An app's document says which engine its rows are in. The rows themselves
+are collections of documents — the same shape everywhere — so the code
+that serves an app does not change when the engine does.
+
+| engine | where the rows are |
+|---|---|
+| `memory` | in the process, and gone when it stops |
+| `sqlite` | a local file, one table per collection |
+| `libsql`, `d1` | a serverless database behind an HTTP API |
+| `postgres`, `mysql` | not built into this binary yet — they need a driver |
+
+`AppDb` is the seam: the operations an app needs, and nothing else. The
+filters are documents, not SQL — `{"done": false}` finds the rows that are
+not done — and the matcher is the same one the in-process engine uses, so
+a query means the same thing in every engine.
+
+The two remote engines speak one protocol: a JSON request per operation,
+a JSON reply per operation, over HTTP or over a socket. `DbServer` is the
+other end of it, over any `AppDb`, so a deployment can put an app's rows
+on another machine.
 
 ## Events, hooks and custom methods
 
