@@ -284,7 +284,11 @@ async fn finish(
     let (_, body, headers) =
         config.token_request(code, &flow.redirect_uri, flow.code_verifier.as_deref());
     let response = auth.send(&HttpRequest {
-        method: "POST".into(),
+        method: match config.token_method {
+            Method::Get => "GET",
+            Method::Post => "POST",
+        }
+        .into(),
         url: config.token_url.clone(),
         headers,
         body,
@@ -506,7 +510,7 @@ async fn fetch_profile(
     id_claims: Option<&Value>,
 ) -> AuthResult<(Value, &'static str)> {
     let via_userinfo = || async {
-        match config.userinfo_request(access_token) {
+        match config.userinfo_request(access_token, token) {
             Some(UserinfoRequest {
                 method,
                 url,

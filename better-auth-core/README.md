@@ -310,8 +310,8 @@ cannot run an authenticator.
 
 ## OAuth
 
-Thirty-two providers are built in. A provider is offered when both of
-its variables are set, for example:
+Thirty-six providers are built in — every one Better Auth ships. A
+provider is offered when both of its variables are set, for example:
 
 ```sh
 export GOOGLE_CLIENT_ID=…
@@ -319,11 +319,12 @@ export GOOGLE_CLIENT_SECRET=…
 ```
 
 The names are `<PROVIDER>_CLIENT_ID` and `<PROVIDER>_CLIENT_SECRET`
-for: `google`, `github`, `apple`, `atlassian`, `cognito`, `discord`,
-`dropbox`, `facebook`, `figma`, `gitlab`, `huggingface`, `kakao`,
-`kick`, `line`, `linear`, `linkedin`, `microsoft`, `naver`, `notion`,
-`paybin`, `paypal`, `polar`, `reddit`, `roblox`, `salesforce`, `slack`,
-`spotify`, `tiktok`, `twitch`, `twitter`, `vk` and `zoom`.
+for: `apple`, `atlassian`, `cloudflare`, `cognito`, `discord`,
+`dropbox`, `facebook`, `figma`, `github`, `gitlab`, `google`,
+`huggingface`, `kakao`, `kick`, `line`, `linear`, `linkedin`,
+`microsoft`, `naver`, `notion`, `paybin`, `paypal`, `polar`, `railway`,
+`reddit`, `roblox`, `salesforce`, `slack`, `spotify`, `tiktok`,
+`twitch`, `twitter`, `vercel`, `vk`, `wechat` and `zoom`.
 
 Each provider brings its own details: PKCE where the provider wants it,
 Basic or body authentication at the token endpoint, JSON or form token
@@ -331,6 +332,15 @@ requests, `client_key` instead of `client_id` for TikTok, `form_post`
 callbacks for Apple, the `Client-Id` header for Twitch, a second call
 for GitHub's address, and a synthetic `{provider}_{id}@oauth.local`
 address for providers that do not give one.
+
+The awkward ones are handled rather than approximated. Cloudflare's
+userinfo endpoint carries only `sub`, so the profile comes from the API
+endpoint that wraps it in a `result` envelope. Vercel asks for no
+scopes at all. WeChat is not OAuth2 in the usual shape: the client is
+`appid`, the secret is `secret`, the token is fetched with a `GET`, the
+authorization URL ends in `#wechat_redirect`, the scopes are joined with
+a comma, and the userinfo call needs the `openid` that came back with
+the token.
 
 The round trip:
 

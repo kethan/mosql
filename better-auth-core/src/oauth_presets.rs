@@ -1,4 +1,4 @@
-//! The 32 built-in OAuth providers, and the registry that turns environment
+//! The 36 built-in OAuth providers, and the registry that turns environment
 //! variables into configured providers.
 //!
 //! Every preset is a statement of fact about one provider's OAuth2 endpoints
@@ -52,6 +52,8 @@ pub enum UserinfoAuth {
     Bearer,
     /// `access_token` and `client_id` in a form body (VK).
     FormBody,
+    /// `access_token` in the query string (WeChat).
+    Query,
 }
 
 /// Where the profile document comes from.
@@ -114,12 +116,30 @@ pub struct ProviderPreset {
     /// Query parameters appended to the userinfo URL.
     pub userinfo_query: &'static [(&'static str, &'static str)],
     pub scopes: &'static [&'static str],
+    /// What joins several scopes. OAuth2 uses a space; WeChat a comma.
+    pub scope_separator: &'static str,
     pub pkce: bool,
     pub token_auth: TokenAuth,
     pub token_body: TokenBody,
     /// The authorization request's client parameter: `client_id`, or
     /// TikTok's `client_key`.
     pub client_id_param: &'static str,
+    /// The token request's secret parameter: `client_secret`, or WeChat's
+    /// `secret`.
+    pub client_secret_param: &'static str,
+    /// How the token request is sent. `Get` puts the fields in the query
+    /// string, as WeChat wants.
+    pub token_method: Method,
+    /// Extra fields in the token request.
+    pub token_extra_fields: &'static [(&'static str, &'static str)],
+    /// Standard fields the token request leaves out. WeChat wants neither
+    /// `redirect_uri` nor `code_verifier`.
+    pub token_omits: &'static [&'static str],
+    /// A fragment on the authorization URL: WeChat needs `#wechat_redirect`.
+    pub auth_url_fragment: Option<&'static str>,
+    /// Userinfo query parameters taken from the token response. WeChat's
+    /// userinfo endpoint needs the `openid` that came with the token.
+    pub userinfo_query_from_token: &'static [&'static str],
     pub response_type: &'static str,
     pub response_mode: Option<&'static str>,
     /// The `prompt` parameter's default when the caller names none.
@@ -170,10 +190,17 @@ macro_rules! standard {
             userinfo_body: None,
             userinfo_query: &[],
             scopes: &[$($scope),*],
+            scope_separator: " ",
             pkce: true,
             token_auth: TokenAuth::Body,
             token_body: TokenBody::Form,
             client_id_param: "client_id",
+            client_secret_param: "client_secret",
+            token_method: Method::Post,
+            token_extra_fields: &[],
+            token_omits: &[],
+            auth_url_fragment: None,
+            userinfo_query_from_token: &[],
             response_type: "code",
             response_mode: None,
             prompt: None,
@@ -210,7 +237,7 @@ pub fn synthetic_email(provider: &str, account_id: &str) -> String {
     )
 }
 
-pub static PRESETS: [ProviderPreset; 32] = [
+pub static PRESETS: [ProviderPreset; 36] = [
     // Id token first: it is signed by Google and carries the verified flag.
     ProviderPreset {
         profile: ProfileSource::IdToken,
@@ -407,6 +434,19 @@ pub static PRESETS: [ProviderPreset; 32] = [
             id ["oid", "sub"], name ["name"], email ["email", "preferred_username"], image ["picture"], verified ["email_verified"]
         )
     },
+    // Cloudflare's OIDC userinfo endpoint carries only `sub`, so the
+    // profile comes from the API's `/user` endpoint, which wraps it in a
+    // `result` envelope.
+    ProviderPreset {
+        name_join: Some(("result.first_name", "result.last_name")),
+        ..standard!(
+            "CLOUDFLARE", "cloudflare", "Cloudflare",
+            "https://dash.cloudflare.com/oauth2/auth", "https://dash.cloudflare.com/oauth2/token",
+            Some("https://api.cloudflare.com/client/v4/user"),
+            scopes ["user-details.read"],
+            id ["result.id"], name ["result.email"], email ["result.email"], image [], verified []
+        )
+    },
     standard!(
         "NAVER", "naver", "Naver",
         "https://nid.naver.com/oauth2.0/authorize", "https://nid.naver.com/oauth2.0/token",
@@ -516,12 +556,32 @@ pub static PRESETS: [ProviderPreset; 32] = [
         )
     },
     standard!(
+        "RAILWAY", "railway", "Railway",
+        "https://backboard.railway.com/oauth/auth", "https://backboard.railway.com/oauth/token",
+        Some("https://backboard.railway.com/oauth/me"),
+        scopes ["openid", "email", "profile"],
+        id ["sub"], name ["name"], email ["email"], image ["picture"], verified ["email_verified"]
+    ),
+    standard!(
         "SPOTIFY", "spotify", "Spotify",
         "https://accounts.spotify.com/authorize", "https://accounts.spotify.com/api/token",
         Some("https://api.spotify.com/v1/me"),
         scopes ["user-read-email"],
         id ["id"], name ["display_name"], email ["email"], image ["images.0.url"], verified []
     ),
+    // Vercel asks for no scopes of its own, and the profile may have no
+    // name but a preferred username.
+    ProviderPreset {
+        scopes: &[],
+        ..standard!(
+            "VERCEL", "vercel", "Vercel",
+            "https://vercel.com/oauth/authorize", "https://api.vercel.com/login/oauth/token",
+            Some("https://api.vercel.com/login/oauth/userinfo"),
+            scopes [],
+            id ["sub"], name ["name", "preferred_username"], email ["email"], image ["picture"],
+            verified ["email_verified"]
+        )
+    },
     // TikTok names the client `client_key` everywhere.
     ProviderPreset {
         client_id_param: "client_key",
@@ -533,6 +593,36 @@ pub static PRESETS: [ProviderPreset; 32] = [
             scopes ["user.info.profile"],
             id ["data.user.open_id"], name ["data.user.display_name", "data.user.username"], email ["data.user.email"],
             image ["data.user.avatar_large_url"], verified []
+        )
+    },
+    // WeChat is not OAuth2 in the usual shape: the client is `appid`, the
+    // secret is `secret`, the token is fetched with a GET, the
+    // authorization URL ends in `#wechat_redirect`, and the userinfo
+    // endpoint needs the `openid` that came back with the token.
+    ProviderPreset {
+        client_id_param: "appid",
+        client_secret_param: "secret",
+        token_method: Method::Get,
+        token_omits: &["redirect_uri", "code_verifier"],
+        auth_url_fragment: Some("wechat_redirect"),
+        userinfo_query_from_token: &["openid"],
+        userinfo_query: &[("lang", "zh_CN")],
+        userinfo_auth: UserinfoAuth::Query,
+        scopes: &["snsapi_login"],
+        scope_separator: ",",
+        auth_params: &[("lang", "cn")],
+        pkce: false,
+        id_paths: &["unionid", "openid"],
+        name_paths: &["nickname"],
+        email_paths: &["email"],
+        image_paths: &["headimgurl"],
+        ..standard!(
+            "WECHAT", "wechat", "WeChat",
+            "https://open.weixin.qq.com/connect/qrconnect",
+            "https://api.weixin.qq.com/sns/oauth2/access_token",
+            Some("https://api.weixin.qq.com/sns/userinfo"),
+            scopes ["snsapi_login"],
+            id ["unionid", "openid"], name ["nickname"], email ["email"], image ["headimgurl"], verified []
         )
     },
     ProviderPreset {
@@ -612,10 +702,24 @@ pub struct ProviderConfig {
     pub userinfo_body: Option<String>,
     pub userinfo_query: Vec<(String, String)>,
     pub scopes: Vec<String>,
+    /// What joins several scopes.
+    pub scope_separator: String,
     pub pkce: bool,
     pub token_auth: TokenAuth,
     pub token_body: TokenBody,
     pub client_id_param: String,
+    /// The token request's secret parameter.
+    pub client_secret_param: String,
+    /// How the token request is sent.
+    pub token_method: Method,
+    /// Extra fields in the token request.
+    pub token_extra_fields: Vec<(String, String)>,
+    /// Standard fields the token request leaves out.
+    pub token_omits: Vec<String>,
+    /// A fragment on the authorization URL.
+    pub auth_url_fragment: Option<String>,
+    /// Userinfo query parameters taken from the token response.
+    pub userinfo_query_from_token: Vec<String>,
     pub response_type: String,
     pub response_mode: Option<String>,
     pub prompt: Option<String>,
@@ -777,10 +881,25 @@ impl ProviderConfig {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             scopes: preset.scopes.iter().map(|s| s.to_string()).collect(),
+            scope_separator: preset.scope_separator.to_string(),
             pkce: preset.pkce,
             token_auth: preset.token_auth,
             token_body: preset.token_body,
             client_id_param: preset.client_id_param.to_string(),
+            client_secret_param: preset.client_secret_param.to_string(),
+            token_method: preset.token_method,
+            token_extra_fields: preset
+                .token_extra_fields
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            token_omits: preset.token_omits.iter().map(|s| s.to_string()).collect(),
+            auth_url_fragment: preset.auth_url_fragment.map(str::to_string),
+            userinfo_query_from_token: preset
+                .userinfo_query_from_token
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             response_type: preset.response_type.to_string(),
             response_mode: preset.response_mode.map(str::to_string),
             prompt: preset.prompt.map(str::to_string),
@@ -832,10 +951,17 @@ impl ProviderConfig {
             userinfo_body: None,
             userinfo_query: Vec::new(),
             scopes: c.scopes.clone(),
+            scope_separator: " ".into(),
             pkce: c.pkce,
             token_auth: c.token_auth.unwrap_or(TokenAuth::Body),
             token_body: TokenBody::Form,
             client_id_param: "client_id".into(),
+            client_secret_param: "client_secret".into(),
+            token_method: Method::Post,
+            token_extra_fields: Vec::new(),
+            token_omits: Vec::new(),
+            auth_url_fragment: None,
+            userinfo_query_from_token: Vec::new(),
             response_type: "code".into(),
             response_mode: None,
             prompt: None,
@@ -879,7 +1005,7 @@ impl ProviderConfig {
             scopes.to_vec()
         };
         if !scopes.is_empty() {
-            params.push(("scope".into(), scopes.join(" ")));
+            params.push(("scope".into(), scopes.join(&self.scope_separator)));
         }
         if let Some(mode) = &self.response_mode {
             params.push(("response_mode".into(), mode.clone()));
@@ -906,7 +1032,17 @@ impl ProviderConfig {
         } else {
             "?".to_string()
         };
-        format!("{}{}{}", self.authorization_url, separator, query.join("&"))
+        let fragment = match &self.auth_url_fragment {
+            Some(fragment) => format!("#{fragment}"),
+            None => String::new(),
+        };
+        format!(
+            "{}{}{}{}",
+            self.authorization_url,
+            separator,
+            query.join("&"),
+            fragment
+        )
     }
 
     /// The token request for an authorization code: (content-type, body
@@ -936,10 +1072,33 @@ impl ProviderConfig {
             }
             TokenAuth::Body => {
                 // The client parameter keeps the provider's name: TikTok
-                // calls it `client_key`.
+                // calls it `client_key`, WeChat `appid`.
                 fields.push((self.client_id_param.clone(), self.client_id.clone()));
-                fields.push(("client_secret".into(), self.client_secret.clone()));
+                fields.push((self.client_secret_param.clone(), self.client_secret.clone()));
             }
+        }
+        // A provider that wants neither `redirect_uri` nor `code_verifier`
+        // says so, and the extra fields it wants are added here.
+        fields.retain(|(name, _)| !self.token_omits.iter().any(|o| o == name));
+        for (name, value) in &self.token_extra_fields {
+            fields.push((name.clone(), value.clone()));
+        }
+        if self.token_method == Method::Get {
+            // The fields go in the query string, as WeChat wants.
+            let query: Vec<String> = fields
+                .iter()
+                .map(|(k, v)| format!("{}={}", percent_encode(k), percent_encode(v)))
+                .collect();
+            let separator = if self.token_url.contains('?') {
+                "&"
+            } else {
+                "?"
+            };
+            return (
+                String::new(),
+                format!("{separator}{}", query.join("&")).into_bytes(),
+                headers,
+            );
         }
         match self.token_body {
             TokenBody::Form => {
@@ -1157,17 +1316,25 @@ pub struct UserinfoRequest {
 
 impl ProviderConfig {
     /// Build the profile request for an access token.
-    pub fn userinfo_request(&self, access_token: &str) -> Option<UserinfoRequest> {
+    pub fn userinfo_request(&self, access_token: &str, token: &Value) -> Option<UserinfoRequest> {
         let url = self.userinfo_url.as_ref()?;
         let mut url = url.clone();
-        if !self.userinfo_query.is_empty() {
-            let query: Vec<String> = self
-                .userinfo_query
-                .iter()
-                .map(|(k, v)| format!("{}={}", percent_encode(k), percent_encode(v)))
-                .collect();
-            url.push(if url.contains('?') { '&' } else { '?' });
-            url.push_str(&query.join("&"));
+        let mut query: Vec<String> = self
+            .userinfo_query
+            .iter()
+            .map(|(k, v)| format!("{}={}", percent_encode(k), percent_encode(v)))
+            .collect();
+        // Some providers need a value that only the token response carried:
+        // WeChat's userinfo endpoint wants the `openid` that came with the
+        // access token.
+        for name in &self.userinfo_query_from_token {
+            if let Some(value) = token.get(name).and_then(Value::as_str) {
+                query.push(format!(
+                    "{}={}",
+                    percent_encode(name),
+                    percent_encode(value)
+                ));
+            }
         }
         let mut headers: Vec<(String, String)> = self.userinfo_headers.clone();
         headers.push(("accept".into(), "application/json".into()));
@@ -1190,9 +1357,17 @@ impl ProviderConfig {
                 ])
                 .into_bytes();
             }
+            UserinfoAuth::Query => {
+                // The token rides in the query string, not in a header.
+                query.push(format!("access_token={}", percent_encode(access_token)));
+            }
         }
         if let Some(fixed) = &self.userinfo_body {
             body = fixed.clone().into_bytes();
+        }
+        if !query.is_empty() {
+            url.push(if url.contains('?') { '&' } else { '?' });
+            url.push_str(&query.join("&"));
         }
         Some(UserinfoRequest {
             method: self.userinfo_method,
@@ -1366,6 +1541,7 @@ pub fn extract_profile(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mosql::Object;
 
     fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
         let pairs: Vec<(String, String)> = pairs
@@ -1378,6 +1554,127 @@ mod tests {
                 .find(|(k, _)| k == name)
                 .map(|(_, v)| v.clone())
         }
+    }
+
+    #[test]
+    fn every_better_auth_provider_is_present() {
+        // The provider ids Better Auth ships, one for one. A provider that
+        // is missing here is a provider an app cannot migrate.
+        let better_auth = [
+            "apple",
+            "atlassian",
+            "cloudflare",
+            "cognito",
+            "discord",
+            "dropbox",
+            "facebook",
+            "figma",
+            "github",
+            "gitlab",
+            "google",
+            "huggingface",
+            "kakao",
+            "kick",
+            "line",
+            "linear",
+            "linkedin",
+            "microsoft",
+            "naver",
+            "notion",
+            "paybin",
+            "paypal",
+            "polar",
+            "railway",
+            "reddit",
+            "roblox",
+            "salesforce",
+            "slack",
+            "spotify",
+            "tiktok",
+            "twitch",
+            "twitter",
+            "vercel",
+            "vk",
+            "wechat",
+            "zoom",
+        ];
+        for id in better_auth {
+            assert!(preset(id).is_some(), "no preset for {id}");
+        }
+        assert_eq!(PRESETS.len(), better_auth.len());
+    }
+
+    #[test]
+    fn wechat_uses_its_own_names() {
+        let empty = BTreeMap::new();
+        let wechat =
+            ProviderConfig::from_preset(preset("wechat").unwrap(), "wx-id", "wx-secret", &empty)
+                .unwrap();
+        // The authorization URL names the client `appid` and ends in the
+        // fragment WeChat needs.
+        let url = wechat.authorization_url(
+            "https://app.test/api/auth/callback/wechat",
+            "state123",
+            None,
+            &[],
+            None,
+            None,
+        );
+        assert!(url.contains("appid=wx-id"), "{url}");
+        assert!(url.contains("#wechat_redirect"), "{url}");
+        assert!(!url.contains("client_id="), "{url}");
+        // The token request is a GET with `secret`, and neither
+        // `redirect_uri` nor `code_verifier`.
+        let (_, body, _) = wechat.token_request("the-code", "https://app.test/cb", Some("v"));
+        let body = String::from_utf8(body).unwrap();
+        assert!(body.contains("secret=wx-secret"), "{body}");
+        assert!(body.contains("appid=wx-id"), "{body}");
+        assert!(!body.contains("redirect_uri"), "{body}");
+        assert!(!body.contains("code_verifier"), "{body}");
+        // The userinfo request carries the `openid` from the token response.
+        let mut token = Object::new();
+        token.set("openid", Value::str("o-123"));
+        let request = wechat
+            .userinfo_request("tok", &Value::Object(token))
+            .unwrap();
+        assert!(request.url.contains("openid=o-123"), "{}", request.url);
+        assert!(request.url.contains("access_token=tok"), "{}", request.url);
+    }
+
+    #[test]
+    fn cloudflare_reads_the_result_envelope() {
+        let empty = BTreeMap::new();
+        let cloudflare =
+            ProviderConfig::from_preset(preset("cloudflare").unwrap(), "cf", "secret", &empty)
+                .unwrap();
+        let mut result = Object::new();
+        result.set("id", Value::str("cf-1"));
+        result.set("email", Value::str("ada@example.com"));
+        result.set("first_name", Value::str("Ada"));
+        result.set("last_name", Value::str("Lovelace"));
+        let mut envelope = Object::new();
+        envelope.set("result", Value::Object(result));
+        let profile = extract_profile(&cloudflare, &Value::Null, &Value::Object(envelope), None);
+        assert_eq!(profile.id, "cf-1");
+        assert_eq!(profile.email.as_deref(), Some("ada@example.com"));
+        assert_eq!(profile.name, "Ada Lovelace");
+    }
+
+    #[test]
+    fn vercel_asks_for_no_scopes() {
+        let empty = BTreeMap::new();
+        let vercel =
+            ProviderConfig::from_preset(preset("vercel").unwrap(), "v", "s", &empty).unwrap();
+        assert!(vercel.scopes.is_empty());
+        let url = vercel.authorization_url(
+            "https://app.test/api/auth/callback/vercel",
+            "state123",
+            None,
+            &[],
+            None,
+            None,
+        );
+        assert!(!url.contains("scope="), "{url}");
     }
 
     #[test]
@@ -1678,7 +1975,7 @@ mod tests {
         let empty = BTreeMap::new();
         let github =
             ProviderConfig::from_preset(preset("github").unwrap(), "gh", "s", &empty).unwrap();
-        let req = github.userinfo_request("tok").unwrap();
+        let req = github.userinfo_request("tok", &Value::Null).unwrap();
         assert_eq!(req.method, Method::Get);
         assert_eq!(req.url, "https://api.github.com/user");
         assert!(req
@@ -1690,7 +1987,7 @@ mod tests {
 
         let twitch =
             ProviderConfig::from_preset(preset("twitch").unwrap(), "t", "s", &empty).unwrap();
-        let req = twitch.userinfo_request("tok").unwrap();
+        let req = twitch.userinfo_request("tok", &Value::Null).unwrap();
         assert!(
             req.headers.contains(&("Client-Id".into(), "t".into())),
             "{:?}",
@@ -1699,12 +1996,12 @@ mod tests {
 
         let linear =
             ProviderConfig::from_preset(preset("linear").unwrap(), "l", "s", &empty).unwrap();
-        let req = linear.userinfo_request("tok").unwrap();
+        let req = linear.userinfo_request("tok", &Value::Null).unwrap();
         assert_eq!(req.method, Method::Post);
         assert!(String::from_utf8(req.body).unwrap().contains("viewer"));
 
         let vk = ProviderConfig::from_preset(preset("vk").unwrap(), "v", "s", &empty).unwrap();
-        let req = vk.userinfo_request("tok").unwrap();
+        let req = vk.userinfo_request("tok", &Value::Null).unwrap();
         assert_eq!(req.method, Method::Post);
         assert_eq!(
             String::from_utf8(req.body).unwrap(),
@@ -1714,7 +2011,7 @@ mod tests {
 
         let paypal =
             ProviderConfig::from_preset(preset("paypal").unwrap(), "p", "s", &empty).unwrap();
-        let req = paypal.userinfo_request("tok").unwrap();
+        let req = paypal.userinfo_request("tok", &Value::Null).unwrap();
         assert!(
             req.url.ends_with("userinfo?schema=paypalv1.1"),
             "{}",
@@ -1723,7 +2020,7 @@ mod tests {
 
         let google =
             ProviderConfig::from_preset(preset("google").unwrap(), "g", "s", &empty).unwrap();
-        assert!(google.userinfo_request("tok").is_none());
+        assert!(google.userinfo_request("tok", &Value::Null).is_none());
     }
 
     #[test]
