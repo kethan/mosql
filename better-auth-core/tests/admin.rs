@@ -259,7 +259,29 @@ async_test! {
         let (user, _, _) = rig.sign_up("ada@x.co", PASSWORD).await;
         let user_id = str_of(&user, "id");
 
-        // A ban that runs out in a second.
+        // A ban that runs for a minute. The timestamp has whole seconds
+        // in it, so a short ban can be over before it is even noticed on a
+        // slow machine; this one cannot.
+        let (status, json, _) = rig
+            .call(
+                "POST",
+                "/api/auth/admin/ban-user",
+                Some(&admin),
+                Some(obj(&[
+                    ("userId", Value::str(&user_id)),
+                    ("banExpiresIn", Value::Int(60)),
+                ])),
+            )
+            .await;
+        assert_eq!(status, 200, "{json:?}");
+        assert!(json.get("user").unwrap().get("banExpires").is_some());
+
+        // While it runs, the user stays out.
+        let (status, json, _) = rig.sign_in_raw("ada@x.co", PASSWORD).await;
+        assert_eq!(status, 403, "{json:?}");
+        assert_eq!(str_of(&json, "code"), "USER_BANNED");
+
+        // A ban that runs out in a second, so the lift can be seen.
         let (status, json, _) = rig
             .call(
                 "POST",
@@ -272,15 +294,9 @@ async_test! {
             )
             .await;
         assert_eq!(status, 200, "{json:?}");
-        assert!(json.get("user").unwrap().get("banExpires").is_some());
-
-        // While it runs, the user stays out.
-        let (status, json, _) = rig.sign_in_raw("ada@x.co", PASSWORD).await;
-        assert_eq!(status, 403, "{json:?}");
-        assert_eq!(str_of(&json, "code"), "USER_BANNED");
 
         // Once it has run out, the next sign-in lifts it.
-        std::thread::sleep(std::time::Duration::from_millis(1_200));
+        std::thread::sleep(std::time::Duration::from_millis(2_000));
         let (status, json, _) = rig.sign_in_raw("ada@x.co", PASSWORD).await;
         assert_eq!(status, 200, "{json:?}");
 
