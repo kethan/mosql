@@ -34,27 +34,47 @@ done
 
 run() { [[ " ${ONLY[*]} " == *" $1 "* ]]; }
 
+# Run one stage's command, keeping what it printed. On failure, the lines
+# that name the problem are repeated as step annotations. Actions logs cannot
+# be read from where this is developed; annotations can, through the API. Ten
+# is the most a step may emit.
+stage() {
+  local name=$1 log status
+  shift
+  log=$(mktemp)
+  set +e
+  "$@" 2>&1 | tee "$log"
+  status=${PIPESTATUS[0]}
+  set -e
+  if (( status != 0 )); then
+    grep -E '^(error|warning)(\[|:)|^test .* \.\.\. FAILED|^---- |panicked at|assertion .*failed|^  (left|right):' "$log" \
+      | head -n 10 | sed "s/^/::error title=$name::/" >&2 || true
+    exit "$status"
+  fi
+  rm -f "$log"
+}
+
 if run fmt; then
   echo "== fmt =="
-  cargo fmt --check
+  stage fmt cargo fmt --check
 fi
 
 if run clippy; then
   echo "== clippy =="
-  cargo clippy --all-targets -- -D warnings
+  stage clippy cargo clippy --all-targets -- -D warnings
 fi
 
 if run test; then
   echo "== test =="
-  cargo test --tests
+  stage test cargo test --tests
 fi
 
 if run deps; then
   echo "== no external dependencies =="
-  # A dependency on an external crate would make the binary depend on a
-  # registry this project is built without, and would grow it. Both path
-  # dependencies are in-repo and themselves dependency-free, which is what
-  # keeps this true.
+  # Both path dependencies are in-repo and themselves dependency-free, and
+  # SQLite is compiled from source rather than pulled in as a crate, so the
+  # binary has nothing in it that was not chosen line by line. An external
+  # dependency would change that, and would grow it.
   if sed -n '/^\[dependencies\]/,/^\[/p' Cargo.toml \
       | grep -vE '^\[|^$|^#|path *=' \
       | grep -q .; then

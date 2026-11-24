@@ -17,7 +17,7 @@
 //! string constant — which is a real bug class in dynamically built SQL.
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
@@ -51,63 +51,148 @@ fn main() {
     let src = PathBuf::from("vendor/sqlite/sqlite3.c");
     let obj = out.join(if msvc { "sqlite3.obj" } else { "sqlite3.o" });
 
-    let (compiler, mut args): (String, Vec<String>) = if msvc {
-        // `/MD` matches the dynamic CRT Rust's MSVC target links against.
-        let mut a = vec![
-            "/O2".into(),
-            "/MD".into(),
-            "/c".into(),
-            "/nologo".into(),
-            format!("/Fo{}", obj.display()),
-        ];
-        for d in defines {
-            a.push(format!("/D{d}"));
-        }
-        ("cl.exe".to_string(), a)
-    } else {
-        let cc = env::var(format!("CC_{}", target.to_lowercase().replace('-', "_")))
-            .or_else(|_| env::var("TARGET_CC"))
-            .or_else(|_| env::var("CC"))
-            .unwrap_or_else(|_| "cc".to_string());
-        let mut a = vec![
-            "-O2".into(),
-            // Keep SQLite's many symbols out of the export table: they are
-            // internal, and exporting them both grows the binary and risks
-            // colliding with a host application that links its own SQLite.
-            "-fvisibility=hidden".into(),
-            "-ffunction-sections".into(),
-            "-fdata-sections".into(),
-            // SQLite never unwinds, so its frames need no `.eh_frame`; Rust
-            // emits unwind info for its own code regardless.
-            "-fno-asynchronous-unwind-tables".into(),
-            "-c".into(),
-            src.display().to_string(),
-            "-o".into(),
-            obj.display().to_string(),
-            "-Ivendor/sqlite".into(),
-        ];
-        for d in defines {
-            a.push(format!("-D{d}"));
-        }
-        (cc, a)
-    };
-
     if msvc {
-        args.push(src.display().to_string());
+        build_msvc(&out, &target, &src, &obj, defines);
+    } else {
+        build_unix(&target, &src, &obj, defines);
     }
 
-    let status = Command::new(&compiler)
-        .args(&args)
+    // Drop unreferenced code on Unix. Without this, `-ffunction-sections`
+    // splits everything up but nothing is thrown away. (The MSVC linker
+    // discards unreferenced COMDATs on its own, given `/Gy`.)
+    if !msvc {
+        println!("cargo:rustc-link-arg=-Wl,--gc-sections");
+    }
+    println!("cargo:rustc-link-arg={}", obj.display());
+}
+
+/// gcc, clang, and anything else that takes the usual flags.
+fn build_unix(target: &str, src: &Path, obj: &Path, defines: &[&str]) {
+    let cc = env::var(format!("CC_{}", target.to_lowercase().replace('-', "_")))
+        .or_else(|_| env::var("TARGET_CC"))
+        .or_else(|_| env::var("CC"))
+        .unwrap_or_else(|_| "cc".to_string());
+    let mut args = vec![
+        "-O2".to_string(),
+        // Keep SQLite's many symbols out of the export table: they are
+        // internal, and exporting them both grows the binary and risks
+        // colliding with a host application that links its own SQLite.
+        "-fvisibility=hidden".to_string(),
+        "-ffunction-sections".to_string(),
+        "-fdata-sections".to_string(),
+        // SQLite never unwinds, so its frames need no `.eh_frame`; Rust
+        // emits unwind info for its own code regardless.
+        "-fno-asynchronous-unwind-tables".to_string(),
+        "-c".to_string(),
+        src.display().to_string(),
+        "-o".to_string(),
+        obj.display().to_string(),
+        "-Ivendor/sqlite".to_string(),
+    ];
+    for d in defines {
+        args.push(format!("-D{d}"));
+    }
+    run(&cc, &args);
+}
+
+/// MSVC: `cl.exe`, with its environment set up by `vcvarsall.bat`.
+///
+/// `cl.exe` is not on `PATH` on a clean machine — it needs the `INCLUDE`,
+/// `LIB` and `PATH` that `vcvarsall.bat` exports, and cargo's own builds find
+/// that script through `vswhere`, which sits at a fixed path in every Visual
+/// Studio 2017+ install (Build Tools included). Same route here, so the build
+/// needs nothing but a Visual Studio install and no third-party crate.
+///
+/// The commands are written to a batch file rather than passed through
+/// `cmd /C` as one string: every path is then quoted once, by us, instead of
+/// being re-parsed by the shell with its own rules.
+fn build_msvc(out: &Path, target: &str, src: &Path, obj: &Path, defines: &[&str]) {
+    let arch = if target.starts_with("aarch64") {
+        "arm64"
+    } else if target.starts_with("i686") || target.starts_with("thumbv7a") {
+        "x86"
+    } else {
+        "x64"
+    };
+
+    let mut args = vec![
+        "/nologo".to_string(),
+        "/O2".to_string(),
+        // The dynamic CRT, which is what Rust's MSVC target links against.
+        "/MD".to_string(),
+        // Function-level linking, so the linker can drop what is unused.
+        "/Gy".to_string(),
+        "/c".to_string(),
+        format!("/Fo{}", obj.display()),
+    ];
+    for d in defines {
+        args.push(format!("/D{d}"));
+    }
+    // Absolute, because the batch file does not change directory but there
+    // is no reason for the source path to depend on where cargo ran us.
+    let src =
+        std::fs::canonicalize(src).unwrap_or_else(|e| panic!("cannot find {}: {e}", src.display()));
+    args.push(src.display().to_string());
+
+    let mut script = String::from("@echo off\r\n");
+    script.push_str(&format!(
+        "call \"{}\" {arch} >nul\r\nif errorlevel 1 exit /b 1\r\n",
+        vcvarsall().display()
+    ));
+    let quoted: Vec<String> = args.iter().map(|a| format!("\"{a}\"")).collect();
+    script.push_str(&format!("cl.exe {}\r\n", quoted.join(" ")));
+
+    let script_path = out.join("build-sqlite.bat");
+    std::fs::write(&script_path, script).expect("cannot write build-sqlite.bat");
+    // Spawning a `.bat` goes through `cmd.exe`, and Rust quotes the script
+    // path itself; it takes no arguments, so there is nothing to escape.
+    run(&script_path.display().to_string(), &[]);
+}
+
+/// The `vcvarsall.bat` of the newest Visual Studio with the C++ tools.
+fn vcvarsall() -> PathBuf {
+    let program_files = env::var_os("ProgramFiles(x86)")
+        .or_else(|| env::var_os("ProgramFiles"))
+        .map(PathBuf::from)
+        .expect("neither ProgramFiles(x86) nor ProgramFiles is set");
+    let vswhere = program_files
+        .join("Microsoft Visual Studio")
+        .join("Installer")
+        .join("vswhere.exe");
+    let output = Command::new(&vswhere)
+        .args([
+            "-latest",
+            "-products",
+            "*",
+            // UTF-8 regardless of the console's code page, so the path below
+            // is read correctly even when it contains non-ASCII characters.
+            "-utf",
+            "-requires",
+            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+            "-property",
+            "installationPath",
+        ])
+        .output()
+        .unwrap_or_else(|e| panic!("cannot run {}: {e}", vswhere.display()));
+    let install = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    assert!(
+        !install.is_empty(),
+        "{} found no Visual Studio with the C++ tools",
+        vswhere.display()
+    );
+    PathBuf::from(install)
+        .join("VC")
+        .join("Auxiliary")
+        .join("Build")
+        .join("vcvarsall.bat")
+}
+
+fn run(compiler: &str, args: &[String]) {
+    let status = Command::new(compiler)
+        .args(args)
         .status()
         .unwrap_or_else(|e| panic!("cannot run {compiler}: {e}"));
     if !status.success() {
         panic!("{compiler} failed with {status}");
     }
-
-    // Drop unreferenced code on Unix. Without this, `-ffunction-sections`
-    // splits everything up but nothing is thrown away.
-    if !msvc {
-        println!("cargo:rustc-link-arg=-Wl,--gc-sections");
-    }
-    println!("cargo:rustc-link-arg={}", obj.display());
 }
