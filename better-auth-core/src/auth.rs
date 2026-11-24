@@ -194,6 +194,8 @@ pub struct Auth {
     pub oauth: OAuthRegistry,
     pub http: Option<Arc<dyn HttpClient>>,
     pub mailer: Option<Arc<dyn Mailer>>,
+    /// What each provider's OpenID configuration said, read once.
+    discovery: std::sync::Mutex<std::collections::HashMap<String, crate::oidc::Discovery>>,
 }
 
 impl std::fmt::Debug for Auth {
@@ -215,6 +217,7 @@ impl Auth {
             oauth: OAuthRegistry::new(),
             http: None,
             mailer: None,
+            discovery: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -245,6 +248,37 @@ impl Auth {
 
     pub fn now(&self) -> i64 {
         now_secs()
+    }
+
+    /// The outbound HTTP client, when there is one.
+    ///
+    /// Panics when there is none: every caller that reaches this has
+    /// already checked.
+    pub fn http_client(&self) -> &dyn HttpClient {
+        self.http.as_deref().expect("no HttpClient configured")
+    }
+
+    /// A provider's endpoints, read from its OpenID configuration.
+    ///
+    /// The document is read once and remembered: it changes rarely, and
+    /// every sign-in would otherwise pay for it again.
+    pub fn resolve_provider(
+        &self,
+        config: &crate::oauth_presets::ProviderConfig,
+    ) -> AuthResult<crate::oauth_presets::ProviderConfig> {
+        let Some(url) = config.discovery_url.clone() else {
+            return Ok(config.clone());
+        };
+        if let Ok(cache) = self.discovery.lock() {
+            if let Some(found) = cache.get(&url) {
+                return crate::oidc::apply(config, found);
+            }
+        }
+        let discovery = crate::oidc::Discovery::fetch(&url, self.http_client())?;
+        if let Ok(mut cache) = self.discovery.lock() {
+            cache.insert(url, discovery.clone());
+        }
+        crate::oidc::apply(config, &discovery)
     }
 
     /// `POST` something with the configured client.

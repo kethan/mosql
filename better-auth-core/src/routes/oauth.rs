@@ -44,6 +44,9 @@ struct Flow {
     callback_url: Option<String>,
     error_callback_url: Option<String>,
     link_user_id: Option<String>,
+    /// The nonce the request asked for, when the provider publishes a key
+    /// set and binds the ID token to it.
+    nonce: Option<String>,
 }
 
 impl Flow {
@@ -54,13 +57,14 @@ impl Flow {
                 .unwrap_or_else(|| "null".into())
         };
         format!(
-            r#"{{"provider":{},"codeVerifier":{},"redirectURI":{},"callbackURL":{},"errorCallbackURL":{},"linkUserId":{}}}"#,
+            r#"{{"provider":{},"codeVerifier":{},"redirectURI":{},"callbackURL":{},"errorCallbackURL":{},"linkUserId":{},"nonce":{}}}"#,
             core::json_string(&self.provider),
             opt(&self.code_verifier),
             core::json_string(&self.redirect_uri),
             opt(&self.callback_url),
             opt(&self.error_callback_url),
-            opt(&self.link_user_id)
+            opt(&self.link_user_id),
+            opt(&self.nonce)
         )
     }
 
@@ -76,6 +80,7 @@ impl Flow {
             callback_url: get("callbackURL"),
             error_callback_url: get("errorCallbackURL"),
             link_user_id: get("linkUserId"),
+            nonce: get("nonce"),
         })
     }
 }
@@ -106,6 +111,9 @@ async fn begin(auth: &Arc<Auth>, req: &Request, force_link: bool) -> AuthResult<
             "no HttpClient configured; OAuth needs outbound HTTP",
         ));
     }
+    // A provider that publishes an OpenID configuration says where its
+    // endpoints are; read them before building the redirect.
+    let config = auth.resolve_provider(&config)?;
     let callback_url = redirect_target(auth, req, &body, "callbackURL")?;
     let error_callback_url = redirect_target(auth, req, &body, "errorCallbackURL")?;
     let login_hint = opt_field(&body, "loginHint");
@@ -140,6 +148,15 @@ async fn begin(auth: &Arc<Auth>, req: &Request, force_link: bool) -> AuthResult<
     };
     let state = core::new_token();
     let redirect_uri = auth.callback_url(&config.id);
+    // A provider that publishes a key set binds the ID token to this
+    // request with a nonce (OIDC Core 1.0 §3.1.3.7).
+    let nonce = match (
+        config.jwks_uri.as_deref(),
+        config.disable_id_token_nonce_binding,
+    ) {
+        (Some(_), false) => Some(core::new_token()),
+        _ => None,
+    };
     let flow = Flow {
         provider: config.id.clone(),
         code_verifier,
@@ -147,6 +164,7 @@ async fn begin(auth: &Arc<Auth>, req: &Request, force_link: bool) -> AuthResult<
         callback_url,
         error_callback_url,
         link_user_id,
+        nonce: nonce.clone(),
     };
     auth.put_verification(
         &core::token_key(core::V_STATE, &state),
@@ -154,13 +172,18 @@ async fn begin(auth: &Arc<Auth>, req: &Request, force_link: bool) -> AuthResult<
         auth.config.oauth_state_ttl_secs,
     )
     .await?;
-    let url = config.authorization_url(
+    let url = config.authorization_url_with(
         &redirect_uri,
         &state,
         challenge.as_deref(),
         &scopes,
         login_hint.as_deref(),
         prompt.as_deref(),
+        &nonce
+            .as_ref()
+            .map(|n| ("nonce", n.as_str()))
+            .into_iter()
+            .collect::<Vec<_>>(),
     );
     Ok(json(
         200,
@@ -255,6 +278,12 @@ pub async fn callback(auth: &Arc<Auth>, req: &Request, provider: &str) -> AuthRe
     }
     error_callback_url = flow.error_callback_url.clone();
 
+    // The provider may have been described by discovery when the redirect
+    // was built; read it the same way here.
+    let config = match auth.resolve_provider(&config) {
+        Ok(config) => config,
+        Err(error) => return Ok(fail(error, error_callback_url, callback_url)),
+    };
     let outcome = finish(auth, req, &config, &flow, &code, param("user").as_deref()).await;
     match outcome {
         Ok((user, is_new)) => {
@@ -333,7 +362,33 @@ async fn finish(
         .map(str::to_string);
 
     // ---- profile ----------------------------------------------------------
-    let id_claims = id_token.as_deref().and_then(crate::crypto::jwt_payload);
+    // An ID token is checked against the provider's key set before any of
+    // its claims are believed. Without a key set there is nothing to check
+    // against, and the claims are only read as they are.
+    let id_claims = match id_token.as_deref() {
+        Some(id_token) => match config.jwks_uri.as_deref() {
+            Some(_) => {
+                let claims = crate::oidc::verify_for(
+                    config,
+                    auth.http_client(),
+                    id_token,
+                    flow.nonce.as_deref(),
+                    now_secs(),
+                )?;
+                Some(claims)
+            }
+            None => {
+                if config.require_id_token_verification {
+                    return Err(AuthError::internal(format!(
+                        "{}: the provider published no key set, so its ID token cannot be checked",
+                        config.id
+                    )));
+                }
+                crate::crypto::jwt_payload(id_token)
+            }
+        },
+        None => None,
+    };
     let (profile_doc, source) =
         fetch_profile(auth, config, &access_token, &token, id_claims.as_ref()).await?;
     let _ = source;

@@ -1113,9 +1113,13 @@ mod tests {
         let key = two_factor_key(SECRET);
         let packed = aead_encrypt(&key, b"hello");
         assert_eq!(aead_decrypt(&key, &packed).unwrap(), b"hello");
+        // A different last character, so the string really is different:
+        // the packed text is random, and 'A' is one of its characters
+        // often enough to matter.
         let mut other = packed.clone();
-        other.pop();
-        other.push('A');
+        let last = other.pop().expect("a character");
+        other.push(if last == 'A' { 'B' } else { 'A' });
+        assert_ne!(other, packed);
         assert!(aead_decrypt(&key, &other).is_none());
         assert!(aead_decrypt(&two_factor_key(b"other"), &packed).is_none());
     }

@@ -2,7 +2,7 @@
 name = "better-auth-core"
 version = "0.1.0"
 edition = "2021"
-description = "Better Auth-compatible authentication engine in Rust: bearer JWT sessions, 8 plugins, 32 OAuth providers, the full route table, on any store."
+description = "Better Auth-compatible authentication engine in Rust: bearer JWT sessions, 8 plugins, 36 OAuth providers, OpenID Connect, the full route table, on any store."
 license = "ISC"
 repository = "https://github.com/kethan/mosql"
 readme = "README.md"

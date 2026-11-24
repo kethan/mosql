@@ -734,6 +734,19 @@ pub struct ProviderConfig {
     pub verified_paths: Vec<String>,
     pub email_endpoint: Option<EmailEndpointOwned>,
     pub token_email_path: Option<String>,
+    /// Where the provider publishes its OpenID configuration.
+    ///
+    /// When this is set, the endpoints below are read from the document it
+    /// publishes, and an ID token is checked against the key set it names.
+    pub discovery_url: Option<String>,
+    /// The provider's key set, once discovery has been read.
+    pub jwks_uri: Option<String>,
+    /// The issuer an ID token has to name.
+    pub issuer: Option<String>,
+    /// Whether an ID token that cannot be checked is a failure.
+    pub require_id_token_verification: bool,
+    /// Whether the `nonce` claim is left out of the ID-token check.
+    pub disable_id_token_nonce_binding: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -774,6 +787,44 @@ pub struct CustomProvider {
     pub email_path: Option<String>,
     pub image_path: Option<String>,
     pub verified_path: Option<String>,
+    /// Where the provider publishes its OpenID configuration.
+    pub discovery_url: Option<String>,
+    /// The issuer an ID token has to name. Read from discovery when it is
+    /// left out.
+    pub issuer: Option<String>,
+    /// Whether an ID token that cannot be checked is a failure.
+    pub require_id_token_verification: bool,
+    /// Whether the `nonce` claim is left out of the ID-token check.
+    pub disable_id_token_nonce_binding: bool,
+    /// How the token request is sent.
+    pub token_method: Option<Method>,
+    /// The wire format of the token request body.
+    pub token_body: Option<TokenBody>,
+    /// The token request's client-id parameter.
+    pub client_id_param: Option<String>,
+    /// The token request's secret parameter.
+    pub client_secret_param: Option<String>,
+    /// Extra fields in the token request.
+    pub token_extra_fields: Vec<(String, String)>,
+    /// How the userinfo endpoint is called.
+    pub userinfo_method: Option<Method>,
+    /// How the userinfo endpoint is authenticated.
+    pub userinfo_auth: Option<UserinfoAuth>,
+    /// What joins several scopes.
+    pub scope_separator: Option<String>,
+    /// The response type of the authorization request.
+    pub response_type: Option<String>,
+    /// The prompt of the authorization request.
+    pub prompt: Option<String>,
+}
+
+/// The paths a provider uses for one field: the one it named, or the
+/// usual ones.
+fn paths(named: &Option<String>, usual: &[&str]) -> Vec<String> {
+    match named {
+        Some(path) => vec![path.clone()],
+        None => usual.iter().map(|p| (*p).to_string()).collect(),
+    }
 }
 
 /// Why a provider could not be configured from the environment.
@@ -927,6 +978,11 @@ impl ProviderConfig {
                 .as_ref()
                 .map(EmailEndpointOwned::from_preset),
             token_email_path: preset.token_email_path.map(str::to_string),
+            discovery_url: None,
+            jwks_uri: None,
+            issuer: None,
+            require_id_token_verification: false,
+            disable_id_token_nonce_binding: false,
         })
     }
 
@@ -944,17 +1000,17 @@ impl ProviderConfig {
             authorization_url: c.authorization_url.clone(),
             token_url: c.token_url.clone(),
             userinfo_url: c.userinfo_url.clone(),
-            userinfo_method: Method::Get,
-            userinfo_auth: UserinfoAuth::Bearer,
+            userinfo_method: c.userinfo_method.unwrap_or(Method::Get),
+            userinfo_auth: c.userinfo_auth.unwrap_or(UserinfoAuth::Bearer),
             userinfo_headers: Vec::new(),
             userinfo_client_id_header: None,
             userinfo_body: None,
             userinfo_query: Vec::new(),
             scopes: c.scopes.clone(),
-            scope_separator: " ".into(),
+            scope_separator: c.scope_separator.clone().unwrap_or_else(|| " ".into()),
             pkce: c.pkce,
             token_auth: c.token_auth.unwrap_or(TokenAuth::Body),
-            token_body: TokenBody::Form,
+            token_body: c.token_body.unwrap_or(TokenBody::Form),
             client_id_param: "client_id".into(),
             client_secret_param: "client_secret".into(),
             token_method: Method::Post,
@@ -962,22 +1018,30 @@ impl ProviderConfig {
             token_omits: Vec::new(),
             auth_url_fragment: None,
             userinfo_query_from_token: Vec::new(),
-            response_type: "code".into(),
+            response_type: c.response_type.clone().unwrap_or_else(|| "code".into()),
             response_mode: None,
-            prompt: None,
+            prompt: c.prompt.clone(),
             auth_params: Vec::new(),
             profile: if c.userinfo_url.is_some() {
                 ProfileSource::Userinfo
             } else {
                 ProfileSource::IdToken
             },
-            id_paths: c.id_path.iter().cloned().collect(),
-            name_paths: c.name_path.iter().cloned().collect(),
+            // A provider that says nothing about its fields gets the
+            // usual ones: the subject for the account, the name, the
+            // address, the picture and whether the address is proven.
+            id_paths: paths(&c.id_path, &["sub", "id"]),
+            name_paths: paths(&c.name_path, &["name"]),
             name_join: None,
-            email_paths: c.email_path.iter().cloned().collect(),
-            image_paths: c.image_path.iter().cloned().collect(),
+            email_paths: paths(&c.email_path, &["email"]),
+            image_paths: paths(&c.image_path, &["picture", "image", "avatar_url"]),
             image_fixup: ImageFixup::None,
-            verified_paths: c.verified_path.iter().cloned().collect(),
+            verified_paths: paths(&c.verified_path, &["email_verified"]),
+            discovery_url: c.discovery_url.clone(),
+            jwks_uri: None,
+            issuer: c.issuer.clone(),
+            require_id_token_verification: c.require_id_token_verification,
+            disable_id_token_nonce_binding: c.disable_id_token_nonce_binding,
             email_endpoint: None,
             token_email_path: None,
         }
@@ -992,6 +1056,32 @@ impl ProviderConfig {
         scopes: &[String],
         login_hint: Option<&str>,
         prompt: Option<&str>,
+    ) -> String {
+        self.authorization_url_with(
+            redirect_uri,
+            state,
+            code_challenge,
+            scopes,
+            login_hint,
+            prompt,
+            &[],
+        )
+    }
+
+    /// The authorization URL, with extra parameters for this one request.
+    #[allow(clippy::too_many_arguments)]
+    ///
+    /// The extras are for things that belong to a single sign-in — the
+    /// `nonce` that binds an ID token to it — rather than to the provider.
+    pub fn authorization_url_with(
+        &self,
+        redirect_uri: &str,
+        state: &str,
+        code_challenge: Option<&str>,
+        scopes: &[String],
+        login_hint: Option<&str>,
+        prompt: Option<&str>,
+        extra: &[(&str, &str)],
     ) -> String {
         let mut params: Vec<(String, String)> = vec![
             ("response_type".into(), self.response_type.clone()),
@@ -1022,6 +1112,9 @@ impl ProviderConfig {
         }
         for (k, v) in &self.auth_params {
             params.push((k.clone(), v.clone()));
+        }
+        for (k, v) in extra {
+            params.push(((*k).to_string(), (*v).to_string()));
         }
         let query: Vec<String> = params
             .iter()
@@ -1231,7 +1324,20 @@ impl OAuthRegistry {
     /// credentials are half set is reported in `problems` so the operator
     /// sees the typo.
     pub fn from_env() -> (OAuthRegistry, Vec<ConfigError>) {
-        Self::from_env_with(|name| std::env::var(name).ok().filter(|v| !v.is_empty()))
+        let lookup = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+        let (mut registry, problems) = Self::from_env_with(lookup);
+        let names = |prefix: &str| {
+            std::env::vars()
+                .map(|(key, _)| key)
+                .filter(|key| key.starts_with(prefix))
+                .collect::<Vec<String>>()
+        };
+        let (generic, generic_problems) = Self::from_env_generic(lookup, names);
+        for config in generic {
+            registry.insert(config);
+        }
+        let problems = problems.into_iter().chain(generic_problems).collect();
+        (registry, problems)
     }
 
     /// [`OAuthRegistry::from_env`] with the variable lookup supplied, for
@@ -1283,6 +1389,121 @@ impl OAuthRegistry {
     /// Add or replace a provider described in code.
     pub fn insert(&mut self, config: ProviderConfig) {
         self.providers.insert(config.id.clone(), config);
+    }
+
+    /// The providers the environment describes, besides the presets.
+    ///
+    /// A provider that is not one of ours is described by its variables:
+    ///
+    /// ```text
+    /// OAUTH_ACME_CLIENT_ID=…
+    /// OAUTH_ACME_CLIENT_SECRET=…
+    /// OAUTH_ACME_DISCOVERY_URL=https://acme.test/.well-known/openid-configuration
+    /// ```
+    ///
+    /// The name after `OAUTH_` is the provider's id. The discovery URL
+    /// says where its endpoints are; without one, the endpoints are named
+    /// outright.
+    pub fn from_env_generic(
+        lookup: impl Fn(&str) -> Option<String>,
+        names: impl Fn(&str) -> Vec<String>,
+    ) -> (Vec<ProviderConfig>, Vec<ConfigError>) {
+        let mut providers = Vec::new();
+        let mut problems = Vec::new();
+        // A provider is named by its client-id variable: `OAUTH_ACME_CLIENT_ID`.
+        let mut seen: Vec<String> = Vec::new();
+        for name in names("OAUTH_") {
+            let Some(rest) = name.strip_prefix("OAUTH_") else {
+                continue;
+            };
+            let Some(id) = rest.strip_suffix("_CLIENT_ID") else {
+                continue;
+            };
+            if id.is_empty() || seen.iter().any(|s| s == id) {
+                continue;
+            }
+            seen.push(id.to_string());
+            let id = id.to_ascii_lowercase();
+            let client_id = lookup(&format!("OAUTH_{}_CLIENT_ID", id.to_uppercase()));
+            let client_secret = lookup(&format!("OAUTH_{}_CLIENT_SECRET", id.to_uppercase()));
+            let (Some(client_id), Some(client_secret)) = (client_id.clone(), client_secret.clone())
+            else {
+                // Half a provider is a mistake worth reporting.
+                if client_id.is_some() || client_secret.is_some() {
+                    problems.push(ConfigError::MissingCredential {
+                        provider: id.clone(),
+                        variable: format!("OAUTH_{}_CLIENT_SECRET", id.to_uppercase()),
+                    });
+                }
+                continue;
+            };
+            let discovery_url = lookup(&format!("OAUTH_{}_DISCOVERY_URL", id.to_uppercase()));
+            let authorization_url =
+                lookup(&format!("OAUTH_{}_AUTHORIZATION_URL", id.to_uppercase()));
+            let token_url = lookup(&format!("OAUTH_{}_TOKEN_URL", id.to_uppercase()));
+            let userinfo_url = lookup(&format!("OAUTH_{}_USERINFO_URL", id.to_uppercase()));
+            if discovery_url.is_none() && (authorization_url.is_none() || token_url.is_none()) {
+                problems.push(ConfigError::MissingVariable {
+                    provider: id.clone(),
+                    placeholder: "DISCOVERY_URL".into(),
+                });
+                continue;
+            }
+            let scopes = lookup(&format!("OAUTH_{}_SCOPES", id.to_uppercase()))
+                .map(|s| {
+                    s.split([',', ' '])
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_else(|| {
+                    vec![
+                        "openid".to_string(),
+                        "profile".to_string(),
+                        "email".to_string(),
+                    ]
+                });
+            let flag = |name: &str| {
+                lookup(&format!("OAUTH_{}_{}", id.to_uppercase(), name))
+                    .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+                    .unwrap_or(false)
+            };
+            let custom = CustomProvider {
+                id: id.clone(),
+                display_name: lookup(&format!("OAUTH_{}_NAME", id.to_uppercase()))
+                    .unwrap_or_else(|| id.clone()),
+                client_id,
+                client_secret,
+                authorization_url: authorization_url.unwrap_or_default(),
+                token_url: token_url.unwrap_or_default(),
+                userinfo_url,
+                scopes,
+                pkce: !flag("NO_PKCE"),
+                token_auth: None,
+                id_path: lookup(&format!("OAUTH_{}_ID_PATH", id.to_uppercase())),
+                name_path: lookup(&format!("OAUTH_{}_NAME_PATH", id.to_uppercase())),
+                email_path: lookup(&format!("OAUTH_{}_EMAIL_PATH", id.to_uppercase())),
+                image_path: lookup(&format!("OAUTH_{}_IMAGE_PATH", id.to_uppercase())),
+                verified_path: lookup(&format!("OAUTH_{}_VERIFIED_PATH", id.to_uppercase())),
+                discovery_url,
+                issuer: lookup(&format!("OAUTH_{}_ISSUER", id.to_uppercase())),
+                require_id_token_verification: flag("REQUIRE_ID_TOKEN_VERIFICATION"),
+                disable_id_token_nonce_binding: flag("DISABLE_ID_TOKEN_NONCE_BINDING"),
+                token_method: None,
+                token_body: None,
+                client_id_param: None,
+                client_secret_param: None,
+                token_extra_fields: Vec::new(),
+                userinfo_method: None,
+                userinfo_auth: None,
+                scope_separator: None,
+                response_type: None,
+                prompt: None,
+            };
+            providers.push(ProviderConfig::from_custom(&custom));
+        }
+        (providers, problems)
     }
 
     pub fn get(&self, id: &str) -> Option<&ProviderConfig> {
@@ -2178,6 +2399,83 @@ mod tests {
     }
 
     #[test]
+    fn a_provider_can_be_described_by_the_environment() {
+        let (providers, problems) = OAuthRegistry::from_env_generic(
+            |name| match name {
+                "OAUTH_ACME_CLIENT_ID" => Some("cid".into()),
+                "OAUTH_ACME_CLIENT_SECRET" => Some("sec".into()),
+                "OAUTH_ACME_DISCOVERY_URL" => {
+                    Some("https://acme.test/.well-known/openid-configuration".into())
+                }
+                _ => None,
+            },
+            |_| vec!["OAUTH_ACME_CLIENT_ID".into()],
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(providers.len(), 1);
+        let acme = &providers[0];
+        assert_eq!(acme.id, "acme");
+        assert_eq!(acme.client_id, "cid");
+        assert_eq!(
+            acme.discovery_url.as_deref(),
+            Some("https://acme.test/.well-known/openid-configuration")
+        );
+        // The usual scopes, unless the environment says otherwise.
+        assert_eq!(acme.scopes, vec!["openid", "profile", "email"]);
+    }
+
+    #[test]
+    fn a_half_described_provider_is_reported() {
+        let (providers, problems) = OAuthRegistry::from_env_generic(
+            |name| match name {
+                "OAUTH_ACME_CLIENT_ID" => Some("cid".into()),
+                _ => None,
+            },
+            |_| vec!["OAUTH_ACME_CLIENT_ID".into()],
+        );
+        assert!(providers.is_empty());
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].to_string().contains("CLIENT_SECRET"));
+    }
+
+    #[test]
+    fn a_provider_without_any_endpoint_is_reported() {
+        let (providers, problems) = OAuthRegistry::from_env_generic(
+            |name| match name {
+                "OAUTH_ACME_CLIENT_ID" => Some("cid".into()),
+                "OAUTH_ACME_CLIENT_SECRET" => Some("sec".into()),
+                _ => None,
+            },
+            |_| vec!["OAUTH_ACME_CLIENT_ID".into()],
+        );
+        assert!(providers.is_empty());
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].to_string().contains("DISCOVERY_URL"));
+    }
+
+    #[test]
+    fn a_custom_provider_keeps_the_usual_paths_when_it_names_none() {
+        let config = ProviderConfig::from_custom(&CustomProvider {
+            id: "acme".into(),
+            client_id: "cid".into(),
+            client_secret: "sec".into(),
+            authorization_url: "https://sso.acme.test/authorize".into(),
+            token_url: "https://sso.acme.test/token".into(),
+            ..CustomProvider::default()
+        });
+        let profile = mosql::parse_json(
+            r#"{"sub":"1","name":"Ada","email":"ada@acme.test","email_verified":true,"picture":"https://i"}"#,
+        )
+        .unwrap();
+        let p = extract_profile(&config, &Value::Null, &profile, None);
+        assert_eq!(p.id, "1");
+        assert_eq!(p.name, "Ada");
+        assert_eq!(p.email.as_deref(), Some("ada@acme.test"));
+        assert!(p.email_verified);
+        assert_eq!(p.image.as_deref(), Some("https://i"));
+    }
+
+    #[test]
     fn custom_providers_join_the_registry() {
         let mut registry = OAuthRegistry::new();
         registry.insert(ProviderConfig::from_custom(&CustomProvider {
@@ -2196,6 +2494,20 @@ mod tests {
             email_path: Some("mail".into()),
             image_path: None,
             verified_path: Some("emailVerified".into()),
+            discovery_url: None,
+            issuer: None,
+            require_id_token_verification: false,
+            disable_id_token_nonce_binding: false,
+            token_method: None,
+            token_body: None,
+            client_id_param: None,
+            client_secret_param: None,
+            token_extra_fields: Vec::new(),
+            userinfo_method: None,
+            userinfo_auth: None,
+            scope_separator: None,
+            response_type: None,
+            prompt: None,
         }));
         assert_eq!(registry.ids(), vec!["acme"]);
         let acme = registry.get("acme").unwrap();

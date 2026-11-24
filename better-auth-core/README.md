@@ -342,7 +342,48 @@ authorization URL ends in `#wechat_redirect`, the scopes are joined with
 a comma, and the userinfo call needs the `openid` that came back with
 the token.
 
-The round trip:
+### A provider that is not on the list
+
+A provider we do not ship is described by its variables instead:
+
+```sh
+export OAUTH_ACME_CLIENT_ID=…
+export OAUTH_ACME_CLIENT_SECRET=…
+export OAUTH_ACME_DISCOVERY_URL=https://acme.test/.well-known/openid-configuration
+```
+
+The name after `OAUTH_` is the provider's id — `acme` above. The
+discovery URL says where its endpoints are; the engine reads the
+document once and remembers it. Without one, name the endpoints
+outright instead: `OAUTH_ACME_AUTHORIZATION_URL`,
+`OAUTH_ACME_TOKEN_URL` and `OAUTH_ACME_USERINFO_URL`.
+
+The rest is optional: `OAUTH_ACME_SCOPES` (comma-separated),
+`OAUTH_ACME_ISSUER`, `OAUTH_ACME_NAME`, `OAUTH_ACME_ID_PATH`,
+`OAUTH_ACME_NAME_PATH`, `OAUTH_ACME_EMAIL_PATH`,
+`OAUTH_ACME_IMAGE_PATH`, `OAUTH_ACME_VERIFIED_PATH`,
+`OAUTH_ACME_REQUIRE_ID_TOKEN_VERIFICATION` and
+`OAUTH_ACME_DISABLE_ID_TOKEN_NONCE_BINDING`.
+
+### OpenID Connect
+
+When a provider publishes an OpenID configuration, its endpoints come
+from there and its ID token is checked rather than believed. The check
+is the whole signature: the key is found by its `kid`, the signature is
+verified over the exact bytes that were signed, and the issuer, the
+audience and the token's life are read from the claims the signature
+covers. A token that does not check out never becomes a user.
+
+The request carries a `nonce`, and the ID token has to echo it — that
+is what ties the token to this sign-in rather than to another. A
+provider that will not echo it can say so with
+`OAUTH_ACME_DISABLE_ID_TOKEN_NONCE_BINDING`.
+
+The RSA check is done here, without a dependency: the public key is a
+modulus and an exponent, and checking a signature is one modular
+exponentiation, so the crate carries a small big integer for it.
+
+### The round trip
 
 1. `POST /sign-in/social` with `{provider}` answers `{url, redirect: true}`.
    The URL carries the state and, where the provider wants it, the PKCE
