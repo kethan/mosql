@@ -20,6 +20,10 @@ name: Rust
 #              (app documents, secrets, import/export): fmt, clippy, the
 #              validation tests, publish dry-run, and a cap on the release
 #              binary's size
+#   auth       better-auth-core/verify.sh on the same matrix — the
+#              authentication engine (bearer JWT sessions, eight plugins,
+#              32 OAuth providers): fmt, clippy, the unit and integration
+#              tests, and a cap on the release binary's size
 
 on:
   push:
@@ -29,6 +33,7 @@ on:
       - "uflite/**"
       - "schemaless/**"
       - "nanobase/**"
+      - "better-auth-core/**"
       # The JS implementation is the oracle for the parity fixtures, so a change
       # to it can make the Rust port drift even though rust/ is untouched.
       - "src/**"
@@ -43,6 +48,7 @@ on:
       - "uflite/**"
       - "schemaless/**"
       - "nanobase/**"
+      - "better-auth-core/**"
       - "src/**"
       - "lite/**"
       - "tiny/**"
@@ -226,6 +232,44 @@ jobs:
       - name: publish dry-run
         shell: bash
         run: ./nanobase/verify.sh publish
+
+  auth:
+    # The authentication engine depends on the mosql crate, uflite and
+    # nanobase by path, so a change to any of them can break it even though
+    # better-auth-core/ is untouched. The integration suites drive the real
+    # route table, which is why the matrix matters.
+    name: auth (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: better-auth-core
+      # One step per stage rather than a single "verify" step: a red X beside
+      # the stage that broke is worth far more than one beside the whole job.
+      - name: fmt
+        shell: bash
+        run: ./better-auth-core/verify.sh fmt
+      - name: clippy
+        shell: bash
+        run: ./better-auth-core/verify.sh clippy
+      - name: test
+        shell: bash
+        run: ./better-auth-core/verify.sh test
+      - name: dependencies
+        shell: bash
+        run: ./better-auth-core/verify.sh deps
+      - name: size
+        shell: bash
+        run: ./better-auth-core/verify.sh size
 
   # `cargo publish --dry-run` needs the crates.io index, which the sandbox that
   # developed this crate had no access to. CI has it, so this is the gate that
