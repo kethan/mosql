@@ -303,7 +303,9 @@ let rows = service.find_rows("todos", "notes", &filter, Some(10), None)?;
 
 A row that goes in, changes or comes out fires the same events as any
 other change — `created`, `updated`, `removed` — so a listener sees them
-whatever route made them.
+whatever route made them. The context names the app the rows belong to
+(`app`), the row's own id (`id`) and the collection in the method name
+(`db.insert:notes`).
 
 ## Events, hooks and custom methods
 

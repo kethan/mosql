@@ -72,6 +72,11 @@ pub struct EventContext {
     pub method: String,
     /// The record's id, when there is one.
     pub id: Option<String>,
+    /// The app whose rows changed, when the change was to an app's rows.
+    ///
+    /// A row has no place in the platform's own list of apps, so without
+    /// this a listener could not tell whose rows changed.
+    pub app: Option<String>,
     /// The record as it stands after the change.
     pub record: Option<Value>,
     /// What went wrong, for the error hooks.
@@ -488,7 +493,7 @@ impl Service {
         let inserted = match db.insert(collection, row.clone()) {
             Ok(inserted) => inserted,
             Err(e) => {
-                self.report_error("db.insert", Some(app), &e);
+                self.report_row_error("db.insert", app, collection, &e);
                 return Err(e);
             }
         };
@@ -522,13 +527,13 @@ impl Service {
         let updated = match db.update(collection, query, changes) {
             Ok(updated) => updated,
             Err(e) => {
-                self.report_error("db.update", Some(app), &e);
+                self.report_row_error("db.update", app, collection, &e);
                 return Err(e);
             }
         };
         let Some(record) = updated else {
             let e = Error::not_found("no row matches the filter");
-            self.report_error("db.update", Some(app), &e);
+            self.report_row_error("db.update", app, collection, &e);
             return Err(e);
         };
         let ctx = EventContext {
@@ -552,7 +557,7 @@ impl Service {
         let removed = match db.remove(collection, query) {
             Ok(removed) => removed,
             Err(e) => {
-                self.report_error("db.remove", Some(app), &e);
+                self.report_row_error("db.remove", app, collection, &e);
                 return Err(e);
             }
         };
@@ -568,13 +573,13 @@ impl Service {
 
     /// The context of a change to an app's rows.
     ///
-    /// The id is the app's, so a listener knows whose rows changed; the
-    /// collection is in the method name's path.
+    /// The app is named, and the collection is in the method name's path.
     fn row_context(&self, method: &str, app: &str, collection: &str) -> EventContext {
         EventContext {
             service: self.inner.name.clone(),
             method: format!("{method}:{collection}"),
             id: Some(app.to_string()),
+            app: Some(app.to_string()),
             record: None,
             error: None,
         }
@@ -587,6 +592,7 @@ impl Service {
             service: self.inner.name.clone(),
             method: method.to_string(),
             id: key.map(str::to_string),
+            app: None,
             record: None,
             error: None,
         }
@@ -602,12 +608,27 @@ impl Service {
         hooks.run(Phase::After, &ctx.method, ctx);
     }
 
+    /// Tell the error hooks that a change to an app's rows went wrong.
+    fn report_row_error(&self, method: &str, app: &str, collection: &str, error: &Error) {
+        let ctx = EventContext {
+            service: self.inner.name.clone(),
+            method: format!("{method}:{collection}"),
+            id: Some(app.to_string()),
+            app: Some(app.to_string()),
+            record: None,
+            error: Some(error.to_string()),
+        };
+        let hooks = self.inner.hooks.lock().expect("not poisoned");
+        hooks.run(Phase::Error, &ctx.method, &ctx);
+    }
+
     /// Tell the error hooks that something went wrong.
     pub fn report_error(&self, method: &str, key: Option<&str>, error: &Error) {
         let ctx = EventContext {
             service: self.inner.name.clone(),
             method: method.to_string(),
             id: key.map(str::to_string),
+            app: None,
             record: None,
             error: Some(error.to_string()),
         };

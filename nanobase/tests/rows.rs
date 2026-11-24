@@ -263,13 +263,20 @@ fn a_change_to_a_row_fires_an_event() {
     service.on(
         nanobase::Event::Created,
         Arc::new(move |ctx| {
-            seen2.lock().unwrap().push(ctx.method.clone());
+            seen2
+                .lock()
+                .unwrap()
+                .push((ctx.method.clone(), ctx.app.clone(), ctx.id.clone()));
         }),
     );
     service
         .insert_row(&app, "notes", &obj(&[("title", Value::str("one"))]))
         .expect("inserted");
-    let methods = seen.lock().unwrap().clone();
-    assert_eq!(methods.len(), 1);
-    assert!(methods[0].starts_with("db.insert:"), "{methods:?}");
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 1);
+    let (method, whose, id) = &seen[0];
+    assert!(method.starts_with("db.insert:"), "{seen:?}");
+    // The listener knows whose rows changed, and which row.
+    assert_eq!(whose.as_deref(), Some(app.as_str()), "{seen:?}");
+    assert!(id.is_some(), "{seen:?}");
 }
