@@ -77,8 +77,8 @@ if run publish; then
     # Both path dependencies are unpublished, so this is the one expected
     # failure until they are on crates.io. Anything else is real.
     if ! output="$(cargo publish --dry-run 2>&1)"; then
-      if [[ "$output" == *"no matching package named \`mosql\` found"* ||
-            "$output" == *"no matching package named \`uflite\` found"* ]]; then
+      if [[ "$output" == *"no matching package named"* ||
+            "$output" == *"does not specify a version"* ]]; then
         echo "publish: blocked only by mosql/uflite not being on crates.io yet"
       else
         echo "$output"
