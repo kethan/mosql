@@ -183,6 +183,15 @@ impl HttpClient for Provider {
 
 /// A rig with one provider, described by a discovery document.
 fn rig(provider: Arc<Provider>) -> Rig {
+    rig_with_headers(provider, Vec::new(), Vec::new())
+}
+
+/// A rig whose provider asks for headers of its own.
+fn rig_with_headers(
+    provider: Arc<Provider>,
+    discovery_headers: Vec<(String, String)>,
+    authorization_headers: Vec<(String, String)>,
+) -> Rig {
     let custom = CustomProvider {
         id: "corp".into(),
         display_name: "Corp".into(),
@@ -195,6 +204,8 @@ fn rig(provider: Arc<Provider>) -> Rig {
         issuer: None,
         require_id_token_verification: true,
         disable_id_token_nonce_binding: false,
+        discovery_headers,
+        authorization_headers,
         ..CustomProvider::default()
     };
     let config = ProviderConfig::from_custom(&custom);
@@ -286,6 +297,65 @@ async_test! {
             .seen()
             .iter()
             .any(|r| r.url == "https://corp.example.com/token"));
+    }
+}
+
+async_test! {
+    async fn the_headers_a_provider_asks_for_are_sent() {
+        let provider = Arc::new(Provider::new("https://corp.example.com"));
+        let rig = rig_with_headers(
+            provider.clone(),
+            vec![("x-discovery".into(), "discovery-key".into())],
+            vec![("x-gateway".into(), "token-key".into())],
+        );
+        let (_, json, _) = rig
+            .call(
+                "POST",
+                "/api/auth/sign-in/social",
+                None,
+                Some(obj(&[("provider", Value::str("corp"))])),
+            )
+            .await;
+        let url = str_of(&json, "url");
+        let state = state_of(&url);
+        provider.set_nonce(&nonce_of(&url).expect("a nonce"));
+        let (status, json, _) = rig
+            .call(
+                "GET",
+                &format!("/api/auth/oauth2/callback/corp?code=abc&state={state}"),
+                None,
+                None,
+            )
+            .await;
+        assert_eq!(status, 200, "{json:?}");
+
+        let seen = provider.seen();
+        // The discovery request carried the header the provider asked for.
+        let discovery = seen
+            .iter()
+            .find(|r| r.url.contains("openid-configuration"))
+            .expect("a discovery request");
+        assert!(
+            discovery
+                .headers
+                .iter()
+                .any(|(name, value)| name == "x-discovery" && value == "discovery-key"),
+            "{:?}",
+            discovery.headers
+        );
+        // And so did the token request.
+        let token = seen
+            .iter()
+            .find(|r| r.url.ends_with("/token"))
+            .expect("a token request");
+        assert!(
+            token
+                .headers
+                .iter()
+                .any(|(name, value)| name == "x-gateway" && value == "token-key"),
+            "{:?}",
+            token.headers
+        );
     }
 }
 

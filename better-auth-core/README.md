@@ -391,6 +391,38 @@ The rest is optional: `OAUTH_ACME_SCOPES` (comma-separated),
 `OAUTH_ACME_REQUIRE_ID_TOKEN_VERIFICATION` and
 `OAUTH_ACME_DISABLE_ID_TOKEN_NONCE_BINDING`.
 
+A provider behind a gateway can ask for a header of its own — on the
+discovery request, on the key set, or on the token request. In code
+that is `CustomProvider::discovery_headers` and
+`CustomProvider::authorization_headers`:
+
+```rust
+let acme = CustomProvider {
+    id: "acme".into(),
+    client_id: "…".into(),
+    client_secret: "…".into(),
+    discovery_url: Some("https://acme.test/.well-known/openid-configuration".into()),
+    authorization_headers: vec![("x-gateway".into(), "token-key".into())],
+    ..CustomProvider::default()
+};
+```
+
+Three things Better Auth's generic OAuth plugin can do are deliberately
+not here, and why:
+
+- **Transform callbacks.** `transformToken` and `transformUserInfo` are
+  functions the embedder writes; the provider here is a plain data
+  struct, and a function in it would change what it is. The data the
+  callbacks usually want is already expressible: the shape of the token
+  and user-info requests, and the paths the profile's fields are read
+  from.
+- **Refresh parameters.** The engine does not refresh a provider's
+  access token — a session is the engine's own bearer token — so there
+  is no refresh request for extra parameters to ride on.
+- **Discovery-derived logout.** Signing out here ends the session, and
+  nothing else: a redirect to the provider's end-session endpoint would
+  change the sign-out contract the official client is tested against.
+
 ### OpenID Connect
 
 When a provider publishes an OpenID configuration, its endpoints come

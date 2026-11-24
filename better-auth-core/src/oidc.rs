@@ -98,11 +98,20 @@ impl Discovery {
     }
 
     /// Fetch the discovery document.
-    pub fn fetch(url: &str, client: &dyn HttpClient) -> AuthResult<Discovery> {
+    ///
+    /// The headers are the ones the provider asked for: a discovery
+    /// document is sometimes behind a gateway that wants a key of its own.
+    pub fn fetch(
+        url: &str,
+        headers: &[(String, String)],
+        client: &dyn HttpClient,
+    ) -> AuthResult<Discovery> {
+        let mut request_headers = vec![("accept".into(), "application/json".into())];
+        request_headers.extend(headers.iter().cloned());
         let response = client.request(&HttpRequest {
             method: "GET".into(),
             url: url.to_string(),
-            headers: vec![("accept".into(), "application/json".into())],
+            headers: request_headers,
             body: Vec::new(),
         })?;
         Discovery::from_response(url, response)
@@ -200,11 +209,18 @@ impl Jwks {
     }
 
     /// Fetch the key set.
-    pub fn fetch(url: &str, client: &dyn HttpClient) -> AuthResult<Jwks> {
+    /// Fetch the key set, with the headers the provider asked for.
+    pub fn fetch(
+        url: &str,
+        headers: &[(String, String)],
+        client: &dyn HttpClient,
+    ) -> AuthResult<Jwks> {
+        let mut request_headers = vec![("accept".into(), "application/json".into())];
+        request_headers.extend(headers.iter().cloned());
         let response = client.request(&HttpRequest {
             method: "GET".into(),
             url: url.to_string(),
-            headers: vec![("accept".into(), "application/json".into())],
+            headers: request_headers,
             body: Vec::new(),
         })?;
         Jwks::from_response(url, response)
@@ -284,7 +300,7 @@ pub fn verify_for(
     let jwks_uri = config.jwks_uri.as_deref().ok_or_else(|| {
         AuthError::internal(format!("{}: the provider has no key set", config.id))
     })?;
-    let jwks = Jwks::fetch(jwks_uri, client)?;
+    let jwks = Jwks::fetch(jwks_uri, &config.discovery_headers, client)?;
     let issuer = config.issuer.as_deref().unwrap_or_default();
     let claims = verify_id_token(id_token, &jwks, issuer, &config.client_id, now)?;
     if !config.disable_id_token_nonce_binding {

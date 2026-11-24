@@ -714,6 +714,8 @@ pub struct ProviderConfig {
     pub token_method: Method,
     /// Extra fields in the token request.
     pub token_extra_fields: Vec<(String, String)>,
+    /// Headers the token request carries.
+    pub token_headers: Vec<(String, String)>,
     /// Standard fields the token request leaves out.
     pub token_omits: Vec<String>,
     /// A fragment on the authorization URL.
@@ -747,6 +749,8 @@ pub struct ProviderConfig {
     pub require_id_token_verification: bool,
     /// Whether the `nonce` claim is left out of the ID-token check.
     pub disable_id_token_nonce_binding: bool,
+    /// Headers the discovery and key-set requests carry.
+    pub discovery_headers: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -816,6 +820,11 @@ pub struct CustomProvider {
     pub response_type: Option<String>,
     /// The prompt of the authorization request.
     pub prompt: Option<String>,
+    /// Headers the token request carries — a gateway in front of the
+    /// provider may want a key of its own.
+    pub authorization_headers: Vec<(String, String)>,
+    /// Headers the discovery and key-set requests carry.
+    pub discovery_headers: Vec<(String, String)>,
 }
 
 /// The paths a provider uses for one field: the one it named, or the
@@ -939,6 +948,7 @@ impl ProviderConfig {
             client_id_param: preset.client_id_param.to_string(),
             client_secret_param: preset.client_secret_param.to_string(),
             token_method: preset.token_method,
+            token_headers: Vec::new(),
             token_extra_fields: preset
                 .token_extra_fields
                 .iter()
@@ -983,6 +993,7 @@ impl ProviderConfig {
             issuer: None,
             require_id_token_verification: false,
             disable_id_token_nonce_binding: false,
+            discovery_headers: Vec::new(),
         })
     }
 
@@ -1014,7 +1025,8 @@ impl ProviderConfig {
             client_id_param: "client_id".into(),
             client_secret_param: "client_secret".into(),
             token_method: Method::Post,
-            token_extra_fields: Vec::new(),
+            token_extra_fields: c.token_extra_fields.clone(),
+            token_headers: c.authorization_headers.clone(),
             token_omits: Vec::new(),
             auth_url_fragment: None,
             userinfo_query_from_token: Vec::new(),
@@ -1042,6 +1054,7 @@ impl ProviderConfig {
             issuer: c.issuer.clone(),
             require_id_token_verification: c.require_id_token_verification,
             disable_id_token_nonce_binding: c.disable_id_token_nonce_binding,
+            discovery_headers: c.discovery_headers.clone(),
             email_endpoint: None,
             token_email_path: None,
         }
@@ -1155,6 +1168,9 @@ impl ProviderConfig {
             fields.push(("code_verifier".into(), verifier.to_string()));
         }
         let mut headers: Vec<(String, String)> = vec![("accept".into(), "application/json".into())];
+        // The headers the provider asked for come after the ones the
+        // preset needs, so a provider can say what it wants.
+        headers.extend(self.token_headers.iter().cloned());
         match self.token_auth {
             TokenAuth::Basic => {
                 let raw = format!("{}:{}", self.client_id, self.client_secret);
@@ -1512,6 +1528,8 @@ impl OAuthRegistry {
                 scope_separator: None,
                 response_type: None,
                 prompt: None,
+                authorization_headers: Vec::new(),
+                discovery_headers: Vec::new(),
             };
             providers.push(ProviderConfig::from_custom(&custom));
         }
@@ -2536,6 +2554,8 @@ mod tests {
             scope_separator: None,
             response_type: None,
             prompt: None,
+            authorization_headers: Vec::new(),
+            discovery_headers: Vec::new(),
         }));
         assert_eq!(registry.ids(), vec!["acme"]);
         let acme = registry.get("acme").unwrap();

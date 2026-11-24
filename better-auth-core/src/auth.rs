@@ -274,7 +274,8 @@ impl Auth {
                 return crate::oidc::apply(config, found);
             }
         }
-        let discovery = crate::oidc::Discovery::fetch(&url, self.http_client())?;
+        let discovery =
+            crate::oidc::Discovery::fetch(&url, &config.discovery_headers, self.http_client())?;
         if let Ok(mut cache) = self.discovery.lock() {
             cache.insert(url, discovery.clone());
         }

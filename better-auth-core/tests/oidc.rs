@@ -124,7 +124,7 @@ fn serve(stream: &mut TcpStream, port: u16) {
 fn a_discovery_document_says_where_everything_is() {
     let provider = Provider::start();
     let client = PlainHttpClient;
-    let discovery = Discovery::fetch(&provider.discovery_url(), &client).expect("discovery");
+    let discovery = Discovery::fetch(&provider.discovery_url(), &[], &client).expect("discovery");
     assert_eq!(discovery.issuer, provider.issuer());
     assert!(discovery.token_endpoint.ends_with("/token"));
     assert_eq!(
@@ -138,7 +138,7 @@ fn a_discovery_document_says_where_everything_is() {
 fn the_key_set_is_read() {
     let provider = Provider::start();
     let client = PlainHttpClient;
-    let jwks = Jwks::fetch(&provider.jwks_url(), &client).expect("jwks");
+    let jwks = Jwks::fetch(&provider.jwks_url(), &[], &client).expect("jwks");
     assert_eq!(jwks.keys.len(), 1);
     assert_eq!(jwks.keys[0].kid.as_deref(), Some("test-key"));
     assert_eq!(jwks.keys[0].n.len(), 256);
@@ -150,9 +150,13 @@ fn an_id_token_signed_by_the_provider_checks_out() {
     let provider = Provider::start();
     let client = PlainHttpClient;
     let issuer = provider.issuer();
-    let discovery = Discovery::fetch(&provider.discovery_url(), &client).expect("discovery");
-    let jwks =
-        Jwks::fetch(discovery.jwks_uri.as_deref().expect("jwks uri"), &client).expect("jwks");
+    let discovery = Discovery::fetch(&provider.discovery_url(), &[], &client).expect("discovery");
+    let jwks = Jwks::fetch(
+        discovery.jwks_uri.as_deref().expect("jwks uri"),
+        &[],
+        &client,
+    )
+    .expect("jwks");
     let claims = verify_id_token(&token(), &jwks, &issuer, "client-123", 1_800_000_000)
         .expect("the token checks out");
     assert_eq!(claims.get("sub").and_then(|v| v.as_str()), Some("user-1"));
@@ -163,7 +167,7 @@ fn an_id_token_signed_by_the_provider_checks_out() {
 fn a_token_from_somewhere_else_is_refused() {
     let provider = Provider::start();
     let client = PlainHttpClient;
-    let jwks = Jwks::fetch(&provider.jwks_url(), &client).expect("jwks");
+    let jwks = Jwks::fetch(&provider.jwks_url(), &[], &client).expect("jwks");
     // The right key, but a token made for another issuer.
     let error = verify_id_token(
         &token(),
@@ -181,7 +185,7 @@ fn a_token_for_another_application_is_refused() {
     let provider = Provider::start();
     let client = PlainHttpClient;
     let issuer = provider.issuer();
-    let jwks = Jwks::fetch(&provider.jwks_url(), &client).expect("jwks");
+    let jwks = Jwks::fetch(&provider.jwks_url(), &[], &client).expect("jwks");
     let error = verify_id_token(&token(), &jwks, &issuer, "another-client", 1_800_000_000)
         .expect_err("refused");
     assert!(error
@@ -194,7 +198,7 @@ fn an_expired_token_is_refused() {
     let provider = Provider::start();
     let client = PlainHttpClient;
     let issuer = provider.issuer();
-    let jwks = Jwks::fetch(&provider.jwks_url(), &client).expect("jwks");
+    let jwks = Jwks::fetch(&provider.jwks_url(), &[], &client).expect("jwks");
     // The token expires in 2100; a time far past that is refused.
     let _ = &client;
     let error = verify_id_token(&token(), &jwks, &issuer, "client-123", 4_102_444_900)
@@ -207,7 +211,7 @@ fn a_tampered_token_is_refused() {
     let provider = Provider::start();
     let client = PlainHttpClient;
     let issuer = provider.issuer();
-    let jwks = Jwks::fetch(&provider.jwks_url(), &client).expect("jwks");
+    let jwks = Jwks::fetch(&provider.jwks_url(), &[], &client).expect("jwks");
     // One character of the signature changed.
     let mut parts: Vec<String> = token().split('.').map(str::to_string).collect();
     let signature = parts[2].clone();
