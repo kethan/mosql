@@ -1,0 +1,46 @@
+[package]
+name = "better-auth-core"
+version = "0.1.0"
+edition = "2021"
+description = "Better Auth-compatible authentication engine in Rust: bearer JWT sessions, 8 plugins, 32 OAuth providers, the full route table, on any store."
+license = "ISC"
+repository = "https://github.com/kethan/mosql"
+readme = "README.md"
+keywords = ["auth", "authentication", "oauth", "jwt", "better-auth"]
+categories = ["authentication", "web-programming::http-server"]
+
+# The engine is built from the repository's own crates: `mosql` for JSON,
+# `uflite` for the executor and error type, `nanobase` for the SQLite binding
+# and the verified SHA-256/HMAC/PBKDF2 primitives. Nothing is fetched from a
+# registry, which keeps the binary small and the build reproducible.
+# Outbound HTTPS for OAuth goes through the system `curl` (see `CurlHttpClient`);
+# the optional `reqwest` feature below is for hosts that would rather link TLS
+# into the binary than shell out.
+[dependencies]
+mosql = { version = "0.1", path = "../rust" }
+uflite = { version = "0.1", path = "../uflite" }
+nanobase = { version = "0.1", path = "../nanobase" }
+
+[lib]
+doctest = false
+name = "better_auth_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "better-auth-core"
+path = "src/main.rs"
+
+[features]
+default = []
+# Reserved for a future `reqwest`-backed HTTP client. Off by default because it
+# is the one dependency that needs a registry; to use it, add
+# `reqwest = { version = "0.12", default-features = false, features =
+# ["rustls-tls", "json"], optional = true }` under `[dependencies]`.
+reqwest = []
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
