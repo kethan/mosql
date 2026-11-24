@@ -24,6 +24,7 @@ use uflite::db::block_on;
 use uflite::error::{Error, Result};
 
 use crate::config::AppDoc;
+use crate::db::AppDb;
 use crate::platform::{AppRecord, Platform, PlatformStore};
 
 /// What happened.
@@ -175,7 +176,16 @@ struct Inner {
     listeners: Mutex<BTreeMap<Event, Vec<Listener>>>,
     hooks: Mutex<Hooks>,
     methods: Mutex<BTreeMap<String, CustomMethod>>,
+    /// How an app's rows are reached.
+    dbs: Mutex<Option<DbResolver>>,
 }
+
+/// How the service finds an app's rows.
+///
+/// The app's document says which engine the rows are in; this opens it.
+/// The platform hands the service one of these, so the service never has
+/// to know where an app's data lives.
+pub type DbResolver = Arc<dyn Fn(&AppRecord) -> Result<Arc<dyn AppDb>> + Send + Sync>;
 
 impl Service {
     /// A service over a store. The name is what the events and the hooks
@@ -190,6 +200,7 @@ impl Service {
                 listeners: Mutex::new(BTreeMap::new()),
                 hooks: Mutex::new(Hooks::new()),
                 methods: Mutex::new(BTreeMap::new()),
+                dbs: Mutex::new(None),
             }),
         })
     }
@@ -197,6 +208,12 @@ impl Service {
     /// The service's name.
     pub fn name(&self) -> &str {
         &self.inner.name
+    }
+
+    /// Say how an app's rows are reached.
+    pub fn with_dbs(self, resolver: DbResolver) -> Self {
+        *self.inner.dbs.lock().expect("not poisoned") = Some(resolver);
+        self
     }
 
     // ------------------------------------------------------------ events --
@@ -408,6 +425,159 @@ impl Service {
         self.run_after(&ctx);
         self.fire(Event::Removed, &ctx);
         Ok(record)
+    }
+
+    // ------------------------------------------------------------- rows --
+
+    /// The database an app's rows live in.
+    pub fn db(&self, app: &str) -> Result<Arc<dyn AppDb>> {
+        let record = self.app_record(app)?;
+        let resolver = self
+            .inner
+            .dbs
+            .lock()
+            .expect("not poisoned")
+            .clone()
+            .ok_or_else(|| Error::internal("no database resolver is configured"))?;
+        resolver(&record)
+    }
+
+    /// An app's record, by id or by name.
+    fn app_record(&self, app: &str) -> Result<AppRecord> {
+        let platform = self.platform()?;
+        platform
+            .find_app(app)
+            .cloned()
+            .ok_or_else(|| Error::not_found(format!("no app named {app}")))
+    }
+
+    /// The collections an app has.
+    pub fn collections(&self, app: &str) -> Result<Vec<String>> {
+        self.db(app)?.collections()
+    }
+
+    /// Every row of a collection.
+    pub fn rows(&self, app: &str, collection: &str) -> Result<Vec<Value>> {
+        self.db(app)?.rows(collection)
+    }
+
+    /// The rows that match a filter.
+    ///
+    /// The filter is a document, the same one the engine understands.
+    pub fn find_rows(
+        &self,
+        app: &str,
+        collection: &str,
+        query: &Value,
+        limit: Option<u64>,
+        offset: Option<u64>,
+    ) -> Result<Vec<Value>> {
+        self.db(app)?.find(collection, query, limit, offset)
+    }
+
+    /// How many rows match a filter.
+    pub fn count_rows(&self, app: &str, collection: &str, query: &Value) -> Result<u64> {
+        self.db(app)?.count(collection, query)
+    }
+
+    /// Put a row in. Fires [`Event::Created`].
+    pub fn insert_row(&self, app: &str, collection: &str, row: &Value) -> Result<Value> {
+        let ctx = self.row_context("db.insert", app, collection);
+        self.run_before(&ctx);
+        let db = self.db(app)?;
+        let inserted = match db.insert(collection, row.clone()) {
+            Ok(inserted) => inserted,
+            Err(e) => {
+                self.report_error("db.insert", Some(app), &e);
+                return Err(e);
+            }
+        };
+        let record = inserted;
+        let ctx = EventContext {
+            id: record
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            record: Some(record.clone()),
+            ..ctx
+        };
+        self.run_after(&ctx);
+        self.fire(Event::Created, &ctx);
+        Ok(record)
+    }
+
+    /// Change the row that matches a filter. Fires [`Event::Updated`].
+    ///
+    /// The changes are merged into the matching row.
+    pub fn update_row(
+        &self,
+        app: &str,
+        collection: &str,
+        query: &Value,
+        changes: &Value,
+    ) -> Result<Value> {
+        let ctx = self.row_context("db.update", app, collection);
+        self.run_before(&ctx);
+        let db = self.db(app)?;
+        let updated = match db.update(collection, query, changes) {
+            Ok(updated) => updated,
+            Err(e) => {
+                self.report_error("db.update", Some(app), &e);
+                return Err(e);
+            }
+        };
+        let Some(record) = updated else {
+            let e = Error::not_found("no row matches the filter");
+            self.report_error("db.update", Some(app), &e);
+            return Err(e);
+        };
+        let ctx = EventContext {
+            id: record
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            record: Some(record.clone()),
+            ..ctx
+        };
+        self.run_after(&ctx);
+        self.fire(Event::Updated, &ctx);
+        Ok(record)
+    }
+
+    /// Take out the rows that match a filter. Fires [`Event::Removed`].
+    pub fn remove_rows(&self, app: &str, collection: &str, query: &Value) -> Result<u64> {
+        let ctx = self.row_context("db.remove", app, collection);
+        self.run_before(&ctx);
+        let db = self.db(app)?;
+        let removed = match db.remove(collection, query) {
+            Ok(removed) => removed,
+            Err(e) => {
+                self.report_error("db.remove", Some(app), &e);
+                return Err(e);
+            }
+        };
+        let ctx = EventContext {
+            id: None,
+            record: None,
+            ..ctx
+        };
+        self.run_after(&ctx);
+        self.fire(Event::Removed, &ctx);
+        Ok(removed)
+    }
+
+    /// The context of a change to an app's rows.
+    ///
+    /// The id is the app's, so a listener knows whose rows changed; the
+    /// collection is in the method name's path.
+    fn row_context(&self, method: &str, app: &str, collection: &str) -> EventContext {
+        EventContext {
+            service: self.inner.name.clone(),
+            method: format!("{method}:{collection}"),
+            id: Some(app.to_string()),
+            record: None,
+            error: None,
+        }
     }
 
     // ------------------------------------------------------------ inside --

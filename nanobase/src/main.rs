@@ -8,11 +8,14 @@
 //! prompts for an email and password if they are not given as flags, and never
 //! prompts when they are, so a CI script or a provisioning tool can run it.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use mosql::Value;
+use nanobase::config::DbKind;
+use nanobase::db::AppDb;
 use nanobase::platform::PlatformStore;
 use nanobase::SqliteStore;
 use nanobase::{
@@ -42,6 +45,10 @@ APPS:
     nanobase app rename <id|name> <new-name>
     nanobase app clone <id|name> <new-name>                   copy config and schema, not rows
     nanobase app remove <id|name> --confirm <id>
+    nanobase app rows <id|name> <collection> [--filter JSON] [--limit N]
+    nanobase app insert <id|name> <collection> --json ROW
+    nanobase app update <id|name> <collection> --filter JSON --json CHANGES
+    nanobase app delete-rows <id|name> <collection> [--filter JSON]
     nanobase new <name> [--out <file>]                         write a new, empty app document
     nanobase validate <file>                                   check a document, list every problem
     nanobase redact <file> [--out <file>]                      copy a document without its secrets
@@ -138,7 +145,7 @@ fn cmd_serve(rest: &[String]) -> u8 {
     };
     let store = Arc::new(SqliteStore::new(data_path(&parsed)));
     let service = match Service::new("apps", store as Arc<dyn PlatformStore>) {
-        Ok(service) => Arc::new(service),
+        Ok(service) => Arc::new(service.with_dbs(db_resolver(&parsed))),
         Err(e) => {
             eprintln!("nanobase serve: {e}");
             return 1;
@@ -630,9 +637,14 @@ fn cmd_app(rest: &[String]) -> u8 {
         "rename" => app_rename(args),
         "clone" => app_clone(args),
         "remove" | "rm" | "delete" => app_remove(args),
+        "rows" => app_rows(args),
+        "insert" => app_insert(args),
+        "update" => app_update(args),
+        "delete-rows" => app_delete_rows(args),
         other => {
             eprintln!("nanobase app: unknown subcommand {other:?}\n");
             eprintln!("  new | import | list | show | export | rename | clone | remove");
+            eprintln!("  rows | insert | update | delete-rows");
             2
         }
     }
@@ -646,12 +658,57 @@ fn cmd_app(rest: &[String]) -> u8 {
 fn service_or_exit(parsed: &Parsed) -> Option<Service> {
     let store = SqliteStore::new(data_path(parsed));
     match Service::new("apps", Arc::new(store)) {
-        Ok(svc) => Some(svc),
+        Ok(svc) => Some(svc.with_dbs(db_resolver(parsed))),
         Err(e) => {
             eprintln!("nanobase: {e}");
             None
         }
     }
+}
+
+/// What opened an app's database: the engine, where it is, and the token
+/// that opens it.
+#[derive(PartialEq)]
+struct DbSettings {
+    kind: DbKind,
+    url: Option<String>,
+    token: Option<String>,
+}
+
+/// The open database handles, one per app: the settings that opened it
+/// and the handle itself.
+type OpenApps = Mutex<BTreeMap<String, (DbSettings, Arc<dyn AppDb>)>>;
+
+/// How an app's rows are reached.
+///
+/// The app's document says which engine they are in; this opens it. A
+/// local app's rows live in `apps/<id>/app.db` beside the platform's own
+/// database.
+///
+/// The handle is kept, so a request does not open the database again for
+/// every row it reads. A change to the app's database settings replaces
+/// it, because the old handle points at the old engine.
+fn db_resolver(parsed: &Parsed) -> nanobase::service::DbResolver {
+    let root = SqliteStore::new(data_path(parsed)).root();
+    let open: OpenApps = Mutex::new(BTreeMap::new());
+    Arc::new(move |record: &nanobase::platform::AppRecord| {
+        let database = &record.doc.config.database;
+        let settings = DbSettings {
+            kind: database.kind,
+            url: database.url.clone(),
+            token: database.token.clone(),
+        };
+        let mut open = open.lock().expect("not poisoned");
+        if let Some((known, db)) = open.get(&record.id) {
+            if known == &settings {
+                return Ok(db.clone());
+            }
+        }
+        let path = root.join("apps").join(&record.id);
+        let db = nanobase::db::factory::open(&record.doc.config.database, &path)?;
+        open.insert(record.id.clone(), (settings, db.clone()));
+        Ok(db)
+    })
 }
 
 /// The API client, when the command is pointed at a running platform.
@@ -937,6 +994,273 @@ fn app_import(rest: &[String]) -> u8 {
     println!("Imported {name}");
     println!("  id: {id}");
     0
+}
+
+/// The rows of an app's collection.
+///
+/// The same operation whether the platform is reached through its API or
+/// opened directly, so a script and the platform agree.
+fn app_rows(rest: &[String]) -> u8 {
+    let parsed = parse_args(
+        rest,
+        &["data", "url", "token", "filter", "limit", "offset"],
+        &[],
+    );
+    if let Some(e) = parsed.error {
+        eprintln!("nanobase app rows: {e}");
+        return 2;
+    }
+    let (Some(app), Some(collection)) = (parsed.first(), parsed.second()) else {
+        eprintln!("nanobase app rows: an app and a collection are required");
+        return 2;
+    };
+    let filter = match filter_of(&parsed) {
+        Ok(filter) => filter,
+        Err(e) => {
+            eprintln!("nanobase app rows: {e}");
+            return 2;
+        }
+    };
+    let rows = if let Some(client) = api_client(&parsed) {
+        let mut path = format!("/api/apps/{app}/db/{collection}");
+        let query = query_string(&parsed, &filter);
+        if !query.is_empty() {
+            path.push('?');
+            path.push_str(&query);
+        }
+        match client.request("GET", &path, None) {
+            Ok(value) => match value.get("items").and_then(|v| v.as_array()) {
+                Some(items) => items.clone(),
+                None => Vec::new(),
+            },
+            Err(e) => {
+                eprintln!("nanobase: {e}");
+                return 1;
+            }
+        }
+    } else {
+        let Some(service) = service_or_exit(&parsed) else {
+            return 1;
+        };
+        match service.find_rows(
+            app,
+            collection,
+            &filter,
+            limit_of(&parsed),
+            offset_of(&parsed),
+        ) {
+            Ok(rows) => rows,
+            Err(e) => {
+                eprintln!("nanobase: {e}");
+                return 1;
+            }
+        }
+    };
+    if rows.is_empty() {
+        println!("no rows");
+        return 0;
+    }
+    for row in &rows {
+        println!("{}", mosql::to_json(row));
+    }
+    0
+}
+
+/// Put a row in an app's collection.
+fn app_insert(rest: &[String]) -> u8 {
+    let parsed = parse_args(rest, &["data", "url", "token", "json"], &[]);
+    if let Some(e) = parsed.error {
+        eprintln!("nanobase app insert: {e}");
+        return 2;
+    }
+    let (Some(app), Some(collection)) = (parsed.first(), parsed.second()) else {
+        eprintln!("nanobase app insert: an app and a collection are required");
+        return 2;
+    };
+    let Some(text) = parsed.get("json") else {
+        eprintln!("nanobase app insert: --json is required");
+        return 2;
+    };
+    let row = match mosql::parse_json(text) {
+        Ok(row) => row,
+        Err(e) => {
+            eprintln!("nanobase app insert: --json is not JSON: {e}");
+            return 2;
+        }
+    };
+    let inserted = if let Some(client) = api_client(&parsed) {
+        let mut body = mosql::Object::new();
+        body.set("row", row);
+        match client.request(
+            "POST",
+            &format!("/api/apps/{app}/db/{collection}"),
+            Some(&Value::Object(body)),
+        ) {
+            Ok(value) => value,
+            Err(e) => {
+                eprintln!("nanobase: {e}");
+                return 1;
+            }
+        }
+    } else {
+        let Some(service) = service_or_exit(&parsed) else {
+            return 1;
+        };
+        match service.insert_row(app, collection, &row) {
+            Ok(row) => row,
+            Err(e) => {
+                eprintln!("nanobase: {e}");
+                return 1;
+            }
+        }
+    };
+    println!("{}", mosql::to_json(&inserted));
+    0
+}
+
+/// Change the rows of an app's collection that match a filter.
+fn app_update(rest: &[String]) -> u8 {
+    let parsed = parse_args(rest, &["data", "url", "token", "filter", "json"], &[]);
+    if let Some(e) = parsed.error {
+        eprintln!("nanobase app update: {e}");
+        return 2;
+    }
+    let (Some(app), Some(collection)) = (parsed.first(), parsed.second()) else {
+        eprintln!("nanobase app update: an app and a collection are required");
+        return 2;
+    };
+    let Some(text) = parsed.get("json") else {
+        eprintln!("nanobase app update: --json is required");
+        return 2;
+    };
+    let changes = match mosql::parse_json(text) {
+        Ok(changes) => changes,
+        Err(e) => {
+            eprintln!("nanobase app update: --json is not JSON: {e}");
+            return 2;
+        }
+    };
+    let filter = match filter_of(&parsed) {
+        Ok(filter) => filter,
+        Err(e) => {
+            eprintln!("nanobase app update: {e}");
+            return 2;
+        }
+    };
+    let updated = if let Some(client) = api_client(&parsed) {
+        let mut body = mosql::Object::new();
+        body.set("filter", filter);
+        body.set("changes", changes);
+        match client.request(
+            "PATCH",
+            &format!("/api/apps/{app}/db/{collection}"),
+            Some(&Value::Object(body)),
+        ) {
+            Ok(value) => value,
+            Err(e) => {
+                eprintln!("nanobase: {e}");
+                return 1;
+            }
+        }
+    } else {
+        let Some(service) = service_or_exit(&parsed) else {
+            return 1;
+        };
+        match service.update_row(app, collection, &filter, &changes) {
+            Ok(row) => row,
+            Err(e) => {
+                eprintln!("nanobase: {e}");
+                return 1;
+            }
+        }
+    };
+    println!("{}", mosql::to_json(&updated));
+    0
+}
+
+/// Take the rows of an app's collection that match a filter out.
+fn app_delete_rows(rest: &[String]) -> u8 {
+    let parsed = parse_args(rest, &["data", "url", "token", "filter"], &[]);
+    if let Some(e) = parsed.error {
+        eprintln!("nanobase app delete-rows: {e}");
+        return 2;
+    }
+    let (Some(app), Some(collection)) = (parsed.first(), parsed.second()) else {
+        eprintln!("nanobase app delete-rows: an app and a collection are required");
+        return 2;
+    };
+    let filter = match filter_of(&parsed) {
+        Ok(filter) => filter,
+        Err(e) => {
+            eprintln!("nanobase app delete-rows: {e}");
+            return 2;
+        }
+    };
+    let removed = if let Some(client) = api_client(&parsed) {
+        let mut path = format!("/api/apps/{app}/db/{collection}");
+        let query = query_string(&parsed, &filter);
+        if !query.is_empty() {
+            path.push('?');
+            path.push_str(&query);
+        }
+        match client.request("DELETE", &path, None) {
+            Ok(value) => value.get("removed").and_then(|v| v.as_f64()).unwrap_or(0.0) as u64,
+            Err(e) => {
+                eprintln!("nanobase: {e}");
+                return 1;
+            }
+        }
+    } else {
+        let Some(service) = service_or_exit(&parsed) else {
+            return 1;
+        };
+        match service.remove_rows(app, collection, &filter) {
+            Ok(removed) => removed,
+            Err(e) => {
+                eprintln!("nanobase: {e}");
+                return 1;
+            }
+        }
+    };
+    println!("{removed} row(s) removed");
+    0
+}
+
+/// The filter a command asks for.
+fn filter_of(parsed: &Parsed) -> Result<Value, String> {
+    match parsed.get("filter") {
+        None => Ok(Value::Object(mosql::Object::new())),
+        Some(text) => mosql::parse_json(text).map_err(|e| format!("--filter is not JSON: {e}")),
+    }
+}
+
+/// The query string a request carries: the filter, the limit, the offset.
+fn query_string(parsed: &Parsed, filter: &Value) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let filter_text = mosql::to_json(filter);
+    if filter_text != "{}" {
+        parts.push(format!(
+            "filter={}",
+            nanobase::http::percent_encode(&filter_text)
+        ));
+    }
+    if let Some(limit) = parsed.get("limit") {
+        parts.push(format!("limit={}", nanobase::http::percent_encode(limit)));
+    }
+    if let Some(offset) = parsed.get("offset") {
+        parts.push(format!("offset={}", nanobase::http::percent_encode(offset)));
+    }
+    parts.join("&")
+}
+
+/// A number a command asked for.
+fn limit_of(parsed: &Parsed) -> Option<u64> {
+    parsed.get("limit").and_then(|v| v.parse().ok())
+}
+
+/// A number a command asked for.
+fn offset_of(parsed: &Parsed) -> Option<u64> {
+    parsed.get("offset").and_then(|v| v.parse().ok())
 }
 
 fn app_list(rest: &[String]) -> u8 {

@@ -21,11 +21,24 @@ use crate::db::sqlite::SqliteDb;
 use crate::db::tcp::TcpDb;
 use crate::db::AppDb;
 
+/// The prefix that says a database is on a socket rather than on the web.
+const TCP_SCHEME: &str = "tcp://";
+
 /// Open the database an app's configuration asks for.
 ///
 /// `path` is where a local file goes: the app's own data directory. A
 /// remote engine uses the URL in the configuration instead.
 pub fn open(config: &DatabaseConfig, path: &Path) -> Result<Arc<dyn AppDb>> {
+    // A socket is a socket whatever the engine says: the protocol is the
+    // app-database one, and it does not care which engine is behind it.
+    // The scheme in the URL is what picks the transport.
+    if let Some(address) = config
+        .url
+        .as_deref()
+        .and_then(|url| url.strip_prefix(TCP_SCHEME))
+    {
+        return open_tcp_at(config, address);
+    }
     match config.kind {
         DbKind::Memory => Ok(Arc::new(MemoryDb::new())),
         DbKind::Sqlite => Ok(Arc::new(SqliteDb::open(path.join("app.db"))?)),
@@ -58,15 +71,20 @@ pub fn open_tcp(config: &DatabaseConfig) -> Result<Arc<dyn AppDb>> {
                 .url
                 .as_deref()
                 .ok_or_else(|| Error::internal("this database needs a url"))?;
-            let mut db = TcpDb::new(address);
-            if let Some(token) = &config.token {
-                db = db.with_token(token.clone());
-            }
-            Ok(Arc::new(db))
+            open_tcp_at(config, address)
         }
         other => Err(Error::internal(format!(
             "the {} engine is not reached over a socket",
             other.as_str()
         ))),
     }
+}
+
+/// The same, at an address the caller already knows.
+fn open_tcp_at(config: &DatabaseConfig, address: &str) -> Result<Arc<dyn AppDb>> {
+    let mut db = TcpDb::new(address);
+    if let Some(token) = &config.token {
+        db = db.with_token(token.clone());
+    }
+    Ok(Arc::new(db))
 }

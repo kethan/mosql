@@ -30,7 +30,7 @@ budget that [`verify.sh`](verify.sh) enforces.
 | HTTP API and the server | done — 19 tests |
 | Command line as an API client | done |
 | App database: memory, SQLite, HTTP, TCP | done — 6 tests |
-| Serving an app's rows over the API | next |
+| Serving an app's rows over the API | done — 8 tests |
 | SQL engines (Postgres, MySQL) | next — needs a driver |
 
 ## What an app document is
@@ -228,6 +228,11 @@ nanobase serve [--host H] [--port P]        run the API (default 0.0.0.0:8090)
 | `DELETE /api/apps/{id}` | remove it — `{"confirm": "<id>"}` |
 | `GET /api/apps/{id}/methods` | the custom methods |
 | `POST /api/apps/{id}/methods/{name}` | call one — `{"args": ["…"]}` |
+| `GET /api/apps/{id}/db` | the collections an app has |
+| `GET /api/apps/{id}/db/{collection}` | the rows — `?filter={…}&limit=…&offset=…` |
+| `POST /api/apps/{id}/db/{collection}` | put a row in |
+| `PATCH /api/apps/{id}/db/{collection}` | change the rows that match — `{"filter": …, "changes": …}` |
+| `DELETE /api/apps/{id}/db/{collection}` | take the rows that match out |
 | `GET /api/events` | the events a successful change fires |
 
 Every route but `health` and `login` wants `Authorization: Bearer <token>`.
@@ -274,6 +279,32 @@ authorization: Bearer s3cret
 A request without the right token is refused, over HTTP and over a
 socket alike.
 
+### Reading an app's rows from the service
+
+The service reaches an app's rows through a resolver: the host says how an
+app's document turns into an open database, and the service does the rest.
+The service never opens an engine itself, so the platform and a program
+that embeds it can reach the same rows the same way.
+
+```rust
+use std::sync::Arc;
+use nanobase::db::AppDb;
+use nanobase::service::DbResolver;
+
+let resolver: DbResolver = Arc::new(|record| {
+    let db = nanobase::db::factory::open(&record.doc.config.database, &path)?;
+    Ok(db as Arc<dyn AppDb>)
+});
+let service = Service::new("apps", store)?.with_dbs(resolver);
+
+service.insert_row("todos", "notes", &mosql::Value::str("hello"))?;
+let rows = service.find_rows("todos", "notes", &filter, Some(10), None)?;
+```
+
+A row that goes in, changes or comes out fires the same events as any
+other change — `created`, `updated`, `removed` — so a listener sees them
+whatever route made them.
+
 ## Events, hooks and custom methods
 
 The service is the one path every change takes, whether it comes from the
@@ -311,6 +342,10 @@ nanobase app export <id|name> [--out F] [--redact]
 nanobase app rename <id|name> <new-name>
 nanobase app clone <id|name> <new-name>
 nanobase app remove <id|name> --confirm <id>
+nanobase app rows <id|name> <collection> [--filter JSON] [--limit N]
+nanobase app insert <id|name> <collection> --json ROW
+nanobase app update <id|name> <collection> --filter JSON --json CHANGES
+nanobase app delete-rows <id|name> <collection> [--filter JSON]
 nanobase new <name> [--out <file>]           write a new, empty app document
 nanobase validate <file>                     check a document, list every problem
 nanobase redact <file> [--out <file>]        copy a document without its secrets

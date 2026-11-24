@@ -18,6 +18,11 @@
 //! * `DELETE /api/apps/{id}` — remove it.
 //! * `GET    /api/apps/{id}/methods` — the custom methods.
 //! * `POST   /api/apps/{id}/methods/{name}` — call one.
+//! * `GET    /api/apps/{id}/db` — the collections an app has.
+//! * `GET    /api/apps/{id}/db/{collection}` — the rows of a collection.
+//! * `POST   /api/apps/{id}/db/{collection}` — put a row in.
+//! * `PATCH  /api/apps/{id}/db/{collection}` — change the rows that match.
+//! * `DELETE /api/apps/{id}/db/{collection}` — take the rows that match out.
 //! * `GET    /api/events` — the events a change fires.
 //!
 //! Every app operation goes through the service, so a change made over HTTP
@@ -120,6 +125,25 @@ impl Api {
                 );
                 Ok(json(200, &Value::Object(body)))
             }
+            ["api", "apps", key, "db"] => {
+                self.authenticate(req)?;
+                if req.method != "GET" {
+                    return Err(method_not_allowed("GET"));
+                }
+                self.require_app(key)?;
+                self.collections(key)
+            }
+            ["api", "apps", key, "db", collection] => {
+                self.authenticate(req)?;
+                self.require_app(key)?;
+                match req.method.as_str() {
+                    "GET" => self.rows(req, key, collection),
+                    "POST" => self.insert_row(req, key, collection),
+                    "PATCH" => self.update_row(req, key, collection),
+                    "DELETE" => self.remove_rows(req, key, collection),
+                    _ => Err(method_not_allowed("GET, POST, PATCH, DELETE")),
+                }
+            }
             ["api", "apps", key, "methods", name] => {
                 self.authenticate(req)?;
                 if req.method != "POST" {
@@ -205,6 +229,86 @@ impl Api {
         out.set("token", Value::str(token));
         out.set("user", user.to_value());
         Ok(json(200, &Value::Object(out)))
+    }
+
+    // ----------------------------------------------------------- app rows --
+
+    /// The collections an app has.
+    fn collections(&self, key: &str) -> Result<Response, ApiError> {
+        let names = self.service.collections(key).map_err(db_error)?;
+        let mut body = Object::new();
+        body.set(
+            "collections",
+            Value::Array(names.into_iter().map(Value::str).collect()),
+        );
+        Ok(json(200, &Value::Object(body)))
+    }
+
+    /// The rows of a collection, filtered by the query string.
+    ///
+    /// `filter` is a JSON document, `limit` and `offset` are numbers.
+    fn rows(&self, req: &Request, key: &str, collection: &str) -> Result<Response, ApiError> {
+        let filter = filter_of(req)?;
+        let limit = number_of(req, "limit")?;
+        let offset = number_of(req, "offset")?;
+        let rows = self
+            .service
+            .find_rows(key, collection, &filter, limit, offset)
+            .map_err(db_error)?;
+        let total = self
+            .service
+            .count_rows(key, collection, &filter)
+            .map_err(db_error)?;
+        let mut body = Object::new();
+        body.set("items", Value::Array(rows));
+        body.set("total", Value::Int(total as i64));
+        Ok(json(200, &Value::Object(body)))
+    }
+
+    /// Put a row in a collection.
+    fn insert_row(&self, req: &Request, key: &str, collection: &str) -> Result<Response, ApiError> {
+        let body = req.json()?;
+        let row = body.get("row").cloned().unwrap_or_else(|| body.clone());
+        let inserted = self
+            .service
+            .insert_row(key, collection, &row)
+            .map_err(db_error)?;
+        Ok(json(200, &inserted))
+    }
+
+    /// Change the rows that match a filter.
+    fn update_row(&self, req: &Request, key: &str, collection: &str) -> Result<Response, ApiError> {
+        let body = req.json()?;
+        let filter = body
+            .get("filter")
+            .cloned()
+            .unwrap_or_else(|| Value::Object(Object::new()));
+        let changes = body
+            .get("changes")
+            .cloned()
+            .ok_or_else(|| ApiError::invalid_request("changes is required"))?;
+        let updated = self
+            .service
+            .update_row(key, collection, &filter, &changes)
+            .map_err(db_error)?;
+        Ok(json(200, &updated))
+    }
+
+    /// Take the rows that match a filter out.
+    fn remove_rows(
+        &self,
+        req: &Request,
+        key: &str,
+        collection: &str,
+    ) -> Result<Response, ApiError> {
+        let filter = filter_of(req)?;
+        let removed = self
+            .service
+            .remove_rows(key, collection, &filter)
+            .map_err(db_error)?;
+        let mut body = Object::new();
+        body.set("removed", Value::Int(removed as i64));
+        Ok(json(200, &Value::Object(body)))
     }
 
     // -------------------------------------------------------------- apps --
@@ -360,6 +464,45 @@ fn apps_len(body: &Object) -> i64 {
 
 fn json(status: u16, value: &Value) -> Response {
     Response::json(status, value)
+}
+
+/// The filter a request asks for: the `filter` query parameter, or the
+/// `filter` field of the body.
+///
+/// Either place will do, so a script can send the filter in the query
+/// string and a client that has a body can put it there.
+fn filter_of(req: &Request) -> Result<Value, ApiError> {
+    if let Some(text) = req.query_param("filter") {
+        return mosql::parse_json(text)
+            .map_err(|e| ApiError::invalid_request(format!("filter is not JSON: {e}")));
+    }
+    let body = req.json()?;
+    match body.get("filter") {
+        Some(filter) => Ok(filter.clone()),
+        None => Ok(Value::Object(Object::new())),
+    }
+}
+
+/// A database failure, as the API answers it.
+///
+/// The status comes from the error itself, so a filter that matches no row
+/// is a 404 and not a failure of the engine.
+fn db_error(e: uflite::error::Error) -> ApiError {
+    match e.status() {
+        404 => ApiError::not_found("NOT_FOUND", format!("database: {e}")),
+        status => ApiError::new(status, "DATABASE_ERROR", format!("database: {e}")),
+    }
+}
+
+/// A number from the query string.
+fn number_of(req: &Request, name: &str) -> Result<Option<u64>, ApiError> {
+    match req.query_param(name) {
+        None => Ok(None),
+        Some(text) => text
+            .parse::<u64>()
+            .map(Some)
+            .map_err(|_| ApiError::invalid_request(format!("{name} is not a number"))),
+    }
 }
 
 fn method_not_allowed(allowed: &str) -> ApiError {
