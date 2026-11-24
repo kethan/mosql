@@ -16,6 +16,10 @@ name: Rust
 #   schemaless schemaless/verify.sh on the same matrix — the schema-less SQL
 #              collection port (schemaless.js + client.js): fmt, clippy,
 #              the DDL tests, publish dry-run
+#   nanobase   nanobase/verify.sh on the same matrix — the platform crate
+#              (app documents, secrets, import/export): fmt, clippy, the
+#              validation tests, publish dry-run, and a cap on the release
+#              binary's size
 
 on:
   push:
@@ -24,6 +28,7 @@ on:
       - "rust/**"
       - "uflite/**"
       - "schemaless/**"
+      - "nanobase/**"
       # The JS implementation is the oracle for the parity fixtures, so a change
       # to it can make the Rust port drift even though rust/ is untouched.
       - "src/**"
@@ -37,6 +42,7 @@ on:
       - "rust/**"
       - "uflite/**"
       - "schemaless/**"
+      - "nanobase/**"
       - "src/**"
       - "lite/**"
       - "tiny/**"
@@ -178,6 +184,30 @@ jobs:
       - name: Verify
         shell: bash
         run: ./schemaless/verify.sh
+
+  nanobase:
+    # Depends on the mosql crate and uflite by path, so a change to either can
+    # break it. Also the job that measures the release binary: the platform is
+    # meant to ship as one small file, and that is a property of the build, not
+    # of the source.
+    name: nanobase (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: nanobase
+      - name: Verify
+        shell: bash
+        run: ./nanobase/verify.sh
 
   # `cargo publish --dry-run` needs the crates.io index, which the sandbox that
   # developed this crate had no access to. CI has it, so this is the gate that
