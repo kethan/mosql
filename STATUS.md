@@ -1,7 +1,7 @@
 # Status: the Rust port, the two editions, and what they cost
 
 The numbers below were measured on the machine this was built on, on
-commit `fbeed1d`. Every figure can be reproduced:
+commit `e6c4a97`. Every figure can be reproduced:
 
 ```
 python3 bench/run.py --rounds 3 --out table.md
@@ -108,10 +108,10 @@ join them. It now writes into **one buffer**:
 
 | case | Rust | JavaScript | Go | Rust vs JS | Rust vs Go |
 | --- | --- | --- | --- | --- | --- |
-| find | **1,031 ns** | 4,272 ns | 1,583 ns | **4.1× faster** | **1.5× faster** |
-| update | **1,177 ns** | 5,293 ns | 1,880 ns | **4.5× faster** | **1.6× faster** |
-| aggregate | **1,939 ns** | 7,195 ns | 2,478 ns | **3.7× faster** | **1.3× faster** |
-| insert50 | **2,251 ns** | 19,353 ns | 11,541 ns | **8.6× faster** | **5.1× faster** |
+| find | **1,048 ns** | 4,272 ns | 1,685 ns | **4.1× faster** | **1.6× faster** |
+| update | **1,168 ns** | 5,417 ns | 2,056 ns | **4.6× faster** | **1.8× faster** |
+| aggregate | **1,979 ns** | 7,825 ns | 2,354 ns | **4.0× faster** | **1.2× faster** |
+| insert50 | **2,458 ns** | 19,563 ns | 11,518 ns | **8.0× faster** | **4.7× faster** |
 
 ### The in-memory engine
 
@@ -119,11 +119,11 @@ Ten thousand documents, best of 3.
 
 | case | Rust | JavaScript | Go | Rust vs JS | Rust vs Go |
 | --- | --- | --- | --- | --- | --- |
-| find | **2,249,477 ns** | 9,948,367 ns | 3,281,701 ns | **4.4× faster** | **1.5× faster** |
-| find+sort | **3,850,653 ns** | 16,453,216 ns | 7,928,313 ns | **4.3× faster** | **2.1× faster** |
-| aggregate | **3,048,596 ns** | 5,886,126 ns | 3,193,776 ns | **1.9× faster** | **1.0× faster** |
-| updateMany | **2,191,068 ns** | 15,399,849 ns | 3,601,355 ns | **7.0× faster** | **1.6× faster** |
-| insert1 | 516 ns | **424 ns** | 664 ns | 0.8× — JS wins | **1.3× faster** |
+| find | **2,352,891 ns** | 9,554,465 ns | 3,169,767 ns | **4.1× faster** | **1.3× faster** |
+| find+sort | **3,622,289 ns** | 16,169,308 ns | 7,728,377 ns | **4.5× faster** | **2.1× faster** |
+| aggregate | **2,852,604 ns** | 5,754,169 ns | 3,165,584 ns | **2.0× faster** | **1.1× faster** |
+| updateMany | **1,967,707 ns** | 13,942,502 ns | 3,593,877 ns | **7.1× faster** | **1.8× faster** |
+| insert1 | 548 ns | **257 ns** | 623 ns | 0.5× — JS wins | **1.1× faster** |
 
 ### The command line
 
@@ -132,16 +132,18 @@ its arguments and print a line.
 
 | command | best | median | peak RSS |
 | --- | --- | --- | --- |
-| `nanobase --version` | 1.3 ms | 1.3 ms | 10,316 KiB |
-| Go equivalent | 1.0 ms | 1.1 ms | 10,308 KiB |
-| `node --version` | 3.4 ms | 3.6 ms | 18,828 KiB |
+| `nanobase --version` | 1.3 ms | 1.4 ms | 10,260 KiB |
+| Go equivalent | 1.0 ms | 1.1 ms | 10,292 KiB |
+| `node --version` | 3.3 ms | 3.4 ms | 18,816 KiB |
 
 **The goal — Rust faster than JavaScript and Go — is met for every
-SQL-builder case and every meaningful multi-document in-memory case.**
+SQL-builder case (1.2× to 4.7× faster than Go, 4.0× to 8.0× faster
+than JavaScript) and every meaningful multi-document in-memory case
+(1.1× to 2.1× faster than Go, 2.0× to 7.1× faster than JavaScript).**
 The one exception is `insert1`: a single small document inserted into
-an in-memory collection is 424 ns in JavaScript and 516 ns in Rust.
+an in-memory collection is 257 ns in JavaScript and 548 ns in Rust.
 That case is dominated by the hash map insertion and the fixed overhead
-of the call, not by the query builder, and the gap is 92 ns.
+of the call, not by the query builder, and the gap is 291 ns.
 
 ---
 
@@ -151,19 +153,19 @@ The peak resident set size — the most the process held at once.
 
 | what | peak RSS | | against Rust |
 | --- | --- | --- | --- |
-| **Rust** SQL builder | **10,344 KiB** | 10.1 MiB | — |
-| **Rust** in-memory engine | **16,876 KiB** | 16.5 MiB | — |
-| Go SQL builder | 10,148 KiB | 9.9 MiB | 196 KiB less |
-| Go in-memory engine | 20,644 KiB | 20.2 MiB | 3,768 KiB more |
-| Node SQL builder | 63,880 KiB | 62.4 MiB | 53,536 KiB more |
-| Node in-memory engine | 96,360 KiB | 94.1 MiB | 79,484 KiB more |
+| **Rust** SQL builder | **10,384 KiB** | 10.1 MiB | — |
+| **Rust** in-memory engine | **16,968 KiB** | 16.6 MiB | — |
+| Go SQL builder | 10,436 KiB | 10.2 MiB | 52 KiB more |
+| Go in-memory engine | 20,656 KiB | 20.2 MiB | 3,688 KiB more |
+| Node SQL builder | 62,600 KiB | 61.1 MiB | 52,216 KiB more |
+| Node in-memory engine | 98,356 KiB | 96.1 MiB | 81,388 KiB more |
 
 **Rust uses the least memory of the three on every comparable
 measurement**, and Node uses the most by a wide margin:
 
-* against **JavaScript**: 6.2× less for the builder, 5.7× less for the
+* against **JavaScript**: 6.0× less for the builder, 5.8× less for the
   in-memory engine.
-* against **Go**: 2 KiB less for the builder (a tie), 1.2× less for the
+* against **Go**: 52 KiB less for the builder (a tie), 1.2× less for the
   in-memory engine.
 
 The two editions of the platform are the same story: the serverless
