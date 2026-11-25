@@ -319,6 +319,16 @@ impl Api {
                     _ => Err(method_not_allowed("GET, PUT, PATCH, DELETE")),
                 }
             }
+            ["api", "apps", key, "clone"] => {
+                let principal = self.authenticate(req)?;
+                principal.require(apikey::SCOPE_APPS_WRITE, "create apps")?;
+                self.require_app_access(&principal, key)?;
+                if req.method != "POST" {
+                    return Err(method_not_allowed("POST"));
+                }
+                self.require_app(key)?;
+                self.clone_app(req, key)
+            }
             ["api", "apps", key, "methods"] => {
                 let principal = self.authenticate(req)?;
                 principal.require(apikey::SCOPE_APPS_READ, "read the apps")?;
@@ -932,6 +942,42 @@ impl Api {
             .create(doc)
             .map_err(|e| ApiError::internal(format!("platform: {e}")))?;
         Ok(json(201, &record))
+    }
+
+    /// Copy an app.
+    ///
+    /// The body says what the copy is: a name, what happens to the rows
+    /// — `omit`, `copy` or `share` — and, for a copy, the database the
+    /// rows go in.
+    fn clone_app(&self, req: &Request, key: &str) -> Result<Response, ApiError> {
+        let body = req.json()?;
+        let name = body
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ApiError::invalid_request("name is required"))?;
+        let data = match body.get("data").and_then(|v| v.as_str()) {
+            Some(text) => crate::clone::CloneData::parse(text).ok_or_else(|| {
+                ApiError::invalid_request("data must be one of: omit, copy, share")
+            })?,
+            None => crate::clone::CloneData::Omit,
+        };
+        let request = crate::clone::CloneRequest {
+            name: name.to_string(),
+            data,
+            database: body
+                .get("database")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            token: body
+                .get("token")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+        };
+        let summary = self
+            .service
+            .clone_app(key, &request)
+            .map_err(|e| ApiError::internal(format!("platform: {e}")))?;
+        Ok(json(201, &summary.to_value()))
     }
 
     fn update_app(&self, req: &Request, key: &str) -> Result<Response, ApiError> {

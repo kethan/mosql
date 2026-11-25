@@ -12,12 +12,20 @@
 //! * [`memory::MemoryDb`] — in the process, and gone when it stops.
 //! * [`sqlite::SqliteDb`] — a local file, one table per collection.
 //! * [`http::HttpDb`] — a serverless database behind an HTTP API.
+//! * [`provider::ProviderDb`] — the database itself, in the protocol it
+//!   speaks: libSQL, D1, PostgreSQL, MySQL.
 //! * [`tcp::TcpDb`] — a database service on a socket.
 //!
 //! The two remote adapters speak one protocol — a JSON request per
 //! operation, a JSON reply per operation — so a service can answer over
 //! HTTP, over TCP, or both. [`DbServer`] is the reference implementation
 //! of the other end, over any [`AppDb`].
+//!
+//! The provider adapter is the odd one out: it speaks the *database's*
+//! protocol, not this platform's. That is what lets an app's rows live in
+//! Neon, in TiDB, in PlanetScale, in Turso or in D1 without a database
+//! service in front of them — which is the whole point of a serverless
+//! deployment.
 //!
 //! The filters are documents, not SQL: `{"done": false}` finds the rows
 //! that are not done. The matcher is `mosql`'s, the same one the in-process
@@ -27,6 +35,8 @@ pub mod factory;
 #[cfg(feature = "curl")]
 pub mod http;
 pub mod memory;
+#[cfg(feature = "curl")]
+pub mod provider;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 #[cfg(feature = "native")]
@@ -80,6 +90,50 @@ pub trait AppDb: Send + Sync {
 
     /// Remove every row matching a filter; returns how many went.
     fn remove(&self, collection: &str, query: &Value) -> Result<u64>;
+}
+
+/// A collection name reduced to characters that are safe in a table name.
+///
+/// A collection name is a name an app chose, so it is quoted rather than
+/// trusted — and reduced, so that a name cannot become a statement.
+pub(crate) fn sanitize(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    if cleaned.is_empty() {
+        "unnamed".to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// Apply a change document to a row.
+///
+/// A change is either a set of fields to merge — `{"done": true}` — or an
+/// update document with operators, `{"$set": {"done": true}}`. Both are
+/// what the JS side accepts, and both mean the same thing here as in the
+/// in-process engine: this is the same rule, written out once, so every
+/// adapter changes a row the same way.
+pub(crate) fn apply_changes(row: &mut Row, changes: &Value) -> Result<()> {
+    let Some(object) = changes.as_object() else {
+        return Err(uflite::error::Error::internal(
+            "a change must be a document",
+        ));
+    };
+    for (op, fields) in object.iter() {
+        if op.starts_with('$') {
+            let Some(fields) = fields.as_object() else {
+                return Err(uflite::error::Error::internal(format!(
+                    "{op} requires an object"
+                )));
+            };
+            mosql::memory::apply_update(op, fields, row, false)?;
+        } else {
+            mosql::memory::set_path(row, op, fields.clone());
+        }
+    }
+    Ok(())
 }
 
 /// What a request asks for.

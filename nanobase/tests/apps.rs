@@ -5,7 +5,7 @@
 #![cfg(feature = "native")]
 
 use nanobase::platform::{create_owner_with, iso8601, FileStore, Platform, PlatformStore};
-use nanobase::{AppDoc, DbKind, Secrets};
+use nanobase::{AppDoc, CloneRequest, DbKind, Secrets};
 use uflite::db::block_on;
 
 const NOW: i64 = 1_700_000_000;
@@ -192,7 +192,10 @@ fn cloning_copies_the_shape_but_not_the_rows() {
     doc.meta.includes_data = true;
     let id = p.create_app(doc, NOW).unwrap().id.clone();
 
-    let clone = p.clone_app(&id, "todos-staging", NOW).unwrap();
+    let clone = p
+        .clone_app(&id, &CloneRequest::named("todos-staging"), NOW)
+        .unwrap()
+        .0;
     assert_ne!(clone.id, id);
     assert_eq!(clone.doc.app.name, "todos-staging");
     assert!(clone.doc.schema.contains_key("notes"), "schema is copied");
@@ -212,7 +215,10 @@ fn cloning_reuses_none_of_the_secrets() {
     doc.config.auth.secret = Some("0123456789abcdef".to_string());
     doc.config.auth.features.email_password = true;
     let id = p.create_app(doc, NOW).unwrap().id.clone();
-    let clone = p.clone_app(&id, "todos-staging", NOW).unwrap();
+    let clone = p
+        .clone_app(&id, &CloneRequest::named("todos-staging"), NOW)
+        .unwrap()
+        .0;
     assert_eq!(
         clone.doc.config.auth.secret.as_deref(),
         Some("0123456789abcdef"),
@@ -225,7 +231,12 @@ fn cloning_cannot_collide_with_an_existing_name() {
     let mut p = signed_up();
     let id = p.create_app(todos(), NOW).unwrap().id.clone();
     p.create_app(AppDoc::empty("taken"), NOW).unwrap();
-    assert_eq!(p.clone_app(&id, "taken", NOW).unwrap_err().status(), 409);
+    assert_eq!(
+        p.clone_app(&id, &CloneRequest::named("taken"), NOW)
+            .unwrap_err()
+            .status(),
+        409
+    );
 }
 
 // --------------------------------------------------------------- replacing ---

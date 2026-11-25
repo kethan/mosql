@@ -247,20 +247,48 @@ impl DatabaseConfig {
         matches!(self.kind, DbKind::Memory | DbKind::Sqlite)
     }
 
-    /// A serverless engine: reachable over HTTP, no interactive transactions.
+    /// Whether the app's rows have somewhere to live.
+    ///
+    /// An app with no database yet is a template: it can be imported,
+    /// shared and cloned, and it becomes an app with rows when it is
+    /// pointed at a database.
+    pub fn is_configured(&self) -> bool {
+        !matches!(self.kind, DbKind::None)
+    }
+
+    /// A serverless engine: reached over HTTP, with no socket held open
+    /// and no interactive transaction.
+    ///
+    /// The URL is what says so. A `postgres://` or `mysql://` URL names a
+    /// provider — Neon, TiDB, PlanetScale — and those are serverless. A
+    /// `tcp://` URL names a socket, and a socket is not serverless.
     pub fn is_serverless(&self) -> bool {
-        matches!(self.kind, DbKind::Libsql | DbKind::D1)
+        match self.kind {
+            DbKind::None | DbKind::Memory | DbKind::Sqlite => false,
+            _ => match self.url.as_deref().map(str::trim) {
+                Some(url) => !url.starts_with("tcp://"),
+                None => false,
+            },
+        }
     }
 
     /// A reachable engine: one that needs a URL.
     pub fn needs_url(&self) -> bool {
-        !matches!(self.kind, DbKind::Memory | DbKind::Sqlite)
+        !matches!(self.kind, DbKind::None | DbKind::Memory | DbKind::Sqlite)
     }
 }
 
 /// The engines an app can be pointed at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DbKind {
+    /// No database yet.
+    ///
+    /// The app exists — its schema, its rules, its auth — and its rows
+    /// have nowhere to live yet. A clone of an app in a serverless
+    /// database is in this state until somebody says which database it
+    /// should have, because a platform cannot make a Turso database for
+    /// itself and copying the URL would point it at the original.
+    None,
     /// In-process, gone on restart. Demos and tests.
     Memory,
     /// A local file. The default.
@@ -282,6 +310,7 @@ impl DbKind {
     /// (`"neon"`, `"turso"`, `"planetscale"`), not the protocol.
     pub fn parse(s: &str) -> Option<(DbKind, &'static str)> {
         let kind = match s.to_ascii_lowercase().as_str() {
+            "none" => DbKind::None,
             "memory" => DbKind::Memory,
             "sqlite" | "sqlite3" | "local" => DbKind::Sqlite,
             "libsql" | "turso" => DbKind::Libsql,
@@ -291,6 +320,7 @@ impl DbKind {
             _ => return None,
         };
         let canonical = match kind {
+            DbKind::None => "none",
             DbKind::Memory => "memory",
             DbKind::Sqlite => "sqlite",
             DbKind::Libsql => "libsql",
@@ -303,6 +333,7 @@ impl DbKind {
 
     pub fn as_str(self) -> &'static str {
         match self {
+            DbKind::None => "none",
             DbKind::Memory => "memory",
             DbKind::Sqlite => "sqlite",
             DbKind::Libsql => "libsql",
@@ -315,6 +346,7 @@ impl DbKind {
     /// Every accepted spelling, for error messages.
     pub fn all_names() -> &'static [&'static str] {
         &[
+            "none",
             "memory",
             "sqlite",
             "libsql",
@@ -756,10 +788,22 @@ impl AppDoc {
     pub fn to_json_redacted(&self) -> String {
         let mut copy = self.clone();
         copy.redact();
+        copy.redact_urls();
         copy.to_json()
     }
 
     /// Blank every secret in place.
+    ///
+    /// Every secret the document holds: the auth secret, the providers'
+    /// client secrets, the auth database's token, the app's own
+    /// database token, and the storage keys. A document that has been
+    /// redacted is safe to write down, to paste into a ticket, and to
+    /// hand to somebody else.
+    ///
+    /// What is left is the shape: which database the app talks to, which
+    /// providers it uses, which bucket it writes to — and the URL, which
+    /// may itself carry a password. A URL with credentials in it is a
+    /// secret too, and [`Config::redact_urls`] takes that one away.
     pub fn redact(&mut self) {
         self.meta.includes_secrets = false;
         self.config.auth.secret = None;
@@ -769,9 +813,35 @@ impl AppDoc {
         if let Some(db) = &mut self.config.auth.database {
             db.token = None;
         }
+        // The app's own database: the token is the password of the
+        // connection, and it is the one secret most likely to be in the
+        // document, because it is the one an operator typed.
+        self.config.database.token = None;
         if let Some(s3) = &mut self.config.storage.s3 {
             s3.access_key = None;
             s3.secret_key = None;
+        }
+    }
+
+    /// Take the credentials out of every URL the document holds.
+    ///
+    /// A URL with a user name and a password in it is a secret, and
+    /// redacting the token beside it is not enough: `postgres://me:hunter2@host/db`
+    /// says the password twice. What is left is `postgres://host/db` —
+    /// enough to say which database it is, not enough to open it.
+    pub fn redact_urls(&mut self) {
+        for url in [
+            self.config.database.url.as_mut(),
+            self.config
+                .auth
+                .database
+                .as_mut()
+                .and_then(|db| db.url.as_mut()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            *url = without_credentials(url);
         }
     }
 
@@ -788,6 +858,24 @@ impl AppDoc {
 }
 
 // ---------------------------------------------------------------- reading ---
+
+/// A URL with its user name and password taken out.
+///
+/// The host, the port, the path and the query stay: the URL still says
+/// which database it is. What goes is the part that opens it.
+fn without_credentials(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let (authority, after) = match rest.find(['/', '?']) {
+        Some(index) => (&rest[..index], &rest[index..]),
+        None => (rest, ""),
+    };
+    match authority.rsplit_once('@') {
+        Some((_, hostport)) => format!("{scheme}://{hostport}{after}"),
+        None => url.to_string(),
+    }
+}
 
 fn opt_str<'a>(o: &'a Object, key: &str) -> Option<&'a str> {
     o.get(key).and_then(Value::as_str)
@@ -1088,6 +1176,7 @@ impl AppDoc {
     pub fn to_json_pretty_redacted(&self) -> String {
         let mut copy = self.clone();
         copy.redact();
+        copy.redact_urls();
         let mut out = String::new();
         write_pretty(&copy.to_value(), 0, &mut out);
         out.push('\n');

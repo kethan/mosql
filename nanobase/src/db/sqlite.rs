@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use mosql::Value;
 use uflite::error::{Error, Result};
 
-use crate::db::{AppDb, Row};
+use crate::db::{apply_changes, sanitize, AppDb, Row};
 use crate::sqlite::Connection;
 
 /// Rows in a local SQLite file.
@@ -109,19 +109,6 @@ impl SqliteDb {
             found.truncate(limit as usize);
         }
         Ok(found)
-    }
-}
-
-/// A collection name reduced to characters that are safe in a table name.
-fn sanitize(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect();
-    if cleaned.is_empty() {
-        "unnamed".to_string()
-    } else {
-        cleaned
     }
 }
 
@@ -231,27 +218,4 @@ impl AppDb for SqliteDb {
         }
         Ok(matching.len() as u64)
     }
-}
-
-/// Apply a change document to a row.
-///
-/// A change is either a set of fields to merge — `{"done": true}` — or an
-/// update document with operators, `{"$set": {"done": true}}`. Both are
-/// what the JS side accepts, and both mean the same thing here as in the
-/// in-process engine: this is the same rule, written out.
-fn apply_changes(row: &mut Row, changes: &Value) -> Result<()> {
-    let Some(object) = changes.as_object() else {
-        return Err(Error::internal("a change must be a document"));
-    };
-    for (op, fields) in object.iter() {
-        if op.starts_with('$') {
-            let Some(fields) = fields.as_object() else {
-                return Err(Error::internal(format!("{op} requires an object")));
-            };
-            mosql::memory::apply_update(op, fields, row, false)?;
-        } else {
-            mosql::memory::set_path(row, op, fields.clone());
-        }
-    }
-    Ok(())
 }

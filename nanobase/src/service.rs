@@ -23,6 +23,7 @@ use mosql::{Object, Value};
 use uflite::db::block_on;
 use uflite::error::{Error, Result};
 
+use crate::clone::{CloneRequest, CloneSummary};
 use crate::config::AppDoc;
 use crate::db::AppDb;
 use crate::platform::{AppRecord, Platform, PlatformStore};
@@ -460,6 +461,49 @@ impl Service {
         self.run_after(&ctx);
         self.fire(Event::Created, &ctx);
         Ok(record)
+    }
+
+    /// Clone an app.
+    ///
+    /// The configuration and the schema come along; the rows come only
+    /// when the request asks for them. Where the rows go — the clone's
+    /// own database, the source's, or none yet — is worked out by
+    /// [`crate::clone`] before anything is written.
+    ///
+    /// Fires [`Event::Created`] for the clone.
+    pub fn clone_app(&self, key: &str, request: &CloneRequest) -> Result<CloneSummary> {
+        let ctx = self.context("clone", Some(key));
+        self.run_before(&ctx);
+        let now = crate::platform::now_secs();
+        let (record, plan) = {
+            let mut platform = self.inner.platform.lock().expect("not poisoned");
+            let (record, plan) = platform.clone_app(key, request, now)?;
+            block_on(self.inner.store.save(&platform))?;
+            (record, plan)
+        };
+        // The rows, when they are asked for. The catalog is not held
+        // here: opening a database asks it for an app.
+        let mut copied = 0usize;
+        if plan.copy_rows {
+            let source = self.db(&plan.source_id)?;
+            let destination = self.db(&record.id)?;
+            copied = crate::clone::copy_rows(source.as_ref(), destination.as_ref())?;
+        }
+        let summary = CloneSummary {
+            id: record.id.clone(),
+            name: record.doc.app.name.clone(),
+            rows_copied: copied,
+            shares_database: plan.shares_database,
+            has_database: record.doc.config.database.is_configured(),
+        };
+        let ctx = EventContext {
+            id: Some(summary.id.clone()),
+            record: Some(record_value(&record)),
+            ..ctx
+        };
+        self.run_after(&ctx);
+        self.fire(Event::Created, &ctx);
+        Ok(summary)
     }
 
     /// Replace an app's document. Fires [`Event::Updated`].

@@ -61,16 +61,27 @@ native = ["curl"]
 # state in a serverless database.
 serverless = ["curl"]
 
-# The only dependencies are the two sibling crates. SQLite is not a crate
-# dependency: `build.rs` compiles it from the vendored amalgamation so its
-# optional features can be omitted at the preprocessor level and nothing is
+# The only dependencies are the three sibling crates, and every one of them
+# has no dependencies of its own. SQLite is not a crate dependency:
+# `build.rs` compiles it from the vendored amalgamation so its optional
+# features can be omitted at the preprocessor level and nothing is
 # downloaded at build time.
-# Both are path dependencies for development and version requirements for
-# publishing: `cargo publish` refuses a dependency with no version, because the
-# published crate has to resolve it from the registry.
+# All three are path dependencies for development and version requirements
+# for publishing: `cargo publish` refuses a dependency with no version,
+# because the published crate has to resolve it from the registry.
 [dependencies]
 mosql = { version = "0.1", path = "../rust" }
 uflite = { version = "0.1", path = "../uflite" }
+# The serverless database drivers: libSQL, D1, PostgreSQL and MySQL over
+# HTTP, each in its own protocol. The app database speaks to them
+# directly, so an app's rows can live in one of those without a database
+# service in front of them.
+mosql-core = { version = "0.1", path = "../mosql-core" }
+
+[dev-dependencies]
+# The tests drive the serverless drivers through a mock transport, so a
+# wire protocol can be checked without a network.
+mosql-core = { version = "0.1", path = "../mosql-core" }
 
 [profile.release]
 opt-level = "s"

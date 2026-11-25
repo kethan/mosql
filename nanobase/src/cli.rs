@@ -23,7 +23,7 @@ use crate::db::AppDb;
 use crate::platform::PlatformStore;
 #[cfg(feature = "native")]
 use crate::Api;
-#[cfg(feature = "serverless")]
+#[cfg(feature = "curl")]
 use crate::ServerlessStore;
 #[cfg(any(feature = "native", feature = "serverless"))]
 use crate::Service;
@@ -77,9 +77,11 @@ USAGE:
     nanobase app import <file>                                create an app from a document
     nanobase app list                                         id, name, engine
     nanobase app show <id|name>                               everything about one app
-    nanobase app export <id|name> [--out F] [--redact]        write an app's document
+    nanobase app export <id|name> [--out F] [--with-secrets]  write an app's document
     nanobase app rename <id|name> <new-name>
-    nanobase app clone <id|name> <new-name>                   copy config and schema, not rows
+    nanobase app clone <id|name> <new-name> [--copy-data]      copy config and schema
+                                     [--share-database]         the rows, or the database itself
+                                     [--database URL]           the clone's own database
     nanobase app remove <id|name> --confirm <id>
     nanobase app rows <id|name> <collection> [--filter JSON] [--limit N]
     nanobase app insert <id|name> <collection> --json ROW
@@ -93,26 +95,23 @@ USAGE:
 
 "#,
     );
-    if cfg!(feature = "sqlite") {
-        text.push_str(
-            r#"PLATFORM DATABASE:
+    text.push_str(
+        r#"PLATFORM DATABASE:
     --data FILE       where the platform keeps its state (SQLite)
     NANOBASE_DATA     used when --data is absent
     ./data/nanobase.db     the default
-
-"#,
-        );
-    } else {
-        text.push_str(
-            r#"PLATFORM DATABASE:
-    --db-url URL      the serverless database the platform keeps its state in
+    --db-url URL      a serverless database the platform keeps its state in
     NANOBASE_DB_URL   used when --db-url is absent
     --db-token TOKEN  the bearer token for that database
     NANOBASE_DB_TOKEN used when --db-token is absent
 
+    The URL says which database: postgres:// and mysql:// name the
+    database itself, and http:// names a service that holds one. With
+    --db-url the platform's own state lives there and the local file is
+    not used.
+
 "#,
-        );
-    }
+    );
     text.push_str(
         r#"REMOTE PLATFORM:
     --url URL         talk to a running platform instead of the local file
@@ -129,7 +128,7 @@ EXAMPLES:
     nanobase login ada@example.com
     nanobase app new todos
     nanobase app import todos.json
-    nanobase app export todos --out todos.json --redact
+    nanobase app export todos --out todos.json
     nanobase validate todos.json
 "#,
     );
@@ -480,52 +479,87 @@ fn data_path(parsed: &Parsed) -> PathBuf {
 
 /// Where the platform's own state lives.
 ///
-/// The server build keeps it in a SQLite file beside the binary's data
-/// directory. The serverless build has no file: it keeps it in a
-/// database reached over HTTP, and the command names that database with
-/// `--db-url` or `NANOBASE_DB_URL`.
+/// This is the owner's choice, and it is chosen at run time rather than
+/// at build time:
+///
+/// * a SQLite file beside the binary's data directory — the default,
+///   and the only choice in a build with no network client;
+/// * a database reached over the network — a serverless PostgreSQL, a
+///   serverless MySQL, a Turso, a D1, or a service that speaks this
+///   platform's app-database protocol.
+///
+/// The platform's state and an app's rows are separate decisions. An
+/// owner may keep the catalog in a local file while the apps live in
+/// Neon, or keep the catalog in Neon while the apps live wherever they
+/// like. Nothing here assumes the two are the same kind of thing.
 enum Catalog {
     /// A local SQLite file.
     #[cfg(feature = "sqlite")]
     File(SqliteStore),
-    /// A database reached over HTTP.
-    #[cfg(feature = "serverless")]
+    /// A database reached over the network.
+    #[cfg(feature = "curl")]
     Serverless(ServerlessStore),
 }
 
 impl Catalog {
-    /// The catalog the command is pointed at: the local file, when this
-    /// build has one.
-    #[cfg(feature = "sqlite")]
-    fn open(parsed: &Parsed) -> Result<Catalog, u8> {
-        Ok(Catalog::File(SqliteStore::new(data_path(parsed))))
-    }
-
-    /// The catalog the command is pointed at: a serverless database, when
-    /// this build has no local file to point at.
-    #[cfg(all(feature = "serverless", not(feature = "sqlite")))]
+    /// The catalog the command is pointed at.
+    ///
+    /// `--db-url` — or `NANOBASE_DB_URL` — says the platform's state
+    /// lives in a database reached over the network, and it wins over the
+    /// local file. With no such URL, the local file is used, and a build
+    /// without one says so.
     fn open(parsed: &Parsed) -> Result<Catalog, u8> {
         let url = parsed
             .get("db-url")
             .map(str::to_string)
-            .or_else(|| std::env::var("NANOBASE_DB_URL").ok())
-            .unwrap_or_default();
-        if url.trim().is_empty() {
+            .or_else(|| std::env::var("NANOBASE_DB_URL").ok());
+        if let Some(url) = url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+            return Catalog::open_remote(url, parsed);
+        }
+        #[cfg(feature = "sqlite")]
+        {
+            Ok(Catalog::File(SqliteStore::new(data_path(parsed))))
+        }
+        #[cfg(not(feature = "sqlite"))]
+        {
             eprintln!("nanobase: this build has no local file; name the database with\n");
             eprintln!("  --db-url URL, or NANOBASE_DB_URL in the environment.");
-            return Err(2);
+            Err(2)
         }
+    }
+
+    /// The catalog in a database reached over the network.
+    ///
+    /// The URL says which one it is. A `postgres://` or `mysql://` URL
+    /// names the database itself, and the platform speaks its protocol
+    /// — so the catalog can live in a serverless PostgreSQL or a
+    /// serverless MySQL with no service in front of it. An `http://` URL
+    /// names a service that holds a database and speaks this platform's
+    /// own protocol.
+    #[cfg(feature = "curl")]
+    fn open_remote(url: &str, parsed: &Parsed) -> Result<Catalog, u8> {
         let token = parsed
             .get("db-token")
             .map(str::to_string)
             .or_else(|| std::env::var("NANOBASE_DB_TOKEN").ok());
-        let db =
-            crate::db::http::HttpDb::new(url.trim(), Arc::new(crate::httpclient::CurlHttpClient));
-        let db = match token {
-            Some(token) => db.with_token(token),
-            None => db,
+        let db: Arc<dyn crate::db::AppDb> = if crate::db::provider::is_provider_url(url) {
+            let client: Arc<dyn crate::httpclient::HttpClient> =
+                Arc::new(crate::httpclient::CurlHttpClient);
+            Arc::new(
+                crate::db::provider::ProviderDb::new(url, client).map_err(|e| {
+                    eprintln!("nanobase: {e}");
+                    1
+                })?,
+            )
+        } else {
+            let mut db =
+                crate::db::http::HttpDb::new(url, Arc::new(crate::httpclient::CurlHttpClient));
+            if let Some(token) = token.clone() {
+                db = db.with_token(token);
+            }
+            Arc::new(db)
         };
-        Ok(Catalog::Serverless(ServerlessStore::new(Arc::new(db), url)))
+        Ok(Catalog::Serverless(ServerlessStore::new(db, url)))
     }
 
     /// The store the service and the commands read through.
@@ -533,7 +567,7 @@ impl Catalog {
         match self {
             #[cfg(feature = "sqlite")]
             Catalog::File(store) => Arc::new(store.clone()),
-            #[cfg(feature = "serverless")]
+            #[cfg(feature = "curl")]
             Catalog::Serverless(store) => Arc::new(store.clone()),
         }
     }
@@ -543,7 +577,7 @@ impl Catalog {
         match self {
             #[cfg(feature = "sqlite")]
             Catalog::File(store) => load_platform(store),
-            #[cfg(feature = "serverless")]
+            #[cfg(feature = "curl")]
             Catalog::Serverless(store) => block_on(store.load()).map_err(|e| {
                 eprintln!("nanobase: {e}");
                 1
@@ -565,7 +599,7 @@ impl Catalog {
         match self {
             #[cfg(feature = "sqlite")]
             Catalog::File(store) => store.path().display().to_string(),
-            #[cfg(feature = "serverless")]
+            #[cfg(feature = "curl")]
             Catalog::Serverless(store) => store.url().to_string(),
         }
     }
@@ -575,7 +609,7 @@ impl Catalog {
         match self {
             #[cfg(feature = "sqlite")]
             Catalog::File(store) => Some(store.root()),
-            #[cfg(feature = "serverless")]
+            #[cfg(feature = "curl")]
             Catalog::Serverless(_) => None,
         }
     }
@@ -1959,10 +1993,13 @@ fn app_show(rest: &[String]) -> u8 {
 }
 
 fn app_export(rest: &[String]) -> u8 {
+    // The secrets are out unless they are asked for: an export is a
+    // document somebody else reads, and a document with the database
+    // password in it is not a document anybody else should have.
     let parsed = parse_args(
         rest,
         &["out", "data", "url", "token", "db-url", "db-token"],
-        &["redact"],
+        &["with-secrets"],
     );
     if let Some(e) = parsed.error {
         eprintln!("nanobase app export: {e}");
@@ -1998,10 +2035,10 @@ fn app_export(rest: &[String]) -> u8 {
         };
         app.doc.clone()
     };
-    let body = if parsed.has("redact") {
-        doc.to_json_pretty_redacted()
-    } else {
+    let body = if parsed.has("with-secrets") {
         doc.to_json_pretty()
+    } else {
+        doc.to_json_pretty_redacted()
     };
     write_out(parsed.get("out"), &body)
 }
@@ -2059,7 +2096,19 @@ fn app_rename(rest: &[String]) -> u8 {
 }
 
 fn app_clone(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["data", "url", "token", "db-url", "db-token"], &[]);
+    let parsed = parse_args(
+        rest,
+        &[
+            "data",
+            "url",
+            "token",
+            "db-url",
+            "db-token",
+            "database",
+            "database-token",
+        ],
+        &["copy-data", "share-database"],
+    );
     if let Some(e) = parsed.error {
         eprintln!("nanobase app clone: {e}");
         return 2;
@@ -2072,60 +2121,92 @@ fn app_clone(rest: &[String]) -> u8 {
         eprintln!("example: nanobase app clone todos todos-staging");
         return 2;
     };
+    // What happens to the rows. The default is that they do not come:
+    // a clone that quietly shared a live database would be a way to
+    // write to production by accident.
+    let data = if parsed.has("share-database") {
+        crate::clone::CloneData::Share
+    } else if parsed.has("copy-data") {
+        crate::clone::CloneData::Copy
+    } else {
+        crate::clone::CloneData::Omit
+    };
+    let request = crate::clone::CloneRequest {
+        name: new_name.clone(),
+        data,
+        database: parsed.get("database").map(str::to_string),
+        token: parsed.get("database-token").map(str::to_string),
+    };
     if let Some(client) = api_client(&parsed) {
-        let value = match client.request("GET", &format!("/api/apps/{key}"), None) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("nanobase: {e}");
-                return 1;
-            }
-        };
-        let Some(view) = AppView::from_value(&value) else {
-            eprintln!("nanobase: the platform sent an app this command cannot read");
-            return 1;
-        };
-        let mut doc = view.doc.to_value();
-        if let Some(app) = doc.get("app").and_then(|v| v.as_object()) {
-            let mut copy = app.clone();
-            copy.set("name", Value::str(new_name.clone()));
-            if let Some(root) = doc.as_object() {
-                let mut updated = root.clone();
-                updated.set("app", Value::Object(copy));
-                doc = Value::Object(updated);
-            }
+        let mut body = mosql::Object::new();
+        body.set("name", Value::str(new_name.clone()));
+        body.set("data", Value::str(data.as_str()));
+        if let Some(url) = request.database.as_deref() {
+            body.set("database", Value::str(url));
         }
-        let created = match client.request("POST", "/api/apps", Some(&doc)) {
+        if let Some(token) = request.token.as_deref() {
+            body.set("token", Value::str(token));
+        }
+        let value = match client.request(
+            "POST",
+            &format!("/api/apps/{key}/clone"),
+            Some(&Value::Object(body)),
+        ) {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("nanobase: {e}");
                 return 1;
             }
         };
-        let id = created
-            .get("id")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        println!("Cloned to {new_name} ({id})");
-        println!("  configuration and schema only; rows were not copied");
+        print_clone_summary(&value);
         return 0;
     }
-    let mut platform = match platform_or_exit(&parsed) {
-        Some(p) => p,
+    let service = match service_or_exit(&parsed) {
+        Some(service) => service,
         None => return 1,
     };
-    let (id, name) = match platform.clone_app(&key, &new_name, now_secs()) {
-        Ok(app) => (app.id.clone(), app.doc.app.name.clone()),
+    let summary = match service.clone_app(&key, &request) {
+        Ok(summary) => summary,
         Err(e) => {
             eprintln!("nanobase: {e}");
             return 1;
         }
     };
-    if save_or_exit(&parsed, &platform).is_none() {
-        return 1;
-    }
-    println!("Cloned to {name} ({id})");
-    println!("  configuration and schema only; rows were not copied");
+    print_clone_summary(&summary.to_value());
     0
+}
+
+/// What a clone did, in words.
+///
+/// The last line is the one that matters: whether the clone's rows live
+/// in a database of their own, in the source's database, or nowhere yet.
+fn print_clone_summary(summary: &Value) {
+    let id = summary.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    let name = summary.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    let rows = summary
+        .get("rowsCopied")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0) as usize;
+    let shares = summary
+        .get("sharesDatabase")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let has = summary
+        .get("hasDatabase")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    println!("Cloned to {name} ({id})");
+    if shares {
+        println!("  the clone and the source share one database");
+    } else if rows > 0 {
+        println!("  copied {rows} row(s) into the clone's own database");
+    } else {
+        println!("  configuration and schema only; the rows were not copied");
+    }
+    if !has {
+        println!("  the clone has no database yet; give it one with");
+        println!("    nanobase app update {name} --database URL");
+    }
 }
 
 fn app_remove(rest: &[String]) -> u8 {

@@ -33,6 +33,7 @@ pub mod middleware;
 pub mod cli;
 #[cfg(feature = "curl")]
 pub mod client;
+pub mod clone;
 pub mod config;
 pub mod crypto;
 pub mod db;
@@ -46,7 +47,10 @@ pub mod service;
 pub mod sqlite;
 #[cfg(feature = "sqlite")]
 pub mod store;
-#[cfg(feature = "serverless")]
+// The platform's own state in a database reached over the network. The
+// build that has a listener can use it too: the platform's state is the
+// owner's choice, and a serverless deployment is one of the choices.
+#[cfg(feature = "curl")]
 pub mod store_serverless;
 pub mod wire;
 
@@ -55,6 +59,7 @@ pub use api::{Api, Principal};
 pub use apikey::ApiKey;
 #[cfg(feature = "curl")]
 pub use client::ApiClient;
+pub use clone::{CloneData, ClonePlan, CloneRequest};
 pub use config::{
     AclConfig, AppConfig, AppDoc, AppMeta, AppType, AuthConfig, CollectionDef, ColumnDef,
     ColumnType, ConfigError, CorsConfig, Data, DatabaseConfig, DbKind, Features, Issue,
@@ -85,7 +90,7 @@ pub use service::{CustomMethod, Event, EventContext, Hook, Hooks, Listener, Phas
 pub use sqlite::{Connection, Row, Statement};
 #[cfg(feature = "sqlite")]
 pub use store::SqliteStore;
-#[cfg(feature = "serverless")]
+#[cfg(feature = "curl")]
 pub use store_serverless::ServerlessStore;
 
 /// The version of the platform, from `Cargo.toml`.

@@ -25,6 +25,7 @@ use mosql::{to_json, Object, Value};
 use uflite::error::{Error, Result};
 
 use crate::apikey::ApiKey;
+use crate::clone::{ClonePlan, CloneRequest};
 use crate::config::AppDoc;
 use crate::crypto::{b64url_decode, b64url_encode, ct_eq, pbkdf2_sha256, random_bytes, random_id};
 use crate::jwt::Claims;
@@ -718,20 +719,28 @@ impl Platform {
         Ok(&self.apps[index])
     }
 
-    /// Copy an app's configuration and schema to a new app, without its rows.
+    /// Copy an app to a new one.
     ///
-    /// Data is deliberately not copied: a clone is for trying a schema change
-    /// or standing up a staging copy of the shape, and duplicating a live
-    /// table is the surprise, not the expectation.
-    pub fn clone_app(&mut self, key: &str, new_name: &str, now: i64) -> Result<&AppRecord> {
+    /// The configuration and the schema always come along. The rows come
+    /// only when the request asks for them, and where they go is worked
+    /// out first — see [`crate::clone`] for the rules.
+    ///
+    /// The rows themselves are not copied here: this is the catalog, and
+    /// the catalog does not know where the rows live. The service copies
+    /// them once the app exists.
+    pub fn clone_app(
+        &mut self,
+        key: &str,
+        request: &CloneRequest,
+        now: i64,
+    ) -> Result<(AppRecord, ClonePlan)> {
         let source = self
             .find_app(key)
-            .ok_or_else(|| Error::not_found(format!("no app for {key:?}")))?;
-        let mut doc = source.doc.clone();
-        doc.app.name = new_name.trim().to_string();
-        doc.data.clear();
-        doc.meta.includes_data = false;
-        self.create_app(doc, now)
+            .ok_or_else(|| Error::not_found(format!("no app for {key:?}")))?
+            .clone();
+        let plan = crate::clone::plan(&source, request)?;
+        let created = self.create_app(plan.doc.clone(), now)?.clone();
+        Ok((created, plan))
     }
 
     /// Delete an app.

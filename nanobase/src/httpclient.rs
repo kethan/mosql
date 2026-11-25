@@ -39,6 +39,12 @@ pub struct HttpRequest {
 pub struct HttpResponse {
     pub status: u16,
     pub body: Vec<u8>,
+    /// The reply's own headers, in the order they arrived.
+    ///
+    /// Some services answer with something in a header rather than in the
+    /// body — TiDB keeps its session there — so a client that cannot see
+    /// them cannot hold a transaction open.
+    pub headers: Vec<(String, String)>,
 }
 
 impl HttpResponse {
@@ -165,6 +171,7 @@ fn read_http_reply(stream: &TcpStream) -> ApiResult<HttpResponse> {
         .ok_or_else(|| ApiError::internal("upstream sent a malformed status line"))?;
     let mut length: Option<usize> = None;
     let mut chunked = false;
+    let mut headers: Vec<(String, String)> = Vec::new();
     loop {
         line.clear();
         reader.read_line(&mut line).map_err(ApiError::from)?;
@@ -176,6 +183,9 @@ fn read_http_reply(stream: &TcpStream) -> ApiResult<HttpResponse> {
             length = v.trim().parse().ok();
         } else if lower.starts_with("transfer-encoding:") && lower.contains("chunked") {
             chunked = true;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            headers.push((name.trim().to_string(), value.trim().to_string()));
         }
     }
     let body = if chunked {
@@ -200,7 +210,11 @@ fn read_http_reply(stream: &TcpStream) -> ApiResult<HttpResponse> {
         reader.read_exact(&mut body).map_err(ApiError::from)?;
         body
     };
-    Ok(HttpResponse { status, body })
+    Ok(HttpResponse {
+        status,
+        body,
+        headers,
+    })
 }
 
 /// Splits a URL into its host, port and path.
@@ -245,6 +259,10 @@ impl HttpClient for CurlHttpClient {
             .arg(&request.method)
             .arg("-w")
             .arg("\n%{http_code}")
+            // The reply's own headers, before the body: some services
+            // keep a session in one.
+            .arg("-D")
+            .arg("-")
             .arg("--data-binary")
             .arg("@-");
         for (name, value) in &request.headers {
@@ -291,9 +309,47 @@ impl HttpClient for CurlHttpClient {
         if let Some(i) = bytes.iter().rposition(|b| *b == b'\n') {
             bytes.truncate(i);
         }
+        // What is left is the headers, a blank line, and the body.
+        let (headers, body) = split_reply(&bytes);
         Ok(HttpResponse {
             status,
-            body: bytes,
+            body,
+            headers,
         })
     }
+}
+
+/// The headers of a reply, and its body.
+///
+/// The headers are the lines before the blank line; the body is
+/// everything after it. A reply with no headers has an empty body and
+/// no headers, which is what a broken proxy looks like.
+#[cfg(feature = "curl")]
+fn split_reply(raw: &[u8]) -> (Vec<(String, String)>, Vec<u8>) {
+    let mut headers = Vec::new();
+    let mut split = raw.len();
+    let mut index = 0usize;
+    while index + 1 < raw.len() {
+        if raw[index] == b'\n' && raw[index + 1] == b'\n' {
+            split = index;
+            break;
+        }
+        if index + 3 < raw.len() && &raw[index..index + 4] == b"\r\n\r\n" {
+            split = index;
+            break;
+        }
+        index += 1;
+    }
+    for line in raw[..split].split(|b| *b == b'\n') {
+        let line = String::from_utf8_lossy(line);
+        let line = line.trim_end_matches('\r');
+        if let Some((name, value)) = line.split_once(':') {
+            headers.push((name.trim().to_string(), value.trim().to_string()));
+        }
+    }
+    let mut body_start = split;
+    while body_start < raw.len() && (raw[body_start] == b'\n' || raw[body_start] == b'\r') {
+        body_start += 1;
+    }
+    (headers, raw[body_start.min(raw.len())..].to_vec())
 }
