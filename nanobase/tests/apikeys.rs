@@ -641,3 +641,87 @@ fn a_key_from_an_older_platform_with_no_app_waits() {
         .unwrap_or_default();
     assert_eq!(items.len(), 1);
 }
+
+#[test]
+fn a_key_that_cannot_be_moved_is_not_lost() {
+    // The keys of an older platform are read, not taken, while they are
+    // moved: if an app's database cannot be opened, the move stops with
+    // an error, and the keys must still be in the platform afterwards.
+    // If they had been taken out, the next write of the platform would
+    // have written them gone.
+    let store = Arc::new(MemoryStore::new());
+    let mut p = Platform::default();
+    p.ensure_jwt_secret();
+    create_owner_with(&mut p, "ada@example.com", "correct horse", now_secs(), 1000).unwrap();
+    save(&store, p);
+    let dbs: Mutex<BTreeMap<String, Arc<dyn AppDb>>> = Mutex::new(BTreeMap::new());
+    let resolver = {
+        let dbs = Arc::new(dbs);
+        Arc::new(move |record: &AppRecord| {
+            let mut dbs = dbs.lock().expect("not poisoned");
+            let db = dbs
+                .entry(record.id.clone())
+                .or_insert_with(|| {
+                    Arc::new(nanobase::db::memory::MemoryDb::new()) as Arc<dyn AppDb>
+                })
+                .clone();
+            Ok(db)
+        })
+    };
+    let svc = Service::new("apps", Arc::clone(&store) as Arc<dyn PlatformStore>)
+        .unwrap()
+        .with_dbs(resolver.clone());
+    let api = Api::new(Arc::new(svc));
+    let token = token(&api);
+    let app = make_app(&api, &token, "todos");
+
+    // A key made by the older platform, for that app.
+    let (record, _secret) = ApiKey::create(
+        "old key",
+        app.clone(),
+        vec![apikey::SCOPE_APPS_READ.to_string()],
+        None,
+        now_secs(),
+    );
+    let mut platform = api.service().platform().unwrap();
+    platform.legacy_keys.push(nanobase::apikey::LegacyKey {
+        id: record.id.clone(),
+        name: record.name.clone(),
+        hash: record.hash.clone(),
+        preview: record.preview.clone(),
+        app: Some(app.clone()),
+        scopes: record.scopes.clone(),
+        expires_at: record.expires_at,
+        created_at: record.created_at.clone(),
+        last_used_at: record.last_used_at,
+        revoked: record.revoked,
+    });
+    save(&store, platform);
+
+    // The platform starts again, and this time the app's database will
+    // not open.
+    let broken = Arc::new(|_record: &AppRecord| Err(uflite::error::Error::internal("no database")));
+    let svc = Service::new("apps", Arc::clone(&store) as Arc<dyn PlatformStore>)
+        .unwrap()
+        .with_dbs(broken);
+    assert!(svc.ensure_migrated().is_err(), "the move could not happen");
+
+    // The key is still in the platform, and still in the store: it was
+    // read, not taken.
+    let waiting = svc.legacy_keys().unwrap();
+    assert_eq!(waiting.len(), 1, "the key is still there");
+    assert_eq!(waiting[0].name, "old key");
+    let stored = uflite::db::block_on(store.load()).unwrap();
+    assert_eq!(
+        stored.legacy_keys.len(),
+        1,
+        "and it is still in the store: nothing was lost"
+    );
+
+    // And with a working database, the move happens and the key works.
+    let svc = Service::new("apps", Arc::clone(&store) as Arc<dyn PlatformStore>)
+        .unwrap()
+        .with_dbs(resolver);
+    let report = svc.ensure_migrated().unwrap();
+    assert_eq!(report.moved.len(), 1, "the key was moved");
+}

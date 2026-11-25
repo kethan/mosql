@@ -547,12 +547,19 @@ impl Service {
     ///   never made for.
     pub fn migrate_keys(&self) -> Result<KeyMigration> {
         let mut report = KeyMigration::default();
-        // The keys are taken out of the platform first, and the lock
-        // is let go: an app's database is opened while the keys are
-        // being moved, and opening one asks the platform for the app.
+        // The keys are read, not taken: the lock is let go while they
+        // are moved, because opening an app's database asks the
+        // platform for the app.
+        //
+        // Reading rather than taking is deliberate. If an app's
+        // database cannot be opened, the move stops with an error —
+        // and if the keys had been taken out of the platform, they
+        // would be gone from it, and the next write of the platform
+        // would write them gone. The keys stay where they are until
+        // the whole move has worked.
         let waiting = {
-            let mut platform = self.inner.platform.lock().expect("not poisoned");
-            std::mem::take(&mut platform.legacy_keys)
+            let platform = self.inner.platform.lock().expect("not poisoned");
+            platform.legacy_keys.clone()
         };
         if waiting.is_empty() {
             return Ok(report);

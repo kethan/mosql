@@ -249,6 +249,54 @@ accident. The platform keeps every candidate for a preview rather than
 the first one it finds, and the secret itself decides between them —
 a key is not refused because another key happened to look like it.
 
+#### Where the key lives, and what that costs
+
+The key's record — the hash, the scopes, the expiry, the revoked flag —
+is in the app's own database, in the internal collection `_api_keys`.
+The platform keeps a directory: the app, the preview, and the id of the
+row. Nothing in the platform can be used as a key, and nothing in the
+platform says what a key may do.
+
+**What it buys.** A platform file that is read — a backup, a copy in a
+bucket, a log — cannot be used to work out anybody's key: the hash is
+in the app's database, beside that app's rows. The keys travel with the
+app: an app cloned with its database shares its keys deliberately, and
+an app cloned without its database starts with none. And the platform's
+own store stays small — a directory, not a list of secrets.
+
+**What it costs.**
+
+- **Verifying a key opens the app's database.** A key is checked by
+  reading the app's own row, so an app whose database is unreachable
+  cannot authenticate its keys: the answer is a `500`, not a `401`. A
+  platform-wide list of hashes would have kept working. That is the
+  price of the platform not holding them.
+- **Two stores, so no transaction across them.** Making a key writes the
+  row first and the directory second, and takes the row back out again
+  if the second write fails. The order is chosen so that the failure
+  that cannot be undone is the harmless one: a key that exists but is
+  not in the directory cannot be *used*, and a directory pointing at a
+  row that is not there is a `404` at worst.
+- **The key's own version is in the key's own row**, so a change and
+  the version that says so are one write. A version that spanned the
+  two stores would be a promise one of them could break by failing.
+- **Removing an app removes its keys.** The rows are in the app's
+  database and go with it, and the directory forgets them. A key that
+  outlived its app would be a key with no app, which is the thing a key
+  no longer is.
+
+**Migration.** A platform from before this change is read into a legacy
+list and moved into the apps the keys named. The hash comes with them,
+so a secret that was shown once still works. The move is idempotent — a
+row that is already there is not written twice — and it *reads* the
+legacy keys rather than taking them, because an app's database that
+cannot be opened stops the move with an error, and keys that had been
+taken out of the platform would have been written out of it by the next
+save. A key that named no app was made for the whole platform, which a
+key no longer is: it waits, the platform says so when it starts, and
+`nanobase key bind APP ID` gives it an app. A key whose app is gone
+waits too, and is reported as orphaned.
+
 | route | what it does |
 | --- | --- |
 | `GET /api/apps/{app}/keys` | the app's keys, without their hashes |
@@ -436,7 +484,7 @@ full edition only, and they are what the full edition grew by.
 | `mosql` | `rust/verify.sh` — fmt, clippy, the tests, **289 builder fixtures and 153 memory fixtures regenerated** against the JavaScript, a `no_std` build and a publish dry-run |
 | `uflite` | `uflite/verify.sh` |
 | `schemaless` | `schemaless/verify.sh` |
-| `nanobase` | `nanobase/verify.sh` — fmt, clippy, the tests, **a `serverless` stage that compiles and tests the second edition**, no external dependencies, a publish dry-run, and a size budget that measures **both** binaries and fails if the serverless one is not smaller. **361 tests**: `nanobase/tests/console.rs` covers the console, the security headers, the CORS rules, the rate limit, the search and paging, and the database connection test; `nanobase/tests/acl.rs` covers an app's own rules; `nanobase/tests/apikeys.rs` covers the keys; `nanobase/tests/redaction.rs` covers the app's secrets; `nanobase/tests/keydirectory.rs` covers the key directory, its versions and the preview collisions |
+| `nanobase` | `nanobase/verify.sh` — fmt, clippy, the tests, **a `serverless` stage that compiles and tests the second edition**, no external dependencies, a publish dry-run, and a size budget that measures **both** binaries and fails if the serverless one is not smaller. **362 tests**: `nanobase/tests/console.rs` covers the console, the security headers, the CORS rules, the rate limit, the search and paging, and the database connection test; `nanobase/tests/acl.rs` covers an app's own rules; `nanobase/tests/apikeys.rs` covers the keys and the migration; `nanobase/tests/redaction.rs` covers the app's secrets; `nanobase/tests/keydirectory.rs` covers the key directory, its versions and the preview collisions |
 | `better-auth-core` | `better-auth-core/verify.sh` — plus the official `better-auth@1.7.27` client driving the release binary over HTTP: 22/22 |
 | `worker` | `worker/verify.sh` and `worker/test.sh` — fmt, clippy, the protocol tests, the schema test, the end-to-end Wrangler run, and a check on the module's import section |
 | `mosql-core` | `mosql-core/verify.sh` — fmt, clippy, the tests, a dependency check that refuses a registry dependency, a **wasm32 build with the standard library switched off**, and a stage that compiles every optional transport |
