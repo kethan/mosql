@@ -744,7 +744,16 @@ impl Api {
     /// The keys live in the app's own database, and the hash is never
     /// shown.
     fn list_keys(&self, app: &str) -> Result<Response, ApiError> {
-        let items = self.service.list_keys(app).map_err(db_error)?;
+        let mut items = self.service.list_keys(app).map_err(db_error)?;
+        // Each key says which app it is for, by name as well as by id:
+        // a list is read by a person, and a person wants to know which
+        // app it is for.
+        let name = self.app_name(app);
+        for item in &mut items {
+            if let Value::Object(row) = item {
+                row.set("appName", Value::str(name.clone()));
+            }
+        }
         let mut body = Object::new();
         body.set("items", Value::Array(items.clone()));
         body.set("total", Value::Int(items.len() as i64));
@@ -754,7 +763,28 @@ impl Api {
     /// One of an app's API keys.
     fn show_key(&self, app: &str, key: &str) -> Result<Response, ApiError> {
         let found = self.service.find_key(app, key).map_err(db_error)?;
-        Ok(json(200, &crate::keys::to_public_row(&found)))
+        let mut row = crate::keys::to_public_row(&found);
+        if let Value::Object(o) = &mut row {
+            o.set("appName", Value::str(self.app_name(app)));
+        }
+        Ok(json(200, &row))
+    }
+
+    /// An app's name, for the answers that are read by a person.
+    ///
+    /// The id is the app's own, and the name is what the owner called
+    /// it. An app that is not there has no name, and the id is shown
+    /// instead.
+    fn app_name(&self, app: &str) -> String {
+        self.service
+            .platform()
+            .ok()
+            .and_then(|platform| {
+                platform
+                    .find_app(app)
+                    .map(|record| record.doc.app.name.clone())
+            })
+            .unwrap_or_else(|| app.to_string())
     }
 
     /// Make an API key.

@@ -943,18 +943,29 @@ fn cmd_key(rest: &[String]) -> u8 {
         eprintln!("nanobase key: {e}");
         return 2;
     }
-    let catalog = match Catalog::open(&parsed) {
-        Ok(catalog) => catalog,
-        Err(code) => return code,
+    // The server holds the state when the command is talking to one,
+    // and the local file holds it otherwise. Only one of the two is
+    // opened: a command that asks a server about its keys must not
+    // touch this machine's platform file at all.
+    let client = api_client(&parsed);
+    let platform = match &client {
+        Some(_) => None,
+        None => {
+            let catalog = match Catalog::open(&parsed) {
+                Ok(catalog) => catalog,
+                Err(code) => return code,
+            };
+            let platform = match catalog.load() {
+                Ok(p) => p,
+                Err(code) => return code,
+            };
+            if platform.needs_setup() {
+                eprintln!("nanobase: this platform has no owner yet; run `nanobase init` first.");
+                return 1;
+            }
+            Some(platform)
+        }
     };
-    let platform = match catalog.load() {
-        Ok(p) => p,
-        Err(code) => return code,
-    };
-    if platform.needs_setup() {
-        eprintln!("nanobase: this platform has no owner yet; run `nanobase init` first.");
-        return 1;
-    }
 
     match sub {
         "list" => {
@@ -962,7 +973,7 @@ fn cmd_key(rest: &[String]) -> u8 {
                 eprintln!("nanobase key list: an app is required");
                 return 2;
             };
-            if let Some(client) = api_client(&parsed) {
+            if let Some(client) = &client {
                 let value = match client.request("GET", &format!("/api/apps/{app}/keys"), None) {
                     Ok(v) => v,
                     Err(e) => {
@@ -970,10 +981,11 @@ fn cmd_key(rest: &[String]) -> u8 {
                         return 1;
                     }
                 };
-                let code = print_keys(&value, &platform);
-                report_waiting_keys(&platform);
-                return code;
+                return print_keys(&value, platform.as_ref());
             }
+            let Some(platform) = platform.as_ref() else {
+                return 1;
+            };
             let service = match service_or_exit(&parsed) {
                 Some(service) => service,
                 None => return 1,
@@ -985,8 +997,8 @@ fn cmd_key(rest: &[String]) -> u8 {
                     return 1;
                 }
             };
-            let code = print_key_rows(&keys, &platform);
-            report_waiting_keys(&platform);
+            let code = print_key_rows(&keys, Some(platform));
+            report_waiting_keys(platform);
             code
         }
         "create" => {
@@ -1021,7 +1033,7 @@ fn cmd_key(rest: &[String]) -> u8 {
                     return 2;
                 }
             };
-            if let Some(client) = api_client(&parsed) {
+            if let Some(client) = &client {
                 let mut body = mosql::Object::new();
                 body.set("name", Value::str(name.clone()));
                 body.set(
@@ -1070,7 +1082,7 @@ fn cmd_key(rest: &[String]) -> u8 {
                 eprintln!("nanobase key show: an app and a key id are required");
                 return 2;
             };
-            if let Some(client) = api_client(&parsed) {
+            if let Some(client) = &client {
                 let value = match client.request("GET", &format!("/api/apps/{app}/keys/{id}"), None)
                 {
                     Ok(v) => v,
@@ -1079,7 +1091,7 @@ fn cmd_key(rest: &[String]) -> u8 {
                         return 1;
                     }
                 };
-                return print_one_key(&value, &platform);
+                return print_one_key(&value, None);
             }
             let service = match service_or_exit(&parsed) {
                 Some(service) => service,
@@ -1092,7 +1104,7 @@ fn cmd_key(rest: &[String]) -> u8 {
                     return 1;
                 }
             };
-            print_one_key(&crate::keys::to_public_row(&key), &platform)
+            print_one_key(&crate::keys::to_public_row(&key), platform.as_ref())
         }
         "remove" => {
             let (Some(app), Some(id)) = (
@@ -1102,7 +1114,7 @@ fn cmd_key(rest: &[String]) -> u8 {
                 eprintln!("nanobase key remove: an app and a key id are required");
                 return 2;
             };
-            if let Some(client) = api_client(&parsed) {
+            if let Some(client) = &client {
                 let value =
                     match client.request("DELETE", &format!("/api/apps/{app}/keys/{id}"), None) {
                         Ok(v) => v,
@@ -1145,6 +1157,13 @@ fn cmd_key(rest: &[String]) -> u8 {
                 eprintln!("nanobase key bind: an app and a key id are required");
                 return 2;
             };
+            if client.is_some() {
+                eprintln!(
+                    "nanobase key bind: this binds a key of a platform on this machine.\n\
+                     A server's keys are bound by its owner, in the console."
+                );
+                return 2;
+            }
             let service = match service_or_exit(&parsed) {
                 Some(service) => service,
                 None => return 1,
@@ -1199,7 +1218,7 @@ fn report_waiting_keys(platform: &crate::platform::Platform) -> u8 {
 }
 
 /// The keys, as a table.
-fn print_key_rows(keys: &[Value], platform: &crate::platform::Platform) -> u8 {
+fn print_key_rows(keys: &[Value], platform: Option<&crate::platform::Platform>) -> u8 {
     if keys.is_empty() {
         println!("no API keys yet");
         return 0;
@@ -1216,11 +1235,18 @@ fn print_key_rows(keys: &[Value], platform: &crate::platform::Platform) -> u8 {
                 .to_string()
         };
         // The app is named rather than numbered: a person reading a
-        // list wants to know which app it is for.
-        let app = platform
-            .find_app(&text("app"))
-            .map(|record| record.doc.app.name.clone())
-            .unwrap_or_else(|| text("app"));
+        // list wants to know which app it is for. A server says the
+        // name in the answer; a platform on this machine is asked.
+        let app = match key.get("appName").and_then(|v| v.as_str()) {
+            Some(name) if !name.is_empty() => name.to_string(),
+            _ => platform
+                .and_then(|platform| {
+                    platform
+                        .find_app(&text("app"))
+                        .map(|record| record.doc.app.name.clone())
+                })
+                .unwrap_or_else(|| text("app")),
+        };
         let scopes = match key.get("scopes").and_then(|v| v.as_array()) {
             Some(list) if !list.is_empty() => list
                 .iter()
@@ -1245,7 +1271,7 @@ fn print_key_rows(keys: &[Value], platform: &crate::platform::Platform) -> u8 {
 }
 
 /// The keys, as the API sends them.
-fn print_keys(value: &Value, platform: &crate::platform::Platform) -> u8 {
+fn print_keys(value: &Value, platform: Option<&crate::platform::Platform>) -> u8 {
     let keys = value
         .get("items")
         .and_then(|v| v.as_array())
@@ -1255,7 +1281,7 @@ fn print_keys(value: &Value, platform: &crate::platform::Platform) -> u8 {
 }
 
 /// One key, in words.
-fn print_one_key(key: &Value, platform: &crate::platform::Platform) -> u8 {
+fn print_one_key(key: &Value, platform: Option<&crate::platform::Platform>) -> u8 {
     let text = |name: &str| {
         key.get(name)
             .and_then(|v| v.as_str())
@@ -1274,10 +1300,16 @@ fn print_one_key(key: &Value, platform: &crate::platform::Platform) -> u8 {
         _ => "-".to_string(),
     };
     println!("scopes:    {scopes}");
-    let app = platform
-        .find_app(&text("app"))
-        .map(|record| record.doc.app.name.clone())
-        .unwrap_or_else(|| text("app"));
+    let app = match key.get("appName").and_then(|v| v.as_str()) {
+        Some(name) if !name.is_empty() => name.to_string(),
+        _ => platform
+            .and_then(|platform| {
+                platform
+                    .find_app(&text("app"))
+                    .map(|record| record.doc.app.name.clone())
+            })
+            .unwrap_or_else(|| text("app")),
+    };
     println!("app:       {app}");
     println!("created:   {}", text("createdAt"));
     println!("last used: {}", text("lastUsedAt"));

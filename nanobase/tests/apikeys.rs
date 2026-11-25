@@ -304,6 +304,40 @@ fn a_key_may_not_make_more_keys() {
 }
 
 #[test]
+fn a_key_says_which_app_it_is_for() {
+    // The app's name, not only its id: a list is read by a person, and
+    // a person wants to know which app it is for. The command line
+    // asks a server for its keys, so the server has to say the name.
+    let api = api();
+    let token = token(&api);
+    let app = make_app(&api, &token, "todos");
+    let _ = make_key(&api, &token, &app, "one", &["rows:read"]);
+
+    let response = api.handle(authed("GET", &format!("/api/apps/{app}/keys"), &token));
+    assert_eq!(response.status, 200);
+    let items = body_of(&response)
+        .get("items")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        items[0].get("appName").and_then(|v| v.as_str()),
+        Some("todos"),
+        "the key does not say which app it is for"
+    );
+
+    // And one key on its own says it too.
+    let id = first_key_id(&api, &token, &app);
+    let response = api.handle(authed("GET", &format!("/api/apps/{app}/keys/{id}"), &token));
+    assert_eq!(response.status, 200);
+    assert_eq!(
+        body_of(&response).get("appName").and_then(|v| v.as_str()),
+        Some("todos")
+    );
+}
+
+#[test]
 fn a_key_with_no_scopes_may_do_nothing() {
     let api = api();
     let token = token(&api);
