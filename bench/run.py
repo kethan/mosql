@@ -164,6 +164,7 @@ def main() -> int:
     run([cargo, "build", "--release", "--bin", "bench", "--bin", "mem-bench"], cwd=ROOT / "rust")
     run([cargo, "build", "--release", "--bin", "nanobase"], cwd=ROOT / "nanobase")
     go_env = {"GOTOOLCHAIN": "local", "GOCACHE": os.environ.get("GOCACHE", "/tmp/gocache")}
+    (BENCH / "bin").mkdir(parents=True, exist_ok=True)
     run([go, "build", "-o", str(BENCH / "bin/sqlbench"), "./sqlbench"], cwd=GO_DIR, env=go_env)
     run([go, "build", "-o", str(BENCH / "bin/membench"), "./membench"], cwd=GO_DIR, env=go_env)
     run([go, "build", "-o", str(BENCH / "bin/cli"), "./cli"], cwd=GO_DIR, env=go_env)
