@@ -206,10 +206,21 @@ fn cloning_copies_the_shape_but_not_the_rows() {
 }
 
 #[test]
-fn cloning_reuses_none_of_the_secrets() {
-    // A clone shares the shape, not the identity: its signing secret and any
-    // provider credentials come from wherever the platform gets them, never
-    // copied from the source app.
+fn cloning_copies_the_document_as_written() {
+    // The clone's *document* is the source's document: the same schema,
+    // the same rules, the same auth settings — and the same signing
+    // secret, because the secret is in the document and the document is
+    // what is copied.
+    //
+    // The database is the exception: it is chosen by the clone's own
+    // policy (omit, copy or share), and a clone that does not share the
+    // source's database does not inherit its database token.
+    //
+    // Whether a clone should have a secret *of its own* is a question
+    // about what a clone is for, and it is not answered here: a clone
+    // that shares the source's database is the same app under a second
+    // name, and a clone that does not is a new app — and the two may
+    // want different answers.
     let mut p = signed_up();
     let mut doc = todos();
     doc.config.auth.secret = Some("0123456789abcdef".to_string());

@@ -127,6 +127,17 @@ so its token with it. A clone of an app in a serverless database gets
 that state — a schema, rules and auth, and nowhere to put the rows
 yet — rather than a clone that quietly shares production rows.
 
+**The clone's document is the source's document.** The same schema,
+the same rules, the same auth settings — and the same signing secret,
+because the secret is in the document and the document is what is
+copied. The *database* is the exception: it is chosen by the clone's
+own policy, and a clone that does not share the source's database does
+not inherit its database token either. Whether a clone should have a
+secret **of its own** is a question about what a clone is for, and it
+is open: a clone that shares the source's database is the same app
+under a second name, and a clone that does not is a new app — and the
+two may want different answers.
+
 **A clone that cannot be finished is taken back out.** The rows are
 copied one at a time, and a copy that fails half way is undone: the
 rows it wrote are removed and the clone is removed from the platform,
@@ -510,6 +521,7 @@ full edition only, and they are what the full edition grew by.
 
 | item | state | why |
 | --- | --- | --- |
+| **A clone's own signing secret** | **open** | The clone's document is the source's document, so the clone keeps the source's signing secret, its provider credentials and its storage keys — and a session token for the source works on the clone. The database token *is* treated differently (a clone that does not share the database does not inherit it). Whether a clone that does not share the source's database should get a secret of its own is a question about what a clone is for; it is not answered here, and nothing about it is silent: `STATUS.md` says what happens today. |
 | **An app's own sign-in endpoint** | **next** | The app document has the shape for it (`config.auth.features.emailPassword`) and the console writes it, but the platform still serves only the owner's token. A front end has to borrow the owner's token today. |
 | The JavaScript runtime adapters (`src/drivers.js`, `src/client.js`, `src/schemaless.js`) | not ported, **by decision** | I/O glue that would pull in async + TLS + socket crates and break the zero-dependency goal. |
 | `uflite`'s `auth.js` and `sql-adapter-factory.js` | not ported | The same I/O glue; the authentication engine is `better-auth-core` instead. |
