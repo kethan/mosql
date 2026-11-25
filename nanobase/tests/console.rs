@@ -160,6 +160,42 @@ fn the_console_serves_its_assets() {
 }
 
 #[test]
+fn the_console_has_an_api_keys_page() {
+    // The page is in the sidebar…
+    let response = nanobase::console::respond(&Request::new("GET", "/")).expect("the console");
+    let body = String::from_utf8(response.body).unwrap();
+    assert!(body.contains("API keys"), "the sidebar names the page");
+    assert!(body.contains("#keys"), "and it routes to it");
+    // …and the script talks to the key routes, so a key can be made,
+    // listed and revoked from the browser.
+    let js = nanobase::console::respond(&Request::new("GET", "/console.js")).expect("the script");
+    let script = String::from_utf8(js.body).unwrap();
+    assert!(
+        script.contains("/api/keys"),
+        "the script makes, lists and revokes keys"
+    );
+}
+
+#[test]
+fn the_console_marks_the_page_that_is_open() {
+    // One rule, one place: the item whose route is the one being shown is
+    // the active one, and the style sheet knows what that looks like.
+    let js = nanobase::console::respond(&Request::new("GET", "/console.js")).expect("the script");
+    let script = String::from_utf8(js.body).unwrap();
+    assert!(
+        script.contains(".nav-item[data-route]"),
+        "the sidebar items that are routes are found"
+    );
+    assert!(script.contains("active"), "and one of them is active");
+    let css = nanobase::console::respond(&Request::new("GET", "/console.css")).expect("the styles");
+    let styles = String::from_utf8(css.body).unwrap();
+    assert!(
+        styles.contains(".nav-item.active"),
+        "and the style sheet says what active looks like"
+    );
+}
+
+#[test]
 fn the_console_answers_nothing_else() {
     assert!(nanobase::console::respond(&Request::new("GET", "/api/apps")).is_none());
     assert!(nanobase::console::respond(&Request::new("GET", "/nope")).is_none());

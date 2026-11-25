@@ -29,7 +29,7 @@ The in-memory engine — CHECK find=2831 groups=2 city=London
 | `rust/` — **mosql** | the query builder and the in-memory engine, ported from the JavaScript `umosql`. `#![no_std]` + `alloc`, a hand-written regex and float routines, no libm, no dependency | 289 builder fixtures + 153 memory fixtures, byte-for-byte against the JavaScript |
 | `uflite/` | the service layer: databases, tables, ACL evaluation, storage (local files and an S3 trait) | 105 |
 | `schemaless/` | schema-less SQL collections, and the client that talks to them | 33 |
-| `nanobase/` | the platform: app documents, secrets, an owner account, a platform store, a service layer with events and hooks, an HTTP API, a web console, security middleware, and the command line | 262 (full) · 100 (serverless) |
+| `nanobase/` | the platform: app documents, secrets, an owner account, a platform store, a service layer with events and hooks, an HTTP API, a web console, security middleware, and the command line | 290 (full) · 112 (serverless) |
 | `better-auth-core/` | a Better Auth-compatible authentication server: bearer JWT sessions, eight plugins, every social provider, OpenID Connect with verified ID tokens | 172, plus the official client **22/22** |
 | `worker/` | the same engine as a Cloudflare Worker: Rust compiled to WebAssembly, D1 as the database, KV and R2 as optional adapters | 12, plus the end-to-end Wrangler run |
 | `mosql-core/` | the serverless drivers: Turso, Cloudflare D1, Neon, TiDB Cloud and PlanetScale, from one connection URL. No crates.io dependency, no global state, and it builds for WebAssembly | 80 |
@@ -51,7 +51,7 @@ each one is allowed to reach for.
 | Listener | `nanobase serve`, `nanobase db serve` | **none** — no TCP code in the binary |
 | Local database | SQLite, vendored and compiled in | **none** |
 | Build | `cargo build --release` | `cargo build --release --no-default-features --features serverless` |
-| Tests | 288 | 112 (a second, separate suite) |
+| Tests | 290 | 112 (a second, separate suite) |
 
 The split is enforced by Cargo features, not by convention:
 
