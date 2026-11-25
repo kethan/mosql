@@ -8,9 +8,9 @@ use alloc::vec::Vec;
 use std::eprintln;
 
 use crate::error::{Error, Result};
-use crate::escape::escape;
-use crate::json_path::{json_path, json_update, Cast, JsonOp};
-use crate::ops::{expr_op, filter_op, update_op};
+use crate::escape::{escape, write_escaped};
+use crate::json_path::{json_path, json_update, write_json_path, Cast, JsonOp};
+use crate::ops::{expr_op, update_op, write_filter_op};
 use crate::stages::{stage, AggState};
 use crate::validate;
 use crate::value::Value;
@@ -197,12 +197,27 @@ impl Builder {
     // -----------------------------------------------------------------------
 
     pub fn filter(&self, q: &Value, db: Db) -> Result<String> {
+        let mut out = String::new();
+        self.write_filter(&mut out, q, db)?;
+        Ok(out)
+    }
+
+    /// The filter, written into a buffer the caller already owns.
+    ///
+    /// The SQL builder writes into one string rather than making one per
+    /// fragment: a query with five conditions used to make a dozen
+    /// intermediate strings, and the allocations cost more than the
+    /// parsing.
+    pub fn write_filter(&self, out: &mut String, q: &Value, db: Db) -> Result<()> {
         let obj = match q {
             Value::Object(o) => o,
-            other => return Ok(other.to_js_string()),
+            other => {
+                out.push_str(&other.to_js_string());
+                return Ok(());
+            }
         };
 
-        let mut parts: Vec<String> = Vec::new();
+        let mut first = true;
 
         for (k, v) in obj.iter() {
             if k.strip_prefix('$').is_some() {
@@ -210,55 +225,99 @@ impl Builder {
                     "$and" | "$or" => {
                         let arr = validate::arr(v, k)?;
                         let join = if k == "$and" { " AND " } else { " OR " };
-                        let mut inner = Vec::with_capacity(arr.len());
-                        for item in arr {
-                            inner.push(self.filter(item, db)?);
+                        if !first {
+                            out.push_str(" AND ");
                         }
-                        parts.push(format!("({})", inner.join(join)));
+                        first = false;
+                        out.push('(');
+                        let mut inner_first = true;
+                        for item in arr {
+                            if !inner_first {
+                                out.push_str(join);
+                            }
+                            inner_first = false;
+                            self.write_filter(out, item, db)?;
+                        }
+                        out.push(')');
                     }
                     "$nor" => {
                         let arr = validate::arr(v, k)?;
-                        let mut inner = Vec::with_capacity(arr.len());
-                        for item in arr {
-                            inner.push(self.filter(item, db)?);
+                        if !first {
+                            out.push_str(" AND ");
                         }
-                        parts.push(format!("NOT ({})", inner.join(" OR ")));
+                        first = false;
+                        out.push_str("NOT (");
+                        let mut inner_first = true;
+                        for item in arr {
+                            if !inner_first {
+                                out.push_str(" OR ");
+                            }
+                            inner_first = false;
+                            self.write_filter(out, item, db)?;
+                        }
+                        out.push(')');
                     }
-                    "$not" => parts.push(format!("NOT ({})", self.filter(v, db)?)),
-                    "$expr" => parts.push(self.expr(v, db)?),
+                    "$not" => {
+                        if !first {
+                            out.push_str(" AND ");
+                        }
+                        first = false;
+                        out.push_str("NOT (");
+                        self.write_filter(out, v, db)?;
+                        out.push(')');
+                    }
+                    "$expr" => {
+                        if !first {
+                            out.push_str(" AND ");
+                        }
+                        first = false;
+                        out.push_str(&self.expr(v, db)?);
+                    }
                     _ => return Err(Error::new(format!("Unknown filter operator: {}", k))),
                 }
                 continue;
             }
 
             let is_json = k.contains('.');
-            let f = if is_json {
-                json_path(k, db, Cast::None)?
-            } else {
-                validate::col(k, db)?
-            };
 
             if let Some(conditions) = v.as_object() {
-                let mut conds: Vec<String> = Vec::new();
+                // Every condition contributes exactly one clause, so the
+                // count is known before the first one is written — and
+                // the count decides whether the group is wrapped.
+                let total = conditions.entries.len();
+                if !first {
+                    out.push_str(" AND ");
+                }
+                first = false;
+                if total > 1 {
+                    out.push('(');
+                }
+                let mut written = 0;
                 for (op, val) in conditions.iter() {
+                    if written > 0 {
+                        out.push_str(" AND ");
+                    }
+                    written += 1;
                     let cast = match val {
                         Value::Int(_) | Value::Float(_) => Cast::Numeric,
                         Value::Bool(_) => Cast::Boolean,
                         _ => Cast::None,
                     };
-                    let f2 = if is_json && cast != Cast::None {
-                        json_path(k, db, cast)?
-                    } else {
-                        f.clone()
-                    };
 
                     if op == "$not" && val.is_object() {
-                        let mut inner = Vec::new();
+                        out.push_str("NOT (");
+                        let mut inner_first = true;
                         for (op2, val2) in val.as_object().unwrap().iter() {
                             self.check_filter_op(op2)?;
-                            inner.push(format!("{} {}", f2, filter_op(op2, val2, db, &f2)?));
+                            if !inner_first {
+                                out.push_str(" AND ");
+                            }
+                            inner_first = false;
+                            write_column(out, k, is_json, db, cast)?;
+                            out.push(' ');
+                            write_filter_op(out, op2, val2, db, "")?;
                         }
-                        conds.push(format!("NOT ({})", inner.join(" AND ")));
+                        out.push(')');
                         continue;
                     }
 
@@ -266,18 +325,22 @@ impl Builder {
 
                     if op == "$ilike" || op == "$nilike" {
                         if db == Db::Pg {
-                            conds.push(format!("{} {}", f, filter_op(op, val, db, &f)?));
+                            write_column(out, k, is_json, db, Cast::None)?;
+                            out.push(' ');
                         } else {
-                            conds.push(format!("LOWER({}) {}", f, filter_op(op, val, db, &f)?));
+                            out.push_str("LOWER(");
+                            write_column(out, k, is_json, db, Cast::None)?;
+                            out.push_str(") ");
                         }
+                        write_filter_op(out, op, val, db, "")?;
                     } else {
-                        conds.push(format!("{} {}", f2, filter_op(op, val, db, &f2)?));
+                        write_column(out, k, is_json, db, cast)?;
+                        out.push(' ');
+                        write_filter_op(out, op, val, db, "")?;
                     }
                 }
-                if conds.len() > 1 {
-                    parts.push(format!("({})", conds.join(" AND ")));
-                } else if let Some(first) = conds.into_iter().next() {
-                    parts.push(first);
+                if total > 1 {
+                    out.push(')');
                 }
             } else {
                 let cast = match v {
@@ -285,16 +348,17 @@ impl Builder {
                     Value::Bool(_) => Cast::Boolean,
                     _ => Cast::None,
                 };
-                let f2 = if is_json && cast != Cast::None {
-                    json_path(k, db, cast)?
-                } else {
-                    f
-                };
-                parts.push(format!("{} = {}", f2, escape(v, db)?));
+                if !first {
+                    out.push_str(" AND ");
+                }
+                first = false;
+                write_column(out, k, is_json, db, cast)?;
+                out.push_str(" = ");
+                write_escaped(out, v, db)?;
             }
         }
 
-        Ok(parts.join(" AND "))
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -366,20 +430,38 @@ impl Builder {
 
         let mut sql = s.sql;
         if !s.wheres.is_empty() {
-            sql.push_str(&format!(" WHERE {}", s.wheres.join(" AND ")));
+            sql.push_str(" WHERE ");
+            for (index, clause) in s.wheres.iter().enumerate() {
+                if index > 0 {
+                    sql.push_str(" AND ");
+                }
+                sql.push_str(clause);
+            }
         }
         if let Some(group) = &s.group_by {
-            sql.push_str(&format!(" GROUP BY {}", group));
+            sql.push_str(" GROUP BY ");
+            sql.push_str(group);
         }
         if !s.having.is_empty() {
-            sql.push_str(&format!(" HAVING {}", s.having.join(" AND ")));
+            sql.push_str(" HAVING ");
+            for (index, clause) in s.having.iter().enumerate() {
+                if index > 0 {
+                    sql.push_str(" AND ");
+                }
+                sql.push_str(clause);
+            }
         }
         sql.push_str(&s.order);
         sql.push_str(&s.limit);
         sql.push_str(&s.offset);
 
         self.log_query(&sql);
-        Ok(sql.trim().to_string())
+        let trimmed = sql.trim();
+        Ok(if trimmed.len() == sql.len() {
+            sql
+        } else {
+            trimmed.to_string()
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -400,12 +482,16 @@ impl Builder {
             return Err(Error::new("insertMany requires at least one document"));
         }
 
-        let mut keys: Vec<String> = Vec::new();
+        // The column names are borrowed from the documents, and the
+        // statement is written into one string: an insert of fifty
+        // documents used to make a string for every value and another
+        // for every row.
+        let mut keys: Vec<&str> = Vec::new();
         for doc in docs {
             if let Some(obj) = doc.as_object() {
                 for k in obj.keys() {
-                    if !keys.iter().any(|x| x == k) {
-                        keys.push(k.to_string());
+                    if !keys.iter().any(|x| *x == k) {
+                        keys.push(k);
                     }
                 }
             }
@@ -414,30 +500,33 @@ impl Builder {
             return Err(Error::new("Documents must have at least one field"));
         }
 
-        let columns = keys
-            .iter()
-            .map(|k| validate::col(k, db))
-            .collect::<Result<Vec<_>>>()?
-            .join(", ");
-
-        let mut rows = Vec::with_capacity(docs.len());
-        for doc in docs {
-            let mut values = Vec::with_capacity(keys.len());
-            for k in &keys {
+        let mut sql = String::with_capacity(64 + docs.len() * 32);
+        sql.push_str("INSERT INTO ");
+        validate::write_col(&mut sql, table, db)?;
+        sql.push_str(" (");
+        for (index, k) in keys.iter().enumerate() {
+            if index > 0 {
+                sql.push_str(", ");
+            }
+            validate::write_col(&mut sql, k, db)?;
+        }
+        sql.push_str(") VALUES ");
+        for (index, doc) in docs.iter().enumerate() {
+            if index > 0 {
+                sql.push_str(", ");
+            }
+            sql.push('(');
+            for (column, k) in keys.iter().enumerate() {
+                if column > 0 {
+                    sql.push_str(", ");
+                }
                 match doc.get(k) {
-                    Some(v) => values.push(escape(v, db)?),
-                    None => values.push("NULL".to_string()),
+                    Some(v) => write_escaped(&mut sql, v, db)?,
+                    None => sql.push_str("NULL"),
                 }
             }
-            rows.push(format!("({})", values.join(", ")));
+            sql.push(')');
         }
-
-        let mut sql = format!(
-            "INSERT INTO {} ({}) VALUES {}",
-            validate::col(table, db)?,
-            columns,
-            rows.join(", ")
-        );
 
         if db == Db::Pg {
             if let Some(returning) = &options.returning {
@@ -496,14 +585,20 @@ impl Builder {
             return Err(Error::new("Update requires at least one operation"));
         }
 
-        let mut sql = format!(
-            "UPDATE {} SET {}",
-            validate::col(table, db)?,
-            set_clauses.join(", ")
-        );
+        let mut sql = String::with_capacity(96);
+        sql.push_str("UPDATE ");
+        validate::write_col(&mut sql, table, db)?;
+        sql.push_str(" SET ");
+        for (index, clause) in set_clauses.iter().enumerate() {
+            if index > 0 {
+                sql.push_str(", ");
+            }
+            sql.push_str(clause);
+        }
 
         if has_entries(query) {
-            sql.push_str(&format!(" WHERE {}", self.filter(query, db)?));
+            sql.push_str(" WHERE ");
+            self.write_filter(&mut sql, query, db)?;
         }
 
         if db == Db::Pg {
@@ -803,56 +898,70 @@ impl FindQuery {
     }
 
     pub fn to_sql(&self) -> Result<String> {
-        let fields = self.fields.clone().unwrap_or_else(|| "*".to_string());
-        let distinct = if self.distinct { "DISTINCT " } else { "" };
-        let mut sql = format!("SELECT {}{} FROM {}", distinct, fields, self.table);
+        // The statement is written into one string. It used to be made
+        // out of a dozen pieces, each its own allocation, and the
+        // allocations cost more than the parsing.
+        let mut sql = String::with_capacity(96);
+        sql.push_str("SELECT ");
+        if self.distinct {
+            sql.push_str("DISTINCT ");
+        }
+        match &self.fields {
+            Some(fields) => sql.push_str(fields),
+            None => sql.push('*'),
+        }
+        sql.push_str(" FROM ");
+        sql.push_str(&self.table);
 
         if has_entries(&self.query) {
-            sql.push_str(&format!(
-                " WHERE {}",
-                self.builder.filter(&self.query, self.db)?
-            ));
+            sql.push_str(" WHERE ");
+            self.builder.write_filter(&mut sql, &self.query, self.db)?;
         }
 
         if let Some(sort_obj) = &self.sort_obj {
-            let mut clauses = Vec::new();
+            let mut clauses = String::new();
+            let mut f = String::new();
             if let Some(obj) = sort_obj.as_object() {
                 for (k, ord) in obj.iter() {
-                    let f = if k.contains('.') {
-                        json_path(k, self.db, Cast::None)?
+                    f.clear();
+                    if k.contains('.') {
+                        write_json_path(&mut f, k, self.db, Cast::None)?;
                     } else {
-                        validate::col(k, self.db)?
-                    };
+                        validate::write_col(&mut f, k, self.db)?;
+                    }
                     let asc = matches!(ord, Value::Int(1)) || ord.as_str() == Some("asc");
+                    if !clauses.is_empty() {
+                        clauses.push_str(", ");
+                    }
                     if self.db == Db::Pg {
-                        clauses.push(format!(
-                            "{} {}",
-                            f,
-                            if asc {
-                                "ASC NULLS FIRST"
-                            } else {
-                                "DESC NULLS LAST"
-                            }
-                        ));
-                    } else if self.db == Db::Mysql && self.distinct {
-                        clauses.push(format!("{} {}", f, if asc { "ASC" } else { "DESC" }));
-                    } else {
-                        let nulls = if asc {
-                            format!("CASE WHEN {} IS NULL THEN 0 ELSE 1 END", f)
+                        clauses.push_str(&f);
+                        clauses.push(' ');
+                        clauses.push_str(if asc {
+                            "ASC NULLS FIRST"
                         } else {
-                            format!("CASE WHEN {} IS NULL THEN 1 ELSE 0 END", f)
-                        };
-                        clauses.push(format!(
-                            "{}, {} {}",
-                            nulls,
-                            f,
-                            if asc { "ASC" } else { "DESC" }
-                        ));
+                            "DESC NULLS LAST"
+                        });
+                    } else if self.db == Db::Mysql && self.distinct {
+                        clauses.push_str(&f);
+                        clauses.push(' ');
+                        clauses.push_str(if asc { "ASC" } else { "DESC" });
+                    } else {
+                        clauses.push_str("CASE WHEN ");
+                        clauses.push_str(&f);
+                        clauses.push_str(if asc {
+                            " IS NULL THEN 0 ELSE 1 END, "
+                        } else {
+                            " IS NULL THEN 1 ELSE 0 END, "
+                        });
+                        clauses.push_str(&f);
+                        clauses.push(' ');
+                        clauses.push_str(if asc { "ASC" } else { "DESC" });
                     }
                 }
             }
             if !clauses.is_empty() {
-                sql.push_str(&format!(" ORDER BY {}", clauses.join(", ")));
+                sql.push_str(" ORDER BY ");
+                sql.push_str(&clauses);
             }
         }
 
@@ -860,7 +969,14 @@ impl FindQuery {
         sql.push_str(&self.skip);
 
         self.builder.log_query(&sql);
-        Ok(sql.trim().to_string())
+        // The statement is trimmed, but it rarely has anything to trim,
+        // and then the string it already has is the answer.
+        let trimmed = sql.trim();
+        Ok(if trimmed.len() == sql.len() {
+            sql
+        } else {
+            trimmed.to_string()
+        })
     }
 
     /// JS calls this `toString()`.
@@ -872,5 +988,17 @@ impl FindQuery {
 impl core::fmt::Display for FindQuery {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(&self.to_string_value())
+    }
+}
+
+/// The column expression, written into a buffer the caller already owns.
+///
+/// A dotted path is a JSON path, and a plain name is an identifier. The
+/// cast applies to the JSON case only, which is what the original did.
+fn write_column(out: &mut String, key: &str, is_json: bool, db: Db, cast: Cast) -> Result<()> {
+    if is_json {
+        write_json_path(out, key, db, cast)
+    } else {
+        validate::write_col(out, key, db)
     }
 }

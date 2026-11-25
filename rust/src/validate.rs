@@ -315,6 +315,40 @@ pub fn col(name: &str, db: Db) -> Result<String> {
     Ok(parts.join("."))
 }
 
+/// The same, written into a buffer the caller already owns.
+///
+/// The SQL builder writes into one string rather than making one per
+/// fragment: a query with five conditions used to make a dozen
+/// intermediate strings, and the allocations cost more than the parsing.
+pub fn write_col(out: &mut String, name: &str, db: Db) -> Result<()> {
+    if name.is_empty() {
+        return Err(Error::new(format!("Invalid column: {}", name)));
+    }
+    let mut first = true;
+    for part in name.split('.').map(strip_quotes) {
+        if part.is_empty() || !part.chars().all(is_word_char) {
+            return Err(Error::new(format!("Invalid column: {}", name)));
+        }
+        if !first {
+            out.push('.');
+        }
+        first = false;
+        if db == Db::Mysql {
+            let lower = part.to_ascii_lowercase();
+            if MYSQL_RESERVED.contains(&lower.as_str()) {
+                out.push('`');
+                out.push_str(part);
+                out.push('`');
+            } else {
+                out.push_str(part);
+            }
+        } else {
+            out.push_str(part);
+        }
+    }
+    Ok(())
+}
+
 /// Replace every non-word character with `_` (used for derived aliases).
 pub fn alias(s: &str) -> String {
     s.chars()

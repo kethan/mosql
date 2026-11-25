@@ -2,7 +2,7 @@
 //! tables. Every generated fragment is byte-identical to the JS implementation.
 
 use crate::error::{Error, Result};
-use crate::escape::escape;
+use crate::escape::{escape, write_escaped};
 use crate::json_path::{batch_json_update, json_path, json_update, Cast, JsonOp};
 use crate::validate;
 use crate::value::Value;
@@ -10,58 +10,83 @@ use crate::Db;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-fn cmp(v: &Value, db: Db, op: &str) -> Result<String> {
-    Ok(format!("{} {}", op, escape(v, db)?))
-}
-
-pub fn filter_op(op: &str, v: &Value, db: Db, _f: &str) -> Result<String> {
+/// The operator, written into a buffer the caller already owns.
+///
+/// The SQL builder writes into one string rather than making one per
+/// fragment: a query with five conditions used to make a dozen
+/// intermediate strings, and the allocations cost more than the parsing.
+pub fn write_filter_op(out: &mut String, op: &str, v: &Value, db: Db, _f: &str) -> Result<()> {
     match op {
-        "$eq" => cmp(v, db, "="),
-        "$ne" => cmp(v, db, "!="),
-        "$gt" => cmp(v, db, ">"),
-        "$gte" => cmp(v, db, ">="),
-        "$lt" => cmp(v, db, "<"),
-        "$lte" => cmp(v, db, "<="),
+        "$eq" => write_cmp(out, v, db, "="),
+        "$ne" => write_cmp(out, v, db, "!="),
+        "$gt" => write_cmp(out, v, db, ">"),
+        "$gte" => write_cmp(out, v, db, ">="),
+        "$lt" => write_cmp(out, v, db, "<"),
+        "$lte" => write_cmp(out, v, db, "<="),
 
         "$in" => {
             let arr = validate::arr(v, "$in")?;
             if arr.is_empty() {
-                return Ok("= 1 AND 1 = 0".to_string());
+                out.push_str("= 1 AND 1 = 0");
+                return Ok(());
             }
-            let mut parts = Vec::with_capacity(arr.len());
-            for item in arr {
-                parts.push(escape(item, db)?);
+            out.push_str("IN (");
+            for (index, item) in arr.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(", ");
+                }
+                write_escaped(out, item, db)?;
             }
-            Ok(format!("IN ({})", parts.join(", ")))
+            out.push(')');
+            Ok(())
         }
         "$nin" => {
             let arr = validate::arr(v, "$nin")?;
             if arr.is_empty() {
-                return Ok("= 1 OR 1 = 1".to_string());
+                out.push_str("= 1 OR 1 = 1");
+                return Ok(());
             }
-            let mut parts = Vec::with_capacity(arr.len());
-            for item in arr {
-                parts.push(escape(item, db)?);
+            out.push_str("NOT IN (");
+            for (index, item) in arr.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(", ");
+                }
+                write_escaped(out, item, db)?;
             }
-            Ok(format!("NOT IN ({})", parts.join(", ")))
+            out.push(')');
+            Ok(())
         }
 
-        "$like" => Ok(format!("LIKE {}", escape(v, db)?)),
+        "$like" => {
+            out.push_str("LIKE ");
+            write_escaped(out, v, db)
+        }
         "$ilike" => {
             if db == Db::Pg {
-                Ok(format!("ILIKE {}", escape(v, db)?))
+                out.push_str("ILIKE ");
             } else {
-                Ok(format!("LIKE LOWER({})", escape(v, db)?))
+                out.push_str("LIKE LOWER(");
+                write_escaped(out, v, db)?;
+                out.push(')');
+                return Ok(());
             }
+            write_escaped(out, v, db)
         }
         "$nilike" => {
             if db == Db::Pg {
-                Ok(format!("NOT ILIKE {}", escape(v, db)?))
+                out.push_str("NOT ILIKE ");
             } else {
-                Ok(format!("NOT LIKE LOWER({})", escape(v, db)?))
+                out.push_str("NOT LIKE LOWER(");
+                write_escaped(out, v, db)?;
+                out.push(')');
+                return Ok(());
             }
+            write_escaped(out, v, db)
         }
-        "$nlike" => Ok(format!("NOT LIKE {}", escape(v, db)?)),
+        "$nlike" => {
+            out.push_str("NOT LIKE ");
+            write_escaped(out, v, db)
+        }
 
         "$regex" => {
             let p = v.to_js_string();
@@ -78,20 +103,21 @@ pub fn filter_op(op: &str, v: &Value, db: Db, _f: &str) -> Result<String> {
                 } else {
                     format!("%{}%", p.replace(".*", ""))
                 };
-                return Ok(format!("LIKE {}", escape(&Value::Str(like), db)?));
+                out.push_str("LIKE ");
+                return write_escaped(out, &Value::Str(like), db);
             }
-            Ok(format!(
-                "{} {}",
-                if db == Db::Pg { "~" } else { "REGEXP" },
-                escape(&Value::Str(p), db)?
-            ))
+            out.push_str(if db == Db::Pg { "~ " } else { "REGEXP " });
+            write_escaped(out, &Value::Str(p), db)
         }
 
-        "$exists" => Ok(if v.is_truthy() {
-            "IS NOT NULL".to_string()
-        } else {
-            "IS NULL".to_string()
-        }),
+        "$exists" => {
+            out.push_str(if v.is_truthy() {
+                "IS NOT NULL"
+            } else {
+                "IS NULL"
+            });
+            Ok(())
+        }
 
         "$between" => {
             let arr = v
@@ -100,11 +126,10 @@ pub fn filter_op(op: &str, v: &Value, db: Db, _f: &str) -> Result<String> {
             if arr.len() != 2 {
                 return Err(Error::new("$between requires [min, max]"));
             }
-            Ok(format!(
-                "BETWEEN {} AND {}",
-                escape(&arr[0], db)?,
-                escape(&arr[1], db)?
-            ))
+            out.push_str("BETWEEN ");
+            write_escaped(out, &arr[0], db)?;
+            out.push_str(" AND ");
+            write_escaped(out, &arr[1], db)
         }
 
         "$mod" => {
@@ -114,15 +139,21 @@ pub fn filter_op(op: &str, v: &Value, db: Db, _f: &str) -> Result<String> {
             if arr.len() != 2 {
                 return Err(Error::new("$mod requires [divisor, remainder]"));
             }
-            Ok(format!(
-                "% {} = {}",
-                arr[0].to_js_string(),
-                arr[1].to_js_string()
-            ))
+            out.push_str("% ");
+            out.push_str(&arr[0].to_js_string());
+            out.push_str(" = ");
+            out.push_str(&arr[1].to_js_string());
+            Ok(())
         }
 
         _ => Err(Error::new(format!("Unknown operator: {}", op))),
     }
+}
+
+fn write_cmp(out: &mut String, v: &Value, db: Db, op: &str) -> Result<()> {
+    out.push_str(op);
+    out.push(' ');
+    write_escaped(out, v, db)
 }
 
 fn join_args(

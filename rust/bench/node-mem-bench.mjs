@@ -59,3 +59,16 @@ const sink = db.collection('inserts', []);
 bench('insert1', 2000, () => sink.insertOne(doc(999999)));
 
 console.log(`\ncollection size: ${coll.size()}`);
+
+// The check mode prints what the engine actually computed, so the Rust
+// and the Go baselines can be compared against it. A timing comparison
+// only means something if the three are doing the same work.
+if (process.env.CHECK) {
+    const matched = coll.find(query).toArray().length;
+    const groups = coll.aggregate(pipeline);
+    const first = groups[0] || {};
+    const updated = coll.updateMany(query, update).matchedCount;
+    console.log(
+        `CHECK find=${matched} groups=${groups.length} city=${first._id} n=${first.n} avg=${first.avg} updated=${updated}`
+    );
+}

@@ -83,6 +83,73 @@ pub fn json_path(path: &str, db: Db, cast: Cast) -> Result<String> {
     }
 }
 
+/// The same, written into a buffer the caller already owns.
+pub fn write_json_path(out: &mut String, path: &str, db: Db, cast: Cast) -> Result<()> {
+    if path.is_empty() {
+        return Ok(());
+    }
+    let mut it = path.split('.');
+    let col = it.next().unwrap_or("");
+    let rest: Vec<&str> = it.collect();
+    if rest.is_empty() {
+        out.push_str(&validate::col(col, db)?);
+        return Ok(());
+    }
+
+    let a = rest.join(",");
+    let b = format!("$.{}", bracket_numeric(&rest.join(".")));
+
+    match db {
+        Db::Pg => {
+            // A cast wraps the extraction once more: the original writes
+            // `((col::jsonb #>> '{a}'))::numeric`.
+            if cast != Cast::None {
+                out.push('(');
+            }
+            out.push('(');
+            out.push_str(&validate::col(col, db)?);
+            out.push_str("::jsonb #>> '{");
+            out.push_str(&a);
+            out.push_str("}')");
+            if cast != Cast::None {
+                out.push(')');
+                match cast {
+                    Cast::Numeric => out.push_str("::numeric"),
+                    Cast::Int => out.push_str("::int"),
+                    Cast::Boolean => out.push_str("::boolean"),
+                    Cast::None => {}
+                }
+            }
+        }
+        Db::Mysql => {
+            // A numeric or an integer cast wraps the extraction:
+            // `CAST(JSON_UNQUOTE(...) AS ...)`. A boolean one does not:
+            // the original reads a boolean as the extraction itself.
+            if matches!(cast, Cast::Numeric | Cast::Int) {
+                out.push_str("CAST(");
+            }
+            out.push_str("JSON_UNQUOTE(JSON_EXTRACT(");
+            out.push_str(&validate::col(col, db)?);
+            out.push_str(", '");
+            out.push_str(&b);
+            out.push_str("'))");
+            match cast {
+                Cast::Numeric => out.push_str(" AS DECIMAL(20,6))"),
+                Cast::Int => out.push_str(" AS SIGNED)"),
+                _ => {}
+            }
+        }
+        Db::Sqlite => {
+            out.push_str("json_extract(");
+            out.push_str(&validate::col(col, db)?);
+            out.push_str(", '");
+            out.push_str(&b);
+            out.push_str("')");
+        }
+    }
+    Ok(())
+}
+
 fn build_val(v: &Value, db: Db) -> Result<String> {
     if v.is_null() {
         return Ok("NULL".to_string());

@@ -3,47 +3,68 @@
 use crate::error::{Error, Result};
 use crate::value::{to_iso_string, to_mysql_datetime, Value};
 use crate::Db;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 
-pub fn escape(value: &Value, db: Db) -> Result<String> {
+/// The same, written into a buffer the caller already owns.
+///
+/// The SQL builder writes into one string rather than making one per
+/// fragment: a query with five conditions used to make a dozen
+/// intermediate strings, and the allocations cost more than the parsing.
+pub fn write_escaped(out: &mut String, value: &Value, db: Db) -> Result<()> {
     match value {
-        Value::Null => Ok("NULL".to_string()),
-        Value::Int(i) => Ok(i.to_string()),
+        Value::Null => out.push_str("NULL"),
+        Value::Int(i) => {
+            use core::fmt::Write;
+            let _ = write!(out, "{}", i);
+        }
         Value::Float(f) => {
             if !f.is_finite() {
                 return Err(Error::new("Cannot escape non-finite number"));
             }
-            Ok(crate::value::fmt_number(*f))
+            out.push_str(&crate::value::fmt_number(*f));
         }
-        Value::Bool(true) => Ok(if db == Db::Pg {
-            "TRUE".to_string()
-        } else {
-            "1".to_string()
-        }),
-        Value::Bool(false) => Ok(if db == Db::Pg {
-            "FALSE".to_string()
-        } else {
-            "0".to_string()
-        }),
+        Value::Bool(true) => out.push_str(if db == Db::Pg { "TRUE" } else { "1" }),
+        Value::Bool(false) => out.push_str(if db == Db::Pg { "FALSE" } else { "0" }),
         Value::Date(d) => {
             if db == Db::Mysql {
-                return Ok(format!("'{}'", to_mysql_datetime(d)));
+                out.push('\'');
+                out.push_str(&to_mysql_datetime(d));
+                out.push('\'');
+                return Ok(());
             }
             let iso = to_iso_string(d);
-            Ok(if db == Db::Pg {
-                format!("'{}'::timestamp", iso)
-            } else {
-                format!("'{}'", iso)
-            })
+            out.push('\'');
+            out.push_str(&iso);
+            out.push('\'');
+            if db == Db::Pg {
+                out.push_str("::timestamp");
+            }
         }
         Value::Array(_) | Value::Object(_) => {
             let j = crate::value::to_json(value).replace('\'', "''");
-            Ok(if db == Db::Pg {
-                format!("'{}'::jsonb", j)
-            } else {
-                format!("'{}'", j)
-            })
+            out.push('\'');
+            out.push_str(&j);
+            out.push('\'');
+            if db == Db::Pg {
+                out.push_str("::jsonb");
+            }
         }
-        Value::Str(s) => Ok(format!("'{}'", s.replace('\'', "''"))),
+        Value::Str(s) => {
+            out.push('\'');
+            for ch in s.chars() {
+                if ch == '\'' {
+                    out.push('\'');
+                }
+                out.push(ch);
+            }
+            out.push('\'');
+        }
     }
+    Ok(())
+}
+
+pub fn escape(value: &Value, db: Db) -> Result<String> {
+    let mut out = String::new();
+    write_escaped(&mut out, value, db)?;
+    Ok(out)
 }

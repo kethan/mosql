@@ -34,6 +34,12 @@ function bench(label, fn) {
     console.log(`${label.padEnd(10)} ${best.toFixed(1).padStart(8)} ns/op  ${(1e9 / best).toFixed(0).padStart(10)} ops/s`);
 }
 
+if (process.env.PRINT) {
+    console.log(users.find(query).toSQL());
+    console.log(users.updateMany(query, update));
+    console.log(users.aggregate(pipeline));
+}
+
 bench('find', () => users.find(query).toSQL());
 bench('update', () => users.updateMany(query, update));
 bench('aggregate', () => users.aggregate(pipeline));

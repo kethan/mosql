@@ -97,22 +97,36 @@ fn main() {
         let sql = users.aggregate(&pipeline).unwrap();
         assert!(!sql.is_empty());
     });
+    if std::env::var("PRINT").is_ok() {
+        println!("{}", users.find(&q, None).unwrap().to_sql().unwrap());
+        println!(
+            "{}",
+            users
+                .update_many(
+                    &q,
+                    &obj(&[("$set", obj(&[("status", Value::str("done"))]))]),
+                    &opts
+                )
+                .unwrap()
+        );
+        println!("{}", users.aggregate(&pipeline).unwrap());
+    }
+
+    // The documents are built before the clock starts, the way the
+    // JavaScript and the Go benchmarks build theirs: what is measured is
+    // the statement, not the making of the input.
+    let docs = Value::Array(
+        (0..50)
+            .map(|i| {
+                obj(&[
+                    ("name", Value::str(format!("u{}", i))),
+                    ("age", Value::Int(i)),
+                ])
+            })
+            .collect(),
+    );
     run("insert50", &mut || {
-        let sql = users
-            .insert_many(
-                &Value::Array(
-                    (0..50)
-                        .map(|i| {
-                            obj(&[
-                                ("name", Value::str(format!("u{}", i))),
-                                ("age", Value::Int(i)),
-                            ])
-                        })
-                        .collect(),
-                ),
-                &opts,
-            )
-            .unwrap();
+        let sql = users.insert_many(&docs, &opts).unwrap();
         assert!(!sql.is_empty());
     });
 }

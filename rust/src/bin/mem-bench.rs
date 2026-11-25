@@ -113,4 +113,26 @@ fn main() {
     });
 
     println!("\ncollection size: {}", coll.size());
+
+    // The check mode prints what the engine actually computed, so the
+    // JavaScript and the Go baselines can be compared against it. A
+    // timing comparison only means something if the three are doing the
+    // same work.
+    if std::env::var("CHECK").is_ok() {
+        let matched = coll.find(&query).to_vec().unwrap().len();
+        let groups = coll.aggregate(&pipeline).unwrap();
+        let first = groups.first().cloned().unwrap_or(Value::Null);
+        let city = first
+            .get("_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let n = first.get("n").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let avg = first.get("avg").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let updated = coll.update_many(&query, &update[0]).unwrap().matched_count;
+        println!(
+            "CHECK find={matched} groups={} city={city} n={n} avg={avg} updated={updated}",
+            groups.len()
+        );
+    }
 }
