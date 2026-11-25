@@ -222,6 +222,26 @@ impl Default for DatabaseConfig {
 }
 
 impl DatabaseConfig {
+    /// Read a database configuration out of a document value.
+    ///
+    /// The same shape `config.database` has in an app document, read the
+    /// same way — but a failure is an error rather than an issue, because
+    /// a connection test is asking "is this right?" and the answer has to
+    /// say what is wrong with it.
+    pub fn from_value(v: &Value) -> Result<DatabaseConfig, String> {
+        let mut issues = Vec::new();
+        let config = read_database(Some(v), "database", &mut issues, true);
+        if let Some(issue) = issues.first() {
+            return Err(issue.message.clone());
+        }
+        Ok(config)
+    }
+
+    /// The configuration, as a document value.
+    pub fn to_value(&self) -> Value {
+        database_to_value(self)
+    }
+
     /// An engine that needs no connection details at all.
     pub fn is_embedded(&self) -> bool {
         matches!(self.kind, DbKind::Memory | DbKind::Sqlite)
@@ -438,6 +458,46 @@ pub struct AclConfig {
     pub rules: Vec<Value>,
 }
 
+/// `config.cors` — what a browser may do with this app's API.
+///
+/// The platform has one CORS policy of its own, and an app may have
+/// another: an app that is served from one place and read from another
+/// needs to say so, and an app that is read only by its own page needs
+/// to say that too. An app with CORS switched off inherits the
+/// platform's policy; an app with it switched on and no origins listed
+/// allows nothing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CorsConfig {
+    pub enabled: bool,
+    /// The origins allowed. `*` allows any origin.
+    pub origins: Vec<String>,
+    /// Whether a credentialed request is allowed.
+    pub allow_credentials: bool,
+    /// How long a browser may cache the preflight answer, in seconds.
+    pub max_age: u64,
+}
+
+impl Default for CorsConfig {
+    fn default() -> CorsConfig {
+        CorsConfig {
+            enabled: false,
+            origins: Vec::new(),
+            allow_credentials: false,
+            // Ten minutes: long enough that a browser does not ask again
+            // on every navigation, short enough that changing the list of
+            // origins takes effect without a restart.
+            max_age: 600,
+        }
+    }
+}
+
+impl CorsConfig {
+    /// The origins, as one comma-separated string.
+    pub fn origins_joined(&self) -> String {
+        self.origins.join(",")
+    }
+}
+
 /// `schema` — declared collections and their columns.
 pub type Schema = BTreeMap<String, CollectionDef>;
 
@@ -580,6 +640,7 @@ pub struct AppConfig {
     pub storage: StorageConfig,
     pub email: Option<Value>,
     pub acl: AclConfig,
+    pub cors: CorsConfig,
 }
 
 impl AppDoc {
@@ -1113,6 +1174,7 @@ fn config_to_value(c: &AppConfig) -> Value {
     o.set("storage", storage_to_value(&c.storage));
     o.set("email", c.email.clone().unwrap_or(Value::Null));
     o.set("acl", acl_to_value(&c.acl));
+    o.set("cors", cors_to_value(&c.cors));
     Value::Object(o)
 }
 
@@ -1205,6 +1267,18 @@ fn acl_to_value(a: &AclConfig) -> Value {
     let mut o = Object::new();
     o.set("enabled", Value::Bool(a.enabled));
     o.set("rules", Value::Array(a.rules.clone()));
+    Value::Object(o)
+}
+
+fn cors_to_value(c: &CorsConfig) -> Value {
+    let mut o = Object::new();
+    o.set("enabled", Value::Bool(c.enabled));
+    o.set(
+        "origins",
+        Value::Array(c.origins.iter().map(|o| Value::str(o.clone())).collect()),
+    );
+    o.set("allowCredentials", Value::Bool(c.allow_credentials));
+    o.set("maxAge", Value::Int(c.max_age as i64));
     Value::Object(o)
 }
 
@@ -1312,6 +1386,7 @@ fn read_config(v: Option<&Value>, issues: &mut Vec<Issue>) -> AppConfig {
     c.storage = read_storage(o.get("storage"), issues);
     c.email = o.get("email").cloned().filter(|e| !e.is_null());
     c.acl = read_acl(o.get("acl"), issues);
+    c.cors = read_cors(o.get("cors"), issues);
     c
 }
 
@@ -1495,6 +1570,47 @@ fn read_acl(v: Option<&Value>, issues: &mut Vec<Issue>) -> AclConfig {
         }
     }
     a
+}
+
+fn read_cors(v: Option<&Value>, issues: &mut Vec<Issue>) -> CorsConfig {
+    let mut c = CorsConfig::default();
+    let Some(x) = v.filter(|x| !x.is_null()) else {
+        return c;
+    };
+    let Some(o) = x.as_object() else {
+        issues.push(Issue::new("config.cors", "must be an object"));
+        return c;
+    };
+    c.enabled = opt_bool(o, "enabled", false);
+    c.allow_credentials = opt_bool(o, "allowCredentials", false);
+    match o.get("maxAge") {
+        Some(Value::Int(max_age)) => {
+            if *max_age < 0 {
+                issues.push(Issue::new("config.cors.maxAge", "must not be negative"));
+            } else {
+                c.max_age = *max_age as u64;
+            }
+        }
+        Some(Value::Null) | None => {}
+        Some(_) => issues.push(Issue::new("config.cors.maxAge", "must be a number")),
+    }
+    if let Some(origins) = o.get("origins").filter(|o| !o.is_null()) {
+        match origins.as_array() {
+            Some(list) => {
+                for origin in list {
+                    match origin.as_str() {
+                        Some(origin) => c.origins.push(origin.to_string()),
+                        None => issues.push(Issue::new(
+                            "config.cors.origins",
+                            "every origin must be a string",
+                        )),
+                    }
+                }
+            }
+            None => issues.push(Issue::new("config.cors.origins", "must be an array")),
+        }
+    }
+    c
 }
 
 fn read_schema(v: Option<&Value>, issues: &mut Vec<Issue>) -> Schema {

@@ -294,17 +294,34 @@ pub fn status_text(status: u16) -> &'static str {
     match status {
         200 => "OK",
         201 => "Created",
+        202 => "Accepted",
+        204 => "No Content",
+        206 => "Partial Content",
+        301 => "Moved Permanently",
         302 => "Found",
+        303 => "See Other",
+        304 => "Not Modified",
+        307 => "Temporary Redirect",
+        308 => "Permanent Redirect",
         400 => "Bad Request",
         401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        406 => "Not Acceptable",
+        408 => "Request Timeout",
         409 => "Conflict",
+        410 => "Gone",
         413 => "Payload Too Large",
+        415 => "Unsupported Media Type",
         422 => "Unprocessable Entity",
         429 => "Too Many Requests",
-        _ => "Internal Server Error",
+        500 => "Internal Server Error",
+        501 => "Not Implemented",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
+        _ => "Unknown",
     }
 }
 
@@ -810,7 +827,12 @@ mod tests {
     #[test]
     fn status_text_known() {
         assert_eq!(status_text(404), "Not Found");
-        assert_eq!(status_text(418), "Internal Server Error");
+        assert_eq!(status_text(204), "No Content");
+        assert_eq!(status_text(429), "Too Many Requests");
+        assert_eq!(status_text(500), "Internal Server Error");
+        // A status the table does not know is not an internal error: it is
+        // a status nobody has a phrase for.
+        assert_eq!(status_text(418), "Unknown");
         let r = Response::redirect("https://x.test/cb?token=a");
         assert_eq!(r.status, 302);
         assert_eq!(

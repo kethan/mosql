@@ -14,9 +14,82 @@ ships), with every optional feature omitted at the preprocessor level — that i
 the lever a prebuilt library does not give. Building needs a C compiler; that
 is the only tool beyond Rust itself.
 
-Release binary today: **~1.8 MB** (SQLite is ~0.9 MB of it), against a 3 MB
-budget that [`verify.sh`](verify.sh) enforces. The serverless edition is
-**~0.8 MB**: no SQLite, no listener, no local file.
+Release binary today: **~1.9 MB** (SQLite is ~0.9 MB of it, the console
+~0.1 MB), against a 3 MB budget that [`verify.sh`](verify.sh) enforces.
+The serverless edition is **~0.8 MB**: no SQLite, no listener, no local
+file, and no console.
+
+## The console
+
+`nanobase serve` serves the platform's own web interface at `/`:
+
+```
+nanobase 0.1.0 serving on http://127.0.0.1:8090
+  api:  http://127.0.0.1:8090/api
+  ui:   http://127.0.0.1:8090/
+```
+
+It is three files compiled into the binary — `ui/index.html`,
+`ui/console.css` and `ui/console.js` — so there is nothing to install
+and nothing to deploy beside the executable. There is no framework and no
+build step: the console is a few hundred lines of plain JavaScript that
+talks to the same HTTP API the command line talks to, so anything it can
+do a script can do.
+
+| page | what it does |
+| --- | --- |
+| **Apps** | the apps, searched by name or id, paged, with a card each |
+| **New app** | creates an app and opens it |
+| **Overview** | what the app is, as the platform sees it |
+| **Database** | the engine, the URL and the token — with a **Test connection** button that tries the configuration before it is saved |
+| **Auth** | email and password, and the identity providers |
+| **CORS** | the origins allowed to read this app's answers, and the preflight cache |
+| **Access** | the rules: permissions, an effect, and an optional condition |
+| **Rows** | the collections an app has and the rows in them |
+
+### Security
+
+Three things a browser needs and forgets, and the platform has all
+three. None of them changes what a request *means* — a CORS header that
+is missing changes nothing for `curl`, and a security header changes
+nothing for any client at all.
+
+**Security headers** are on every answer, the console's HTML included:
+`Content-Security-Policy`, `X-Content-Type-Options: nosniff`,
+`X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`,
+`Cross-Origin-Resource-Policy`, `Cross-Origin-Opener-Policy`,
+`X-Permitted-Cross-Domain-Policies` and a `Permissions-Policy` that
+turns the device APIs off. The content policy differs by what is being
+answered: an API answer may load nothing at all, and the console may load
+only its own script and stylesheet.
+
+**CORS** is per origin, at two levels. The platform's list comes from
+`--cors` or `NANOBASE_CORS_ORIGINS`; an app may have its own in
+`config.cors`:
+
+```json
+{"enabled": true, "origins": ["http://localhost:3000"],
+ "allowCredentials": false, "maxAge": 600}
+```
+
+An app with CORS of its own uses it; an app without one inherits the
+platform's. An origin that is not on the list gets no
+`Access-Control-Allow-Origin` header, and the browser refuses to hand it
+the answer — which is the right answer, not a missing one.
+
+**The rate limit** is off by default. `--rate-limit 120` (or
+`NANOBASE_RATE_LIMIT`) allows that many requests a minute per client
+address, over a sliding window, and answers `429` with a `Retry-After`
+when a client goes over.
+
+**A password hash never leaves the platform.** The owner's PBKDF2 hash
+and salt are kept in the platform's file and are not part of any answer:
+`POST /api/auth/login` and `GET /api/auth/me` return the id, the email
+and the date, and nothing else.
+
+```
+nanobase serve --host 127.0.0.1 --port 8090 --cors "http://localhost:3000" --rate-limit 120
+```
 
 ## Two editions
 
@@ -68,6 +141,8 @@ a serverless deployment points at.
 | HTTP API and the server | done — 19 tests |
 | Command line as an API client | done |
 | Two editions: full (TCP, local SQLite) and serverless (no TCP, no file) | done — one command line, two binaries |
+| The console: create, search, page, configure and test apps | done — three files inside the binary |
+| Security headers, CORS (platform and per app), rate limit | done |
 | App database: memory, SQLite, HTTP, TCP | done — 6 tests |
 | Serving an app's rows over the API | done — 8 tests |
 | SQL engines (Postgres, MySQL) | next — needs a driver |
@@ -370,7 +445,8 @@ service.method("count", Arc::new(|svc, _args| {
 ## CLI
 
 ```
-nanobase serve   [--host H] [--port P]              run the HTTP API
+nanobase serve   [--host H] [--port P]              run the HTTP API and the console
+nanobase serve   --cors ORIGINS --rate-limit N     allow browser origins, limit requests
 nanobase init   [--email E] [--password P]   create the owner (prompts if omitted)
 nanobase login  <email> [--password P]       print a session token
 nanobase me     [--token T]                  show who a token belongs to
@@ -425,6 +501,15 @@ nanobase: 5 problem(s)
   schema.todos.columns.userId: autoIncrement is only valid on an integer primary key
   data.todos[0].title: an integer does not fit a text column
 ```
+
+## A todo app, end to end
+
+[`examples/todo/`](examples/todo) is a walkthrough for Windows: build the
+binary, start it, create an app, put rows in it with `curl`, and open a
+plain HTML page that talks to those rows. It also has a
+[`serve.ps1`](examples/todo/serve.ps1) — a static file server small enough
+to read before running, so the page is served over HTTP rather than from
+the disk.
 
 ## Develop
 

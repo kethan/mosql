@@ -182,7 +182,11 @@ pub fn run(args: Vec<String>) -> u8 {
 /// server, and the address to reach it from is the operator's business.
 #[cfg(all(feature = "native", feature = "sqlite"))]
 fn cmd_serve(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["host", "port", "data", "url"], &[]);
+    let parsed = parse_args(
+        rest,
+        &["host", "port", "data", "url", "cors", "rate-limit"],
+        &["no-console"],
+    );
     if let Some(e) = parsed.error {
         eprintln!("nanobase serve: {e}");
         return 2;
@@ -213,7 +217,44 @@ fn cmd_serve(rest: &[String]) -> u8 {
             return 1;
         }
     };
-    let api = Api::new(Arc::clone(&service));
+
+    // The browser's rules: which origins may call this API, and how much
+    // of it any one client may have.
+    let mut options = crate::middleware::HttpOptions::default_closed();
+    let origins = parsed
+        .get("cors")
+        .map(str::to_string)
+        .or_else(|| std::env::var("NANOBASE_CORS_ORIGINS").ok())
+        .unwrap_or_default();
+    if !origins.trim().is_empty() {
+        options.cors = crate::middleware::CorsPolicy::from_origins(&origins);
+    }
+    let rate_limit = match parsed.get("rate-limit").map(str::to_string) {
+        Some(text) => match text.trim().parse::<u32>() {
+            Ok(0) => None,
+            Ok(per_minute) => Some(per_minute),
+            Err(_) => {
+                eprintln!("nanobase serve: --rate-limit needs a number");
+                return 2;
+            }
+        },
+        None => match std::env::var("NANOBASE_RATE_LIMIT")
+            .ok()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+        {
+            Some(0) => None,
+            Some(per_minute) => Some(per_minute),
+            None => None,
+        },
+    };
+    if let Some(per_minute) = rate_limit {
+        options = options.with_rate_limit(per_minute, std::time::Duration::from_secs(60));
+    }
+
+    let api = Arc::new(
+        Api::with_options(Arc::clone(&service), options)
+            .with_db_tester(db_tester(&parsed, &catalog)),
+    );
     let addr = format!("{host}:{port}");
     let socket = match addr.parse::<std::net::SocketAddr>() {
         Ok(socket) => socket,
@@ -222,14 +263,51 @@ fn cmd_serve(rest: &[String]) -> u8 {
             return 2;
         }
     };
+    let console = !parsed.has("no-console");
     println!("nanobase {VERSION} serving on http://{addr}");
     println!("  api:  http://{addr}/api");
-    let result = crate::http::serve(socket, 8, move |req| api.handle(req));
+    if console {
+        println!("  ui:   http://{addr}/");
+    }
+    if let Some(per_minute) = rate_limit {
+        println!("  limit: {per_minute} requests a minute per client");
+    }
+    if !origins.trim().is_empty() {
+        println!("  cors: {origins}");
+    }
+    let result = crate::http::serve(socket, 8, move |req| {
+        // The console comes first: it is the one thing that is answered
+        // without a token.
+        if console {
+            if let Some(response) = crate::console::respond(&req) {
+                return response;
+            }
+        }
+        api.handle(req)
+    });
     if let Err(e) = result {
         eprintln!("nanobase serve: {e}");
         return 1;
     }
     0
+}
+
+/// A way to try a database configuration and see whether it answers.
+///
+/// The console asks this before saving a URL, so an operator finds out
+/// that the URL is wrong while they are still looking at it.
+#[cfg(all(feature = "native", feature = "sqlite"))]
+fn db_tester(_parsed: &Parsed, catalog: &Catalog) -> crate::api::DbTester {
+    let root = catalog.root().unwrap_or_else(|| PathBuf::from("."));
+    Arc::new(
+        move |app_key: &str, config: &crate::config::DatabaseConfig| {
+            // In the app's own directory, because that is where the
+            // database would live if the configuration were saved.
+            let path = root.join("apps").join(app_key);
+            let db = crate::db::factory::open(config, &path).map_err(|e| e.to_string())?;
+            db.collections().map_err(|e| e.to_string())
+        },
+    )
 }
 
 /// The database service: the platform's rows over HTTP.

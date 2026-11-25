@@ -117,13 +117,31 @@ pub struct User {
 }
 
 impl User {
-    /// The user as a value: never the password hash.
+    /// The user as the world sees it: never the password, and never the
+    /// hash.
+    ///
+    /// The hash is a secret. It is not "a hash" — it is the answer to
+    /// "guess the password", and an answer that travels over HTTP to a
+    /// browser is an answer that has left the building. The platform
+    /// keeps it; the platform's users are told their own name.
     pub fn to_value(&self) -> Value {
         let mut o = Object::new();
         o.set("id", Value::str(self.id.clone()));
         o.set("email", Value::str(self.email.clone()));
-        o.set("password", self.password.to_value());
         o.set("createdAt", Value::str(self.created_at.clone()));
+        Value::Object(o)
+    }
+
+    /// The user as it is stored: with the password hash.
+    ///
+    /// This never leaves the platform. It goes into the platform's own
+    /// file, and it comes back out of it.
+    pub fn to_stored_value(&self) -> Value {
+        let mut o = match self.to_value() {
+            Value::Object(o) => o,
+            _ => Object::new(),
+        };
+        o.set("password", self.password.to_value());
         Value::Object(o)
     }
 
@@ -188,7 +206,7 @@ impl Platform {
         o.set("jwtSecret", Value::str(self.jwt_secret.clone()));
         o.set(
             "users",
-            Value::Array(self.users.iter().map(User::to_value).collect()),
+            Value::Array(self.users.iter().map(User::to_stored_value).collect()),
         );
         o.set(
             "apps",

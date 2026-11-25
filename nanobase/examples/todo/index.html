@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Nanobase · Todos</title>
+    <style>
+      :root {
+        --bg: #f6f7fb;
+        --surface: #fff;
+        --border: #e2e5ee;
+        --text: #14161d;
+        --muted: #626a7d;
+        --accent: #4f46e5;
+        --danger: #c62f45;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0e1017;
+          --surface: #161923;
+          --border: #2a2f3d;
+          --text: #e8eaf2;
+          --muted: #99a1b5;
+          --accent: #7c74ff;
+          --danger: #ff7d92;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 24px 16px 60px;
+        background: var(--bg);
+        color: var(--text);
+        font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      .wrap { max-width: 620px; margin: 0 auto; }
+      h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.02em; }
+      .muted { color: var(--muted); }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 18px;
+        margin-bottom: 16px;
+      }
+      .card h2 { font-size: 14px; margin: 0 0 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+      label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 10px; }
+      label span { display: block; margin-bottom: 5px; }
+      input[type=text], input[type=password] {
+        width: 100%;
+        padding: 9px 11px;
+        border-radius: 9px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        color: inherit;
+        font: inherit;
+      }
+      input:focus { outline: none; border-color: var(--accent); }
+      button {
+        font: inherit;
+        font-weight: 600;
+        padding: 9px 14px;
+        border-radius: 9px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: inherit;
+        cursor: pointer;
+      }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      button:disabled { opacity: .55; cursor: not-allowed; }
+      .row { display: flex; gap: 8px; }
+      .row input { flex: 1 1 auto; }
+      ul { list-style: none; margin: 0; padding: 0; }
+      li {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--border);
+      }
+      li:last-child { border-bottom: 0; }
+      li .title { flex: 1 1 auto; overflow-wrap: anywhere; }
+      li.done .title { text-decoration: line-through; color: var(--muted); }
+      li .x { border: 0; background: none; color: var(--danger); padding: 4px 8px; }
+      .status { font-size: 13px; color: var(--muted); margin-top: 10px; min-height: 20px; }
+      .status.bad { color: var(--danger); }
+      .status.ok { color: #16794a; }
+      .hidden { display: none !important; }
+      .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Todos</h1>
+      <p class="muted" style="margin: 0 0 20px">
+        A Nanobase app, from a plain HTML page.
+      </p>
+
+      <!-- The connection: where the API is, which app, and who is asking. -->
+      <div class="card" id="setup">
+        <h2>Connection</h2>
+        <label>
+          <span>API address</span>
+          <input id="base" type="text" value="http://127.0.0.1:8090" />
+        </label>
+        <label>
+          <span>App id</span>
+          <input id="app" type="text" placeholder="app_…" />
+        </label>
+        <label>
+          <span>Token</span>
+          <input id="token" type="password" placeholder="the session token" />
+        </label>
+        <div class="row">
+          <button class="primary" id="connect" type="button">Connect</button>
+          <button id="forget" type="button">Forget</button>
+        </div>
+        <p class="hint">
+          The token comes from <code>nanobase login</code> or
+          <code>POST /api/auth/login</code>. It is kept in this browser's
+          local storage.
+        </p>
+        <p class="status" id="setup-status"></p>
+      </div>
+
+      <!-- The list. -->
+      <div class="card hidden" id="todo-card">
+        <h2>Todos</h2>
+        <div class="row">
+          <input id="text" type="text" placeholder="What needs doing?" />
+          <button class="primary" id="add" type="button">Add</button>
+        </div>
+        <ul id="list"></ul>
+        <p class="status" id="list-status"></p>
+      </div>
+    </div>
+
+    <script>
+      // A todo list against a Nanobase app.
+      //
+      // The three settings below are the whole connection: the API's
+      // address, which app's rows to use, and the bearer token. Everything
+      // else is the four operations the app's rows have — list, insert,
+      // update and delete.
+      (function () {
+        "use strict";
+
+        var el = function (id) { return document.getElementById(id); };
+        var base = el("base");
+        var app = el("app");
+        var token = el("token");
+        var list = el("list");
+        var text = el("text");
+
+        // Remembered between visits, so the page opens ready.
+        try {
+          base.value = localStorage.getItem("todo.base") || base.value;
+          app.value = localStorage.getItem("todo.app") || "";
+          token.value = localStorage.getItem("todo.token") || "";
+        } catch (e) { /* a private window: ask again */ }
+
+        function say(where, message, kind) {
+          var node = el(where);
+          node.textContent = message || "";
+          node.className = "status" + (kind ? " " + kind : "");
+        }
+
+        function request(method, path, body) {
+          var headers = { authorization: "Bearer " + token.value.trim() };
+          if (body !== undefined) headers["content-type"] = "application/json";
+          return fetch(base.value.replace(/\/$/, "") + path, {
+            method: method,
+            headers: headers,
+            body: body === undefined ? undefined : JSON.stringify(body)
+          }).then(function (response) {
+            return response.text().then(function (text) {
+              var payload = {};
+              try { payload = text ? JSON.parse(text) : {}; } catch (e) { payload = {}; }
+              if (!response.ok) {
+                throw new Error(payload.message || "the server said " + response.status);
+              }
+              return payload;
+            });
+          });
+        }
+
+        function collection() {
+          return "/api/apps/" + encodeURIComponent(app.value.trim()) + "/db/todos";
+        }
+
+        function load() {
+          say("list-status", "Loading…");
+          request("GET", collection() + "?limit=100")
+            .then(function (result) {
+              draw(result.items || []);
+              say("list-status", (result.total || 0) + " todo(s)");
+            })
+            .catch(function (error) {
+              say("list-status", error.message, "bad");
+            });
+        }
+
+        function draw(items) {
+          list.innerHTML = "";
+          items.forEach(function (item) {
+            var li = document.createElement("li");
+            if (item.done) li.className = "done";
+
+            var box = document.createElement("input");
+            box.type = "checkbox";
+            box.checked = !!item.done;
+            box.addEventListener("change", function () {
+              request("PATCH", collection(), {
+                filter: { id: item.id },
+                changes: { done: box.checked }
+              })
+                .then(load)
+                .catch(function (error) { say("list-status", error.message, "bad"); });
+            });
+
+            var title = document.createElement("span");
+            title.className = "title";
+            title.textContent = item.title;
+
+            var remove = document.createElement("button");
+            remove.className = "x";
+            remove.type = "button";
+            remove.textContent = "✕";
+            remove.addEventListener("click", function () {
+              request("DELETE", collection(), { filter: { id: item.id } })
+                .then(load)
+                .catch(function (error) { say("list-status", error.message, "bad"); });
+            });
+
+            li.appendChild(box);
+            li.appendChild(title);
+            li.appendChild(remove);
+            list.appendChild(li);
+          });
+        }
+
+        function add() {
+          var title = text.value.trim();
+          if (!title) return;
+          request("POST", collection(), { row: { title: title, done: false } })
+            .then(function () {
+              text.value = "";
+              load();
+            })
+            .catch(function (error) { say("list-status", error.message, "bad"); });
+        }
+
+        el("add").addEventListener("click", add);
+        text.addEventListener("keydown", function (event) {
+          if (event.key === "Enter") add();
+        });
+
+        el("connect").addEventListener("click", function () {
+          if (!app.value.trim()) {
+            say("setup-status", "An app id is needed", "bad");
+            return;
+          }
+          say("setup-status", "Connecting…");
+          request("GET", collection() + "?limit=100")
+            .then(function (result) {
+              try {
+                localStorage.setItem("todo.base", base.value);
+                localStorage.setItem("todo.app", app.value);
+                localStorage.setItem("todo.token", token.value);
+              } catch (e) { /* a private window: ask again */ }
+              el("setup").classList.add("hidden");
+              el("todo-card").classList.remove("hidden");
+              draw(result.items || []);
+              say("list-status", (result.total || 0) + " todo(s)", "ok");
+            })
+            .catch(function (error) {
+              say("setup-status", error.message, "bad");
+            });
+        });
+
+        el("forget").addEventListener("click", function () {
+          try {
+            localStorage.removeItem("todo.base");
+            localStorage.removeItem("todo.app");
+            localStorage.removeItem("todo.token");
+          } catch (e) { /* nothing to remove */ }
+          app.value = "";
+          token.value = "";
+          el("todo-card").classList.add("hidden");
+          el("setup").classList.remove("hidden");
+        });
+
+        // Already connected? Go straight to the list.
+        if (app.value.trim() && token.value.trim()) {
+          el("connect").click();
+        }
+      })();
+    </script>
+  </body>
+</html>

@@ -22,6 +22,10 @@
 // the network, so those modules are not compiled into it at all.
 #[cfg(feature = "native")]
 pub mod api;
+#[cfg(feature = "native")]
+pub mod console;
+#[cfg(feature = "native")]
+pub mod middleware;
 // The command line belongs to the two binaries, and neither of them is
 // built for the Worker: the Worker has no command line.
 #[cfg(any(feature = "native", feature = "serverless"))]
@@ -51,8 +55,9 @@ pub use api::Api;
 pub use client::ApiClient;
 pub use config::{
     AclConfig, AppConfig, AppDoc, AppMeta, AppType, AuthConfig, CollectionDef, ColumnDef,
-    ColumnType, ConfigError, Data, DatabaseConfig, DbKind, Features, Issue, LocalStorage, Meta,
-    Provider, RedisConfig, S3Storage, Schema, Secrets, StorageConfig, StorageKind,
+    ColumnType, ConfigError, CorsConfig, Data, DatabaseConfig, DbKind, Features, Issue,
+    LocalStorage, Meta, Provider, RedisConfig, S3Storage, Schema, Secrets, StorageConfig,
+    StorageKind,
 };
 #[cfg(feature = "native")]
 pub use db::DbServer;

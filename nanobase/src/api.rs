@@ -33,23 +33,52 @@ use std::sync::Arc;
 
 use mosql::{Object, Value};
 
-use crate::config::AppDoc;
+use crate::config::{AppDoc, DatabaseConfig};
 use crate::http::{ApiError, Request, Response};
 use crate::jwt;
+use crate::middleware::{self, CorsPolicy, HttpOptions};
 use crate::platform::{now_secs, verify_login, User, ROLE_OWNER, SESSION_TTL_SECS};
 use crate::service::{Event, Service};
 
 /// Where the API hangs off the host.
 pub const API_PREFIX: &str = "/api";
 
+/// How the API opens a database, for a connection test.
+///
+/// The API does not know where an app's files live, so the host supplies
+/// the way in: it opens the configuration — in the app's own directory —
+/// and says whether it answered.
+pub type DbTester = Arc<dyn Fn(&str, &DatabaseConfig) -> Result<Vec<String>, String> + Send + Sync>;
+
 /// The platform's API: a service, and the routes over it.
 pub struct Api {
     service: Arc<Service>,
+    options: HttpOptions,
+    db_tester: Option<DbTester>,
 }
 
 impl Api {
     pub fn new(service: Arc<Service>) -> Self {
-        Api { service }
+        Api {
+            service,
+            options: HttpOptions::default_closed(),
+            db_tester: None,
+        }
+    }
+
+    /// An API that can test a database connection.
+    pub fn with_db_tester(mut self, tester: DbTester) -> Self {
+        self.db_tester = Some(tester);
+        self
+    }
+
+    /// An API with a CORS policy and, perhaps, a rate limit.
+    pub fn with_options(service: Arc<Service>, options: HttpOptions) -> Self {
+        Api {
+            service,
+            options,
+            db_tester: None,
+        }
     }
 
     /// The service the API is over.
@@ -58,10 +87,85 @@ impl Api {
     }
 
     /// Answer one request.
+    ///
+    /// The order matters: the rate limit is checked first, because a
+    /// client that is over its allowance should not be able to make the
+    /// server do work to say so. The security headers and the CORS
+    /// headers are added last, because they must be on every answer —
+    /// including the errors.
     pub fn handle(&self, req: Request) -> Response {
-        match self.route(&req) {
+        let cors = self.cors_for(&req);
+        if let Some(limiter) = &self.options.rate_limit {
+            if let Err(retry) = limiter.check(&req.client_ip()) {
+                let response = Response::error(&ApiError::new(
+                    429,
+                    "TOO_MANY_REQUESTS",
+                    "too many requests: slow down",
+                ))
+                .with_header("retry-after", &retry.seconds.to_string());
+                return middleware::secure(cors.apply(&req, response), false);
+            }
+        }
+        if req.method == "OPTIONS" {
+            let response = cors.preflight(&req);
+            return middleware::secure(response, false);
+        }
+        let response = match self.route(&req) {
             Ok(response) => response,
             Err(e) => Response::error(&e),
+        };
+        middleware::secure(cors.apply(&req, response), false)
+    }
+
+    /// The CORS policy that applies to a request.
+    ///
+    /// A request that names an app uses that app's own policy when it has
+    /// one, and the platform's otherwise. An app may therefore open its
+    /// API to a browser the platform has not been opened to, and the
+    /// platform's policy is the floor.
+    fn cors_for(&self, req: &Request) -> CorsPolicy {
+        let platform = &self.options.cors;
+        let key = app_key_of(req);
+        let Some(key) = key else {
+            return platform.clone();
+        };
+        let Ok(Some(app)) = self.service.find(key) else {
+            return platform.clone();
+        };
+        // The app record holds the document under "doc".
+        let Some(cors) = app
+            .get("doc")
+            .and_then(|d| d.get("config"))
+            .and_then(|c| c.get("cors"))
+        else {
+            return platform.clone();
+        };
+        if !cors
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return platform.clone();
+        }
+        let origins: Vec<String> = cors
+            .get("origins")
+            .and_then(|v| v.as_array())
+            .map(|list| {
+                list.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        CorsPolicy {
+            origins,
+            allow_credentials: cors
+                .get("allowCredentials")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            max_age: match cors.get("maxAge") {
+                Some(Value::Int(seconds)) => (*seconds).max(0) as u64,
+                _ => 600,
+            },
         }
     }
 
@@ -88,7 +192,7 @@ impl Api {
             ["api", "apps"] => match req.method.as_str() {
                 "GET" => {
                     self.authenticate(req)?;
-                    self.list_apps()
+                    self.list_apps(req)
                 }
                 "POST" => {
                     self.authenticate(req)?;
@@ -132,6 +236,10 @@ impl Api {
                 }
                 self.require_app(key)?;
                 self.collections(key)
+            }
+            ["api", "apps", key, "db", "test"] => {
+                self.authenticate(req)?;
+                self.test_database(req, key)
             }
             ["api", "apps", key, "db", collection] => {
                 self.authenticate(req)?;
@@ -313,15 +421,105 @@ impl Api {
 
     // -------------------------------------------------------------- apps --
 
-    fn list_apps(&self) -> Result<Response, ApiError> {
+    /// The apps, filtered and paged.
+    ///
+    /// `search` matches the name or the id, case-insensitively, so a
+    /// console's search box has one thing to ask for. `page` is a page
+    /// number and `perPage` how many apps are on it; `limit` and
+    /// `offset` say the same thing the other way round, and are what the
+    /// rows routes use.
+    fn list_apps(&self, req: &Request) -> Result<Response, ApiError> {
         let apps = self
             .service
             .list()
             .map_err(|e| ApiError::internal(format!("platform: {e}")))?;
+        let search = req
+            .query_param("search")
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty());
+        let matching: Vec<Value> = apps
+            .into_iter()
+            .filter(|app| match &search {
+                Some(needle) => app_matches(app, needle),
+                None => true,
+            })
+            .collect();
+        let total = matching.len();
+        let (page, per_page) = paging(req)?;
+        let offset = match number_of(req, "offset")? {
+            Some(offset) => offset as usize,
+            None => (page - 1) * per_page,
+        };
+        let limit = match number_of(req, "limit")? {
+            Some(limit) => limit as usize,
+            None => per_page,
+        };
+        let items: Vec<Value> = matching.into_iter().skip(offset).take(limit).collect();
+        let pages = if per_page == 0 {
+            1
+        } else {
+            total.div_ceil(per_page).max(1)
+        };
         let mut body = Object::new();
-        body.set("items", Value::Array(apps));
-        body.set("total", Value::Int(apps_len(&body)));
+        body.set("items", Value::Array(items));
+        body.set("total", Value::Int(total as i64));
+        body.set("page", Value::Int(page as i64));
+        body.set("perPage", Value::Int(per_page as i64));
+        body.set("pages", Value::Int(pages as i64));
         Ok(json(200, &Value::Object(body)))
+    }
+
+    /// Try a database configuration and say whether it answered.
+    ///
+    /// The configuration in the body is the one to test, so a console can
+    /// try a URL before it is saved. Without one, the app's own
+    /// configuration is tested — which is what "is this app still
+    /// connected?" means.
+    fn test_database(&self, req: &Request, key: &str) -> Result<Response, ApiError> {
+        let Some(tester) = &self.db_tester else {
+            return Err(ApiError::internal(
+                "this build cannot test a database connection",
+            ));
+        };
+        let body = req.json()?;
+        let config = match body.get("database") {
+            Some(value) if !value.is_null() => DatabaseConfig::from_value(value).map_err(|e| {
+                ApiError::invalid_request(format!("the configuration is not valid: {e}"))
+            })?,
+            _ => {
+                let app = self
+                    .service
+                    .find(key)
+                    .map_err(|e| ApiError::internal(format!("platform: {e}")))?
+                    .ok_or_else(|| ApiError::not_found("NOT_FOUND", "no such app"))?;
+                let value = app
+                    .get("doc")
+                    .and_then(|d| d.get("config"))
+                    .and_then(|c| c.get("database"))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                DatabaseConfig::from_value(&value).map_err(|e| {
+                    ApiError::invalid_request(format!("the configuration is not valid: {e}"))
+                })?
+            }
+        };
+        let mut body = Object::new();
+        body.set("type", Value::str(config.kind.as_str()));
+        match tester(key, &config) {
+            Ok(collections) => {
+                body.set("ok", Value::Bool(true));
+                body.set(
+                    "collections",
+                    Value::Array(collections.into_iter().map(Value::str).collect()),
+                );
+                Ok(json(200, &Value::Object(body)))
+            }
+            Err(e) => {
+                body.set("ok", Value::Bool(false));
+                body.set("error", Value::str(e));
+                Ok(json(200, &Value::Object(body)))
+            }
+        }
     }
 
     /// Fail with a 404 unless the app is there.
@@ -455,10 +653,51 @@ fn events() -> Response {
     json(200, &Value::Object(body))
 }
 
-fn apps_len(body: &Object) -> i64 {
-    match body.get("items") {
-        Some(Value::Array(items)) => items.len() as i64,
-        _ => 0,
+/// Does this app record match a search needle?
+///
+/// The name and the id, case-insensitively: those are the two things a
+/// person types to find an app.
+fn app_matches(app: &Value, needle: &str) -> bool {
+    let id = app.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    if id.to_ascii_lowercase().contains(needle) {
+        return true;
+    }
+    let name = app
+        .get("doc")
+        .and_then(|d| d.get("app"))
+        .and_then(|a| a.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    name.to_ascii_lowercase().contains(needle)
+}
+
+/// The page and the page size a request asks for.
+///
+/// `page` is a page number, counting from one, and `perPage` how many
+/// apps are on it. The defaults are a page of twenty-five and the first
+/// page, which is what a console shows before anyone asks for anything
+/// else.
+fn paging(req: &Request) -> Result<(usize, usize), ApiError> {
+    let page = match number_of(req, "page")? {
+        Some(page) => page.max(1) as usize,
+        None => 1,
+    };
+    let per_page = match number_of(req, "perPage")? {
+        Some(per_page) => per_page.clamp(1, 200) as usize,
+        None => 25,
+    };
+    Ok((page, per_page))
+}
+
+/// The app a route names, if it names one.
+///
+/// The CORS policy of an app is the app's own, so the middleware has to
+/// know which app a request is about before it can answer it.
+fn app_key_of(req: &Request) -> Option<&str> {
+    let mut segments = req.path.split('/').filter(|s| !s.is_empty());
+    match (segments.next(), segments.next(), segments.next()) {
+        (Some("api"), Some("apps"), Some(key)) => Some(key),
+        _ => None,
     }
 }
 
