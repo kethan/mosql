@@ -237,9 +237,18 @@ impl DriverConfig {
     /// The `Authorization: Basic` header value, if the provider uses
     /// one.
     pub fn basic_auth(&self) -> Option<String> {
-        let username = self.username.as_deref()?;
-        let password = self.password.as_deref()?;
-        let raw = format!("{username}:{password}");
+        // A URL with only a token still has a credential: the user name
+        // may be empty, and the token is the password. `postgres://:tok@host`
+        // says "the password is tok", and dropping it would send the
+        // request with no secret at all.
+        if self.username.is_none() && self.password.is_none() {
+            return None;
+        }
+        let raw = format!(
+            "{}:{}",
+            self.username.as_deref().unwrap_or_default(),
+            self.password.as_deref().unwrap_or_default()
+        );
         Some(format!(
             "Basic {}",
             crate::driver::encoding::base64_encode(raw.as_bytes())
@@ -381,8 +390,13 @@ fn non_empty(text: &str) -> Option<String> {
 /// else.
 fn normalise_postgres(config: &DriverConfig, params: &[(String, String)]) -> String {
     let mut out = String::from("postgres://");
-    if let Some(user) = &config.username {
-        out.push_str(&percent_encode(user));
+    // The user information is written when there is a user name *or* a
+    // password: a URL with only a token — `postgres://:tok@host/db` —
+    // keeps its token, because the token is the credential.
+    if config.username.is_some() || config.password.is_some() {
+        if let Some(user) = &config.username {
+            out.push_str(&percent_encode(user));
+        }
         if let Some(password) = &config.password {
             out.push(':');
             out.push_str(&percent_encode(password));
@@ -647,6 +661,31 @@ mod tests {
     #[test]
     fn a_url_with_no_scheme_is_refused() {
         assert!(DriverConfig::from_url("db.turso.io").is_err());
+    }
+
+    #[test]
+    fn a_token_on_its_own_is_still_a_credential() {
+        // A URL with a token and no user name: the token is the
+        // password, and it must survive the trip.
+        let config = DriverConfig::from_url("postgres://:s3cret@host/mydb").unwrap();
+        assert_eq!(config.username, None);
+        assert_eq!(config.password.as_deref(), Some("s3cret"));
+        assert_eq!(config.connection_string, "postgres://:s3cret@host/mydb");
+        // And it is sent: the basic auth header carries it.
+        assert_eq!(config.basic_auth().as_deref(), Some("Basic OnMzY3JldA=="));
+    }
+
+    #[test]
+    fn a_token_only_sql_url_reaches_its_driver() {
+        let config = DriverConfig::from_url("mysql://:s3cret@host/db?provider=tidb").unwrap();
+        assert_eq!(config.password.as_deref(), Some("s3cret"));
+        assert!(config.basic_auth().is_some());
+    }
+
+    #[test]
+    fn a_url_with_no_credential_has_no_basic_auth() {
+        let config = DriverConfig::from_url("postgres://host/mydb").unwrap();
+        assert_eq!(config.basic_auth(), None);
     }
 
     #[test]
