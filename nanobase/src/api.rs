@@ -78,9 +78,27 @@ impl Principal {
         }
     }
 
-    /// The app this caller is limited to, if it is limited to one.
+    /// The app this caller is limited to.
+    ///
+    /// A key belongs to exactly one app, so this is always an app for
+    /// a key caller and never an app for a person.
     pub fn app_limit(&self) -> Option<&str> {
-        self.key.as_ref().and_then(|key| key.app.as_deref())
+        self.key.as_ref().map(|key| key.app.as_str())
+    }
+
+    /// The role this caller's requests are judged by.
+    ///
+    /// The platform owner is above an app's rules, and so is a
+    /// credential with the admin scope: the owner wrote the rules, and
+    /// an admin credential is the platform's own root key. Every other
+    /// credential is a `user`, and the app's rules decide what it may
+    /// do.
+    pub fn caller(&self) -> crate::acl::Caller {
+        match &self.key {
+            None => crate::acl::Caller::Owner,
+            Some(key) if key.allows(apikey::SCOPE_ADMIN) => crate::acl::Caller::Admin,
+            Some(key) => crate::acl::Caller::User { id: key.id.clone() },
+        }
     }
 
     /// Refuse unless this caller may do this.
@@ -145,6 +163,11 @@ impl Api {
     /// headers are added last, because they must be on every answer —
     /// including the errors.
     pub fn handle(&self, req: Request) -> Response {
+        // The keys of an older platform are moved into the apps they
+        // belong to the first time somebody asks. A failure here is not
+        // the request's fault: the keys wait, and the platform says so
+        // when it starts.
+        let _ = self.service.ensure_migrated();
         let cors = self.cors_for(&req);
         if let Some(limiter) = &self.options.rate_limit {
             if let Err(retry) = limiter.check(&req.client_ip()) {
@@ -260,29 +283,6 @@ impl Api {
                 principal.require(apikey::SCOPE_APPS_READ, "read the platform's events")?;
                 Ok(events())
             }
-            ["api", "keys"] => match req.method.as_str() {
-                "GET" => {
-                    let principal = self.authenticate(req)?;
-                    principal.require(apikey::SCOPE_ADMIN, "manage API keys")?;
-                    self.list_keys()
-                }
-                "POST" => {
-                    let principal = self.authenticate(req)?;
-                    principal.require(apikey::SCOPE_ADMIN, "manage API keys")?;
-                    self.create_key(req)
-                }
-                _ => Err(method_not_allowed("GET, POST")),
-            },
-            ["api", "keys", key] => {
-                let principal = self.authenticate(req)?;
-                principal.require(apikey::SCOPE_ADMIN, "manage API keys")?;
-                match req.method.as_str() {
-                    "GET" => self.show_key(key),
-                    "PATCH" => self.patch_key(req, key),
-                    "DELETE" => self.remove_key(key),
-                    _ => Err(method_not_allowed("GET, PATCH, DELETE")),
-                }
-            }
             ["api", "apps"] => match req.method.as_str() {
                 "GET" => {
                     let principal = self.authenticate(req)?;
@@ -317,6 +317,27 @@ impl Api {
                         self.remove_app(req, key)
                     }
                     _ => Err(method_not_allowed("GET, PUT, PATCH, DELETE")),
+                }
+            }
+            ["api", "apps", key, "keys"] => {
+                let principal = self.authenticate(req)?;
+                principal.require(apikey::SCOPE_ADMIN, "manage API keys")?;
+                self.require_app_access(&principal, key)?;
+                match req.method.as_str() {
+                    "GET" => self.list_keys(key),
+                    "POST" => self.create_key(req, key),
+                    _ => Err(method_not_allowed("GET, POST")),
+                }
+            }
+            ["api", "apps", key, "keys", key_id] => {
+                let principal = self.authenticate(req)?;
+                principal.require(apikey::SCOPE_ADMIN, "manage API keys")?;
+                self.require_app_access(&principal, key)?;
+                match req.method.as_str() {
+                    "GET" => self.show_key(key, key_id),
+                    "PATCH" => self.patch_key(req, key, key_id),
+                    "DELETE" => self.remove_key(key, key_id),
+                    _ => Err(method_not_allowed("GET, PATCH, DELETE")),
                 }
             }
             ["api", "apps", key, "clone"] => {
@@ -373,22 +394,22 @@ impl Api {
                     "GET" => {
                         principal.require(apikey::SCOPE_ROWS_READ, "read rows")?;
                         self.require_app(key)?;
-                        self.rows(req, key, collection)
+                        self.rows(req, key, collection, &principal.caller())
                     }
                     "POST" => {
                         principal.require(apikey::SCOPE_ROWS_WRITE, "write rows")?;
                         self.require_app(key)?;
-                        self.insert_row(req, key, collection)
+                        self.insert_row(req, key, collection, &principal.caller())
                     }
                     "PATCH" => {
                         principal.require(apikey::SCOPE_ROWS_WRITE, "write rows")?;
                         self.require_app(key)?;
-                        self.update_row(req, key, collection)
+                        self.update_row(req, key, collection, &principal.caller())
                     }
                     "DELETE" => {
                         principal.require(apikey::SCOPE_ROWS_WRITE, "write rows")?;
                         self.require_app(key)?;
-                        self.remove_rows(req, key, collection)
+                        self.remove_rows(req, key, collection, &principal.caller())
                     }
                     _ => Err(method_not_allowed("GET, POST, PATCH, DELETE")),
                 }
@@ -458,32 +479,55 @@ impl Api {
             .ok_or_else(|| ApiError::unauthorized("INVALID_TOKEN", "the token is not valid"))
     }
 
+    /// The key a secret belongs to, if it is one.
+    ///
+    /// The preview says which app to ask, and the app's own rows say
+    /// whether the secret is the key. Two keys may share a preview, so
+    /// every app the preview points at is asked.
+    fn key_for(
+        &self,
+        preview: &str,
+        secret: &str,
+    ) -> Result<Option<crate::apikey::ApiKey>, ApiError> {
+        let platform = self
+            .service
+            .platform()
+            .map_err(|e| ApiError::internal(format!("platform: {e}")))?;
+        for (app, id) in platform.find_keys(preview) {
+            match self.service.verify_key(&app, &id, secret) {
+                Ok(Some(key)) => return Ok(Some(key)),
+                Ok(None) => continue,
+                Err(e) => return Err(ApiError::internal(format!("the key cannot be read: {e}"))),
+            }
+        }
+        Ok(None)
+    }
+
     /// Check an API key and say what it may do.
+    ///
+    /// The key belongs to an app and lives in that app's own database.
+    /// The platform's directory says which app a presented key belongs
+    /// to — the preview is the first few characters of the key, which
+    /// the console shows anyway — and the key itself is read from that
+    /// app's rows.
+    ///
+    /// The hash is compared in constant time, and the answer says
+    /// whether the secret is this key, whether the key has been revoked
+    /// and whether it has expired.
     fn authenticate_key(&self, secret: &str) -> Result<Principal, ApiError> {
         let platform = self
             .service
             .platform()
             .map_err(|e| ApiError::internal(format!("platform: {e}")))?;
-        let mut found = platform
-            .api_keys
-            .iter()
-            .find(|key| key.verify(secret))
-            .cloned();
+        let preview = apikey::preview_of(secret);
+        let mut found = self.key_for(&preview, secret)?;
         if found.is_none() && self.may_reload() {
             // The key may have been made by the command line a moment
             // ago, in which case the server has not seen it yet.
             self.service
                 .reload()
                 .map_err(|e| ApiError::internal(format!("platform: {e}")))?;
-            let platform = self
-                .service
-                .platform()
-                .map_err(|e| ApiError::internal(format!("platform: {e}")))?;
-            found = platform
-                .api_keys
-                .iter()
-                .find(|key| key.verify(secret))
-                .cloned();
+            found = self.key_for(&preview, secret)?;
         }
         let key = found
             .ok_or_else(|| ApiError::unauthorized("INVALID_KEY", "the API key is not valid"))?;
@@ -506,7 +550,7 @@ impl Api {
         // Remember that the key was used, so a list can say when. The
         // write is at most one a minute: a key used a thousand times a
         // second should not write a thousand times a second.
-        self.service.touch_key(&key.id, now_secs())?;
+        self.service.touch_key(&key.app, &key.id, now_secs())?;
         Ok(Principal {
             user,
             key: Some(key),
@@ -609,17 +653,24 @@ impl Api {
     /// The rows of a collection, filtered by the query string.
     ///
     /// `filter` is a JSON document, `limit` and `offset` are numbers.
-    fn rows(&self, req: &Request, key: &str, collection: &str) -> Result<Response, ApiError> {
+    /// The app's rules decide which of the rows this caller may see.
+    fn rows(
+        &self,
+        req: &Request,
+        key: &str,
+        collection: &str,
+        caller: &crate::acl::Caller,
+    ) -> Result<Response, ApiError> {
         let filter = filter_of(req)?;
         let limit = number_of(req, "limit")?;
         let offset = number_of(req, "offset")?;
         let rows = self
             .service
-            .find_rows(key, collection, &filter, limit, offset)
+            .find_rows_as(caller, key, collection, &filter, limit, offset)
             .map_err(db_error)?;
         let total = self
             .service
-            .count_rows(key, collection, &filter)
+            .count_rows_as(caller, key, collection, &filter)
             .map_err(db_error)?;
         let mut body = Object::new();
         body.set("items", Value::Array(rows));
@@ -628,18 +679,30 @@ impl Api {
     }
 
     /// Put a row in a collection.
-    fn insert_row(&self, req: &Request, key: &str, collection: &str) -> Result<Response, ApiError> {
+    fn insert_row(
+        &self,
+        req: &Request,
+        key: &str,
+        collection: &str,
+        caller: &crate::acl::Caller,
+    ) -> Result<Response, ApiError> {
         let body = req.json()?;
         let row = body.get("row").cloned().unwrap_or_else(|| body.clone());
         let inserted = self
             .service
-            .insert_row(key, collection, &row)
+            .insert_row_as(caller, key, collection, &row)
             .map_err(db_error)?;
         Ok(json(200, &inserted))
     }
 
     /// Change the rows that match a filter.
-    fn update_row(&self, req: &Request, key: &str, collection: &str) -> Result<Response, ApiError> {
+    fn update_row(
+        &self,
+        req: &Request,
+        key: &str,
+        collection: &str,
+        caller: &crate::acl::Caller,
+    ) -> Result<Response, ApiError> {
         let body = req.json()?;
         let filter = body
             .get("filter")
@@ -651,7 +714,7 @@ impl Api {
             .ok_or_else(|| ApiError::invalid_request("changes is required"))?;
         let updated = self
             .service
-            .update_row(key, collection, &filter, &changes)
+            .update_row_as(caller, key, collection, &filter, &changes)
             .map_err(db_error)?;
         Ok(json(200, &updated))
     }
@@ -662,11 +725,12 @@ impl Api {
         req: &Request,
         key: &str,
         collection: &str,
+        caller: &crate::acl::Caller,
     ) -> Result<Response, ApiError> {
         let filter = filter_of(req)?;
         let removed = self
             .service
-            .remove_rows(key, collection, &filter)
+            .remove_rows_as(caller, key, collection, &filter)
             .map_err(db_error)?;
         let mut body = Object::new();
         body.set("removed", Value::Int(removed as i64));
@@ -675,40 +739,29 @@ impl Api {
 
     // -------------------------------------------------------------- keys --
 
-    /// The API keys, as values.
-    fn list_keys(&self) -> Result<Response, ApiError> {
-        let platform = self
-            .service
-            .platform()
-            .map_err(|e| ApiError::internal(format!("platform: {e}")))?;
+    /// An app's API keys, as values.
+    ///
+    /// The keys live in the app's own database, and the hash is never
+    /// shown.
+    fn list_keys(&self, app: &str) -> Result<Response, ApiError> {
+        let items = self.service.list_keys(app).map_err(db_error)?;
         let mut body = Object::new();
-        body.set(
-            "items",
-            Value::Array(platform.api_keys.iter().map(ApiKey::to_value).collect()),
-        );
-        body.set("total", Value::Int(platform.api_keys.len() as i64));
+        body.set("items", Value::Array(items.clone()));
+        body.set("total", Value::Int(items.len() as i64));
         Ok(json(200, &Value::Object(body)))
     }
 
-    /// One API key.
-    fn show_key(&self, key: &str) -> Result<Response, ApiError> {
-        let platform = self
-            .service
-            .platform()
-            .map_err(|e| ApiError::internal(format!("platform: {e}")))?;
-        let record = platform
-            .api_keys
-            .iter()
-            .find(|k| k.id == key)
-            .ok_or_else(|| ApiError::not_found("NOT_FOUND", "no such API key"))?;
-        Ok(json(200, &record.to_value()))
+    /// One of an app's API keys.
+    fn show_key(&self, app: &str, key: &str) -> Result<Response, ApiError> {
+        let found = self.service.find_key(app, key).map_err(db_error)?;
+        Ok(json(200, &crate::keys::to_public_row(&found)))
     }
 
     /// Make an API key.
     ///
     /// The key itself is in the answer and nowhere else: the platform
     /// keeps a hash of it, so this is the one time it can be read.
-    fn create_key(&self, req: &Request) -> Result<Response, ApiError> {
+    fn create_key(&self, req: &Request, app: &str) -> Result<Response, ApiError> {
         let body = req.json()?;
         let name = body
             .get("name")
@@ -717,20 +770,6 @@ impl Api {
             .filter(|name| !name.is_empty())
             .ok_or_else(|| ApiError::invalid_request("a name is required"))?
             .to_string();
-        let app = match body.get("app") {
-            Some(Value::Str(app)) if !app.trim().is_empty() => {
-                let app = app.trim().to_string();
-                let platform = self
-                    .service
-                    .platform()
-                    .map_err(|e| ApiError::internal(format!("platform: {e}")))?;
-                let record = platform
-                    .find_app(&app)
-                    .ok_or_else(|| ApiError::not_found("NOT_FOUND", "no such app"))?;
-                Some(record.id.clone())
-            }
-            _ => None,
-        };
         let scopes: Vec<String> = match body.get("scopes") {
             Some(Value::Array(list)) => list
                 .iter()
@@ -759,7 +798,10 @@ impl Api {
             },
             _ => None,
         };
-        let (record, secret) = self.service.create_key(name, app, scopes, expires_at)?;
+        let (record, secret) = self
+            .service
+            .create_key(app, name, scopes, expires_at)
+            .map_err(db_error)?;
         let mut out = Object::new();
         out.set("key", record);
         // The only time the key itself is ever written down.
@@ -769,15 +811,15 @@ impl Api {
 
     /// Change an API key: its name, its scopes, its expiry, or whether it
     /// is revoked.
-    fn patch_key(&self, req: &Request, key: &str) -> Result<Response, ApiError> {
+    fn patch_key(&self, req: &Request, app: &str, key: &str) -> Result<Response, ApiError> {
         let body = req.json()?;
-        let updated = self.service.patch_key(key, &body)?;
+        let updated = self.service.patch_key(app, key, &body).map_err(db_error)?;
         Ok(json(200, &updated))
     }
 
     /// Remove an API key.
-    fn remove_key(&self, key: &str) -> Result<Response, ApiError> {
-        let removed = self.service.remove_key(key)?;
+    fn remove_key(&self, app: &str, key: &str) -> Result<Response, ApiError> {
+        let removed = self.service.remove_key(app, key).map_err(db_error)?;
         Ok(json(200, &removed))
     }
 
@@ -1140,6 +1182,12 @@ fn filter_of(req: &Request) -> Result<Value, ApiError> {
 fn db_error(e: uflite::error::Error) -> ApiError {
     match e.status() {
         404 => ApiError::not_found("NOT_FOUND", format!("database: {e}")),
+        // A refusal by the app's own rules, not a failure of the
+        // database: the answer says so.
+        403 => ApiError::forbidden(
+            "YOU_ARE_NOT_ALLOWED_TO_ACCESS_THIS",
+            format!("the app's rules: {e}"),
+        ),
         status => ApiError::new(status, "DATABASE_ERROR", format!("database: {e}")),
     }
 }

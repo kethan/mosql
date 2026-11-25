@@ -17,16 +17,32 @@
 //! being the one that was stored.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use mosql::{Object, Value};
 use uflite::db::block_on;
 use uflite::error::{Error, Result};
 
+use crate::acl::{Acl, Caller, Policy};
 use crate::clone::{CloneRequest, CloneSummary};
 use crate::config::AppDoc;
 use crate::db::AppDb;
 use crate::platform::{AppRecord, Platform, PlatformStore};
+
+/// Refuse the collection an app's keys live in.
+///
+/// The keys are the platform's, not the app's: they live in the app's
+/// database because that is where the app's own rows live, but they are
+/// not one of the app's collections. The only way in is through the key
+/// routes, which never show the hash — so a collection called this is
+/// not there, as far as anybody else is concerned.
+fn refuse_internal(collection: &str) -> Result<()> {
+    if crate::keys::is_internal(collection) {
+        return Err(Error::not_found("no such collection"));
+    }
+    Ok(())
+}
 
 /// What happened.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -82,6 +98,25 @@ pub struct EventContext {
     pub record: Option<Value>,
     /// What went wrong, for the error hooks.
     pub error: Option<String>,
+}
+
+/// What a key migration did.
+///
+/// The platform used to keep every key in one list of its own. A key
+/// now belongs to an app and lives in that app's database, so the keys
+/// of an older platform are moved into their apps — and the ones that
+/// cannot be moved are said out loud, rather than being lost.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct KeyMigration {
+    /// The keys that were moved: the app, the key, and its name.
+    pub moved: Vec<(String, String, String)>,
+    /// The keys that named no app.
+    ///
+    /// They were made for the whole platform, which a key no longer
+    /// is. They wait until somebody says which app they are for.
+    pub unbound: Vec<String>,
+    /// The keys whose app is no longer here.
+    pub orphaned: Vec<String>,
 }
 
 /// A listener: run when an event fires.
@@ -184,6 +219,8 @@ struct Inner {
     methods: Mutex<BTreeMap<String, CustomMethod>>,
     /// How an app's rows are reached.
     dbs: Mutex<Option<DbResolver>>,
+    /// Whether the keys of an older platform have been moved yet.
+    migrated: AtomicBool,
 }
 
 /// How the service finds an app's rows.
@@ -207,6 +244,7 @@ impl Service {
                 hooks: Mutex::new(Hooks::new()),
                 methods: Mutex::new(BTreeMap::new()),
                 dbs: Mutex::new(None),
+                migrated: AtomicBool::new(false),
             }),
         })
     }
@@ -314,6 +352,9 @@ impl Service {
     pub fn reload(&self) -> Result<()> {
         let platform = block_on(self.inner.store.load())?;
         *self.inner.platform.lock().expect("not poisoned") = platform;
+        // The platform that has just come in may have keys of an older
+        // platform in it, so the migration is due again.
+        self.inner.migrated.store(false, Ordering::SeqCst);
         Ok(())
     }
 
@@ -322,86 +363,262 @@ impl Service {
         Ok(self.inner.platform.lock().expect("not poisoned").clone())
     }
 
-    // -------------------------------------------------------------- keys --
+    // -------------------------------------------------------------- keys ---
 
-    /// Make an API key. Returns the record and the key itself.
+    /// The keys an app has.
     ///
-    /// The key is shown once. The platform keeps a hash of it, so there
-    /// is no second chance to read it.
+    /// The keys live in the app's own database, so this reads them from
+    /// there. The hash is never shown: a list is for seeing which keys
+    /// exist, not what they are.
+    pub fn list_keys(&self, app: &str) -> Result<Vec<Value>> {
+        let db = self.db(app)?;
+        let rows = db.rows(crate::keys::COLLECTION)?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            if let Some(key) = crate::keys::from_row(&row) {
+                out.push(crate::keys::to_public_row(&key));
+            }
+        }
+        out.sort_by(|a, b| {
+            let name = |v: &Value| {
+                v.get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or_default()
+                    .to_ascii_lowercase()
+            };
+            name(a).cmp(&name(b))
+        });
+        Ok(out)
+    }
+
+    /// Make an API key for an app. Returns the record and the key itself.
+    ///
+    /// The key is shown once. The app's database keeps a hash of it, so
+    /// there is no second chance to read it.
     pub fn create_key(
         &self,
+        app: &str,
         name: String,
-        app: Option<String>,
         scopes: Vec<String>,
         expires_at: Option<i64>,
     ) -> Result<(Value, String)> {
+        // The app must be there: a key belongs to an app, and the app's
+        // database is where the key lives.
+        let record = self.app_record(app)?;
         let now = crate::platform::now_secs();
+        let (key, secret) =
+            crate::apikey::ApiKey::create(&name, record.id.clone(), scopes, expires_at, now);
+        let value = key.to_value();
+        let db = self.db(app)?;
+        db.insert(crate::keys::COLLECTION, crate::keys::to_row(&key))?;
+        // The platform's directory says which app the key belongs to.
+        // It is written after the key itself, so a failure here leaves
+        // a key that cannot be found rather than a directory that
+        // points at nothing — and the row is taken back out again.
         let mut platform = self.inner.platform.lock().expect("not poisoned");
-        let (record, secret) = crate::apikey::ApiKey::create(&name, app, scopes, expires_at, now);
-        let value = record.to_value();
-        platform.api_keys.push(record);
-        block_on(self.inner.store.save(&platform))?;
+        platform.register_key(&record.id, &key.preview, &key.id);
+        if let Err(e) = block_on(self.inner.store.save(&platform)) {
+            platform.unregister_key(&record.id, &key.id);
+            let mut filter = Object::new();
+            filter.set("id", Value::str(key.id.clone()));
+            let _ = db.remove(crate::keys::COLLECTION, &Value::Object(filter));
+            return Err(e);
+        }
         Ok((value, secret))
     }
 
     /// Change an API key.
-    pub fn patch_key(&self, id: &str, changes: &Value) -> Result<Value> {
-        let mut platform = self.inner.platform.lock().expect("not poisoned");
-        let index = platform
-            .api_keys
-            .iter()
-            .position(|key| key.id == id)
-            .ok_or_else(|| Error::not_found("no such API key"))?;
-        {
-            let key = &mut platform.api_keys[index];
-            if let Some(name) = changes.get("name").and_then(|v| v.as_str()) {
-                let name = name.trim();
-                if name.is_empty() {
-                    return Err(Error::bad_request("the name of a key may not be empty"));
-                }
-                key.name = name.to_string();
+    pub fn patch_key(&self, app: &str, id: &str, changes: &Value) -> Result<Value> {
+        let key = self.find_key(app, id)?;
+        let mut key = key;
+        if let Some(name) = changes.get("name").and_then(|v| v.as_str()) {
+            let name = name.trim();
+            if name.is_empty() {
+                return Err(Error::bad_request("the name of a key may not be empty"));
             }
-            if let Some(Value::Array(list)) = changes.get("scopes") {
-                let scopes: Vec<String> = list
-                    .iter()
-                    .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
-                    .filter(|s| !s.is_empty())
-                    .collect();
-                if let Some(unknown) = crate::apikey::first_unknown_scope(&scopes) {
-                    return Err(Error::bad_request(format!(
-                        "there is no scope called {unknown}"
-                    )));
-                }
-                if scopes.is_empty() {
-                    return Err(Error::bad_request("a key needs at least one scope"));
-                }
-                key.scopes = scopes;
-            }
-            match changes.get("expiresAt") {
-                Some(Value::Int(seconds)) => key.expires_at = Some(*seconds),
-                Some(Value::Null) => key.expires_at = None,
-                _ => {}
-            }
-            if let Some(Value::Bool(revoked)) = changes.get("revoked") {
-                key.revoked = *revoked;
-            }
+            key.name = name.to_string();
         }
-        let value = platform.api_keys[index].to_value();
-        block_on(self.inner.store.save(&platform))?;
-        Ok(value)
+        if let Some(Value::Array(list)) = changes.get("scopes") {
+            let scopes: Vec<String> = list
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                .filter(|s| !s.is_empty())
+                .collect();
+            if let Some(unknown) = crate::apikey::first_unknown_scope(&scopes) {
+                return Err(Error::bad_request(format!(
+                    "there is no scope called {unknown}"
+                )));
+            }
+            if scopes.is_empty() {
+                return Err(Error::bad_request("a key needs at least one scope"));
+            }
+            key.scopes = scopes;
+        }
+        match changes.get("expiresAt") {
+            Some(Value::Int(seconds)) => key.expires_at = Some(*seconds),
+            Some(Value::Null) => key.expires_at = None,
+            _ => {}
+        }
+        if let Some(Value::Bool(revoked)) = changes.get("revoked") {
+            key.revoked = *revoked;
+        }
+        let db = self.db(app)?;
+        let mut filter = Object::new();
+        filter.set("id", Value::str(id));
+        let updated = db.update(
+            crate::keys::COLLECTION,
+            &Value::Object(filter),
+            &crate::keys::to_row(&key),
+        )?;
+        let Some(updated) = updated else {
+            return Err(Error::not_found("no such API key"));
+        };
+        Ok(crate::keys::to_public_value(&updated))
     }
 
     /// Remove an API key.
-    pub fn remove_key(&self, id: &str) -> Result<Value> {
+    pub fn remove_key(&self, app: &str, id: &str) -> Result<Value> {
+        let key = self.find_key(app, id)?;
+        let db = self.db(app)?;
+        let mut filter = Object::new();
+        filter.set("id", Value::str(id));
+        db.remove(crate::keys::COLLECTION, &Value::Object(filter))?;
         let mut platform = self.inner.platform.lock().expect("not poisoned");
-        let index = platform
-            .api_keys
-            .iter()
-            .position(|key| key.id == id)
-            .ok_or_else(|| Error::not_found("no such API key"))?;
-        let removed = platform.api_keys.remove(index);
+        platform.unregister_key(&key.app, id);
         block_on(self.inner.store.save(&platform))?;
-        Ok(removed.to_value())
+        Ok(crate::keys::to_public_row(&key))
+    }
+
+    /// Move the keys an older platform kept into their apps, once.
+    ///
+    /// This is what the platform does when it starts, and what a
+    /// command does before it reads the keys. A platform with no old
+    /// keys has nothing to do, and the flag says so.
+    ///
+    /// Without a way to open an app's database there is nowhere to move
+    /// a key to, so the keys wait rather than being lost.
+    pub fn ensure_migrated(&self) -> Result<KeyMigration> {
+        if self.inner.migrated.load(Ordering::SeqCst) {
+            return Ok(KeyMigration::default());
+        }
+        if self.inner.dbs.lock().expect("not poisoned").is_none() {
+            return Ok(KeyMigration::default());
+        }
+        let report = self.migrate_keys()?;
+        self.inner.migrated.store(true, Ordering::SeqCst);
+        Ok(report)
+    }
+
+    /// Move the keys an older platform kept into the apps they belong to.
+    ///
+    /// The platform used to keep every key in one list of its own. A key
+    /// now belongs to an app and lives in that app's database, so a
+    /// platform file from before that change is read into the
+    /// platform's legacy list and moved here:
+    ///
+    /// * a key that named an app is moved into that app's rows, and
+    ///   the app's directory points at it. The hash comes with it, so
+    ///   the secret that was shown once still works.
+    /// * a key that named no app had authority over the whole
+    ///   platform, which a key no longer has. It waits, and says so,
+    ///   rather than being dropped or quietly given an app it was
+    ///   never made for.
+    pub fn migrate_keys(&self) -> Result<KeyMigration> {
+        let mut report = KeyMigration::default();
+        // The keys are taken out of the platform first, and the lock
+        // is let go: an app's database is opened while the keys are
+        // being moved, and opening one asks the platform for the app.
+        let waiting = {
+            let mut platform = self.inner.platform.lock().expect("not poisoned");
+            std::mem::take(&mut platform.legacy_keys)
+        };
+        if waiting.is_empty() {
+            return Ok(report);
+        }
+        let mut left = Vec::new();
+        let mut moved = Vec::new();
+        for legacy in waiting {
+            let Some(app) = legacy.app.clone() else {
+                // A key for the whole platform. It waits for an owner
+                // to say which app it is for.
+                report.unbound.push(legacy.id.clone());
+                left.push(legacy);
+                continue;
+            };
+            let record = {
+                let platform = self.inner.platform.lock().expect("not poisoned");
+                platform.find_app(&app).cloned()
+            };
+            let Some(record) = record else {
+                // The app it was made for is not here any more, so the
+                // key can never be used again. It waits with the
+                // others rather than being thrown away.
+                report.orphaned.push(legacy.id.clone());
+                left.push(legacy);
+                continue;
+            };
+            let bound = legacy.bind(&record.id);
+            let db = self.db(&record.id)?;
+            let mut filter = Object::new();
+            filter.set("id", Value::str(bound.id.clone()));
+            if db
+                .find_one(crate::keys::COLLECTION, &Value::Object(filter))?
+                .is_none()
+            {
+                db.insert(crate::keys::COLLECTION, crate::keys::to_row(&bound))?;
+            }
+            moved.push((record.id.clone(), bound.preview.clone(), bound.id.clone()));
+            report.moved.push((record.id, bound.id, bound.name));
+        }
+        let mut platform = self.inner.platform.lock().expect("not poisoned");
+        for (app, preview, id) in moved {
+            platform.register_key(&app, &preview, &id);
+        }
+        platform.legacy_keys = left;
+        block_on(self.inner.store.save(&platform))?;
+        Ok(report)
+    }
+
+    /// Bind a key an older platform kept to an app.
+    ///
+    /// The key is moved into the app's own database, and the app's
+    /// directory points at it. This is how a key that was made for the
+    /// whole platform becomes a key of one app.
+    pub fn bind_legacy_key(&self, app: &str, id: &str) -> Result<Value> {
+        let record = self.app_record(app)?;
+        // The key is taken out of the platform first, and the lock is
+        // let go: the app's database is opened on the way in.
+        let legacy = {
+            let mut platform = self.inner.platform.lock().expect("not poisoned");
+            let Some(index) = platform.legacy_keys.iter().position(|k| k.id == id) else {
+                return Err(Error::not_found("no such API key"));
+            };
+            platform.legacy_keys.remove(index)
+        };
+        let bound = legacy.bind(&record.id);
+        let db = self.db(&record.id)?;
+        db.insert(crate::keys::COLLECTION, crate::keys::to_row(&bound))?;
+        let mut platform = self.inner.platform.lock().expect("not poisoned");
+        platform.register_key(&record.id, &bound.preview, &bound.id);
+        block_on(self.inner.store.save(&platform))?;
+        Ok(crate::keys::to_public_row(&bound))
+    }
+
+    /// The keys an older platform kept, and that have not been moved.
+    pub fn legacy_keys(&self) -> Result<Vec<crate::apikey::LegacyKey>> {
+        let platform = self.platform()?;
+        Ok(platform.legacy_keys.clone())
+    }
+
+    /// One of an app's keys, by id.
+    pub fn find_key(&self, app: &str, id: &str) -> Result<crate::apikey::ApiKey> {
+        let db = self.db(app)?;
+        let mut filter = Object::new();
+        filter.set("id", Value::str(id));
+        let row = db
+            .find_one(crate::keys::COLLECTION, &Value::Object(filter))?
+            .ok_or_else(|| Error::not_found("no such API key"))?;
+        crate::keys::from_row(&row).ok_or_else(|| Error::internal("the API key cannot be read"))
     }
 
     /// Remember that a key was used.
@@ -409,9 +626,8 @@ impl Service {
     /// The write is at most one a minute: a key used a thousand times a
     /// second must not write a thousand times a second, and "when was
     /// this last used" does not need to be exact to the second.
-    pub fn touch_key(&self, id: &str, now: i64) -> Result<()> {
-        let mut platform = self.inner.platform.lock().expect("not poisoned");
-        let Some(key) = platform.api_keys.iter_mut().find(|key| key.id == id) else {
+    pub fn touch_key(&self, app: &str, id: &str, now: i64) -> Result<()> {
+        let Ok(mut key) = self.find_key(app, id) else {
             return Ok(());
         };
         if let Some(last) = key.last_used_at {
@@ -419,11 +635,43 @@ impl Service {
                 return Ok(());
             }
         }
-        if let Some(key) = platform.api_keys.iter_mut().find(|key| key.id == id) {
-            key.last_used_at = Some(now);
-        }
-        block_on(self.inner.store.save(&platform))?;
+        key.last_used_at = Some(now);
+        let db = self.db(app)?;
+        let mut filter = Object::new();
+        filter.set("id", Value::str(id));
+        db.update(
+            crate::keys::COLLECTION,
+            &Value::Object(filter),
+            &crate::keys::to_row(&key),
+        )?;
         Ok(())
+    }
+
+    /// The key a secret belongs to, read from the app's own database.
+    ///
+    /// The app is found from the platform's directory — the preview says
+    /// which app — and the key is read from that app's rows. The hash
+    /// is compared in constant time, and the answer says whether the
+    /// secret is this key.
+    pub fn verify_key(
+        &self,
+        app: &str,
+        id: &str,
+        secret: &str,
+    ) -> Result<Option<crate::apikey::ApiKey>> {
+        let key = match self.find_key(app, id) {
+            Ok(key) => key,
+            // A key that is not there is simply not this secret. Any
+            // other trouble — a database that will not open, a row that
+            // cannot be read — is said out loud, so a broken database
+            // is not mistaken for a wrong key.
+            Err(e) if e.is_not_found() => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        if key.verify(secret) {
+            return Ok(Some(key));
+        }
+        Ok(None)
     }
 
     /// The platform's apps, as values.
@@ -575,6 +823,9 @@ impl Service {
         let record = {
             let mut platform = self.inner.platform.lock().expect("not poisoned");
             let removed = platform.remove_app(key, confirm)?;
+            // The app's keys live in the app's own database and go with
+            // it; the directory must stop pointing at them.
+            platform.forget_app_keys(&removed.id);
             let value = record_value(&removed);
             block_on(self.inner.store.save(&platform))?;
             value
@@ -618,11 +869,154 @@ impl Service {
 
     /// The collections an app has.
     pub fn collections(&self, app: &str) -> Result<Vec<String>> {
-        self.db(app)?.collections()
+        let mut names = self.db(app)?.collections()?;
+        // The keys live in a collection of their own, and it is not
+        // one of the app's: it is the platform's, and the only way in
+        // is through the key routes.
+        names.retain(|name| !crate::keys::is_internal(name));
+        Ok(names)
+    }
+
+    /// The rules that apply to an app, and the evaluator for this caller.
+    ///
+    /// `None` when the app has no rules, or has them switched off.
+    fn policy_for(&self, app: &str, caller: &Caller) -> Result<Option<Acl>> {
+        let record = self.app_record(app)?;
+        let policy = Policy::new(&record.doc.config.acl);
+        policy
+            .evaluator(caller)
+            .map_err(|e| Error::internal(format!("the app's rules are not usable: {e}")))
+    }
+
+    /// The rows that match a filter, as this caller may see them.
+    ///
+    /// The rules filter a list row by row, so the page is taken after
+    /// the filter: the page a caller sees is a page of rows they may
+    /// see, not a page that happens to contain some they may not.
+    pub fn find_rows_as(
+        &self,
+        caller: &Caller,
+        app: &str,
+        collection: &str,
+        query: &Value,
+        limit: Option<u64>,
+        offset: Option<u64>,
+    ) -> Result<Vec<Value>> {
+        let acl = self.policy_for(app, caller)?;
+        let Some(acl) = acl else {
+            return self.find_rows(app, collection, query, limit, offset);
+        };
+        let rows = self.db(app)?.find(collection, query, None, None)?;
+        let allowed = Policy::filter(Some(&acl), caller, collection, "list", rows);
+        let offset = offset.unwrap_or(0) as usize;
+        let mut page: Vec<Value> = allowed.into_iter().skip(offset).collect();
+        if let Some(limit) = limit {
+            page.truncate(limit as usize);
+        }
+        Ok(page)
+    }
+
+    /// How many rows match a filter, as this caller may see them.
+    pub fn count_rows_as(
+        &self,
+        caller: &Caller,
+        app: &str,
+        collection: &str,
+        query: &Value,
+    ) -> Result<u64> {
+        let acl = self.policy_for(app, caller)?;
+        let Some(acl) = acl else {
+            return self.count_rows(app, collection, query);
+        };
+        let rows = self.db(app)?.find(collection, query, None, None)?;
+        Ok(Policy::filter(Some(&acl), caller, collection, "list", rows).len() as u64)
+    }
+
+    /// Put a row in, as this caller may. Fires [`Event::Created`].
+    ///
+    /// The rule is about the row being created, so a rule that says
+    /// "the owner may create a row they own" refuses a row that claims
+    /// somebody else.
+    pub fn insert_row_as(
+        &self,
+        caller: &Caller,
+        app: &str,
+        collection: &str,
+        row: &Value,
+    ) -> Result<Value> {
+        if let Some(acl) = self.policy_for(app, caller)? {
+            if !Policy::allows(Some(&acl), caller, collection, "create", row) {
+                return Err(Error::forbidden(
+                    "the app's rules do not allow this row to be created",
+                ));
+            }
+        }
+        self.insert_row(app, collection, row)
+    }
+
+    /// Change a row, as this caller may. Fires [`Event::Updated`].
+    ///
+    /// The rule is about the row as it is, so a rule that says "you may
+    /// change a row that is not done" is about the row's state now.
+    pub fn update_row_as(
+        &self,
+        caller: &Caller,
+        app: &str,
+        collection: &str,
+        query: &Value,
+        changes: &Value,
+    ) -> Result<Value> {
+        let acl = self.policy_for(app, caller)?;
+        let Some(acl) = acl else {
+            return self.update_row(app, collection, query, changes);
+        };
+        let matching = self.db(app)?.find(collection, query, None, None)?;
+        let allowed = Policy::filter(Some(&acl), caller, collection, "update", matching);
+        let Some(row) = allowed.first() else {
+            // A row the rules refuse looks like a row that is not
+            // there: the answer must not say which it was.
+            let e = Error::not_found("no row matches the filter");
+            self.report_row_error("db.update", app, collection, &e);
+            return Err(e);
+        };
+        let id = row
+            .get("id")
+            .cloned()
+            .ok_or_else(|| Error::internal("a row needs an id"))?;
+        let mut filter = Object::new();
+        filter.set("id", id);
+        self.update_row(app, collection, &Value::Object(filter), changes)
+    }
+
+    /// Take rows out, as this caller may. Fires [`Event::Removed`].
+    pub fn remove_rows_as(
+        &self,
+        caller: &Caller,
+        app: &str,
+        collection: &str,
+        query: &Value,
+    ) -> Result<u64> {
+        let acl = self.policy_for(app, caller)?;
+        let Some(acl) = acl else {
+            return self.remove_rows(app, collection, query);
+        };
+        let matching = self.db(app)?.find(collection, query, None, None)?;
+        let allowed = Policy::filter(Some(&acl), caller, collection, "delete", matching);
+        let mut removed = 0u64;
+        for row in allowed {
+            let Some(id) = row.get("id").cloned() else {
+                continue;
+            };
+            let mut filter = Object::new();
+            filter.set("id", id);
+            removed += self.remove_rows(app, collection, &Value::Object(filter))?;
+        }
+        Ok(removed)
     }
 
     /// Every row of a collection.
     pub fn rows(&self, app: &str, collection: &str) -> Result<Vec<Value>> {
+        refuse_internal(collection)?;
         self.db(app)?.rows(collection)
     }
 
@@ -637,16 +1031,19 @@ impl Service {
         limit: Option<u64>,
         offset: Option<u64>,
     ) -> Result<Vec<Value>> {
+        refuse_internal(collection)?;
         self.db(app)?.find(collection, query, limit, offset)
     }
 
     /// How many rows match a filter.
     pub fn count_rows(&self, app: &str, collection: &str, query: &Value) -> Result<u64> {
+        refuse_internal(collection)?;
         self.db(app)?.count(collection, query)
     }
 
     /// Put a row in. Fires [`Event::Created`].
     pub fn insert_row(&self, app: &str, collection: &str, row: &Value) -> Result<Value> {
+        refuse_internal(collection)?;
         let ctx = self.row_context("db.insert", app, collection);
         self.run_before(&ctx);
         let db = self.db(app)?;
@@ -681,6 +1078,7 @@ impl Service {
         query: &Value,
         changes: &Value,
     ) -> Result<Value> {
+        refuse_internal(collection)?;
         let ctx = self.row_context("db.update", app, collection);
         self.run_before(&ctx);
         let db = self.db(app)?;
@@ -711,6 +1109,7 @@ impl Service {
 
     /// Take out the rows that match a filter. Fires [`Event::Removed`].
     pub fn remove_rows(&self, app: &str, collection: &str, query: &Value) -> Result<u64> {
+        refuse_internal(collection)?;
         let ctx = self.row_context("db.remove", app, collection);
         self.run_before(&ctx);
         let db = self.db(app)?;

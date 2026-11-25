@@ -171,8 +171,12 @@ fn the_console_has_an_api_keys_page() {
     let js = nanobase::console::respond(&Request::new("GET", "/console.js")).expect("the script");
     let script = String::from_utf8(js.body).unwrap();
     assert!(
-        script.contains("/api/keys"),
+        script.contains("/keys"),
         "the script makes, lists and revokes keys"
+    );
+    assert!(
+        !script.contains("/api/keys"),
+        "and the keys of an app are the app's own keys"
     );
 }
 

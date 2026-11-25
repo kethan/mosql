@@ -227,6 +227,27 @@ fn cmd_serve(rest: &[String]) -> u8 {
             return 1;
         }
     };
+    // The keys of an older platform are moved into the apps they belong
+    // to before anybody asks for one. The ones that cannot be moved are
+    // said out loud, and wait for somebody to say which app they are
+    // for.
+    match service.ensure_migrated() {
+        Ok(report) => {
+            for (app, _id, name) in &report.moved {
+                eprintln!("nanobase: the key {name:?} now belongs to {app}.");
+            }
+            for id in &report.unbound {
+                eprintln!(
+                    "nanobase: the key {id} was made for the whole platform. \
+                     Give it an app with `nanobase key bind APP {id}`."
+                );
+            }
+            for id in &report.orphaned {
+                eprintln!("nanobase: the key {id} belongs to an app that is not here.");
+            }
+        }
+        Err(e) => eprintln!("nanobase: the old API keys could not be moved: {e}"),
+    }
 
     // The browser's rules: which origins may call this API, and how much
     // of it any one client may have.
@@ -869,32 +890,33 @@ fn prompt(label: &str) -> Option<String> {
 
 // ----------------------------------------------------------- app documents ---
 
-/// The API keys: `nanobase key list|create|show|remove`.
+/// The API keys: `nanobase key list|create|show|remove|bind`.
 ///
-/// A key is a credential a program holds. It is made here, on the
-/// platform's own state, and it is used in place of the owner's session
-/// token: a key may be limited to one app, limited to what it may do,
-/// and made to expire on its own.
+/// A key is a credential a program holds. It belongs to one app: it is
+/// made for that app, it may only see that app, and it lives in that
+/// app's own database. The platform keeps a directory of which keys
+/// exist and which app they belong to, and nothing that could be used
+/// as a key.
 fn cmd_key(rest: &[String]) -> u8 {
     let Some(sub) = rest.first().map(String::as_str) else {
         eprintln!("nanobase key: what should it do?\n");
-        eprintln!("  nanobase key list");
-        eprintln!(
-            "  nanobase key create --name NAME [--app APP] [--scopes a,b] [--expires-in 30d]"
-        );
-        eprintln!("  nanobase key show ID");
-        eprintln!("  nanobase key remove ID");
+        eprintln!("  nanobase key list APP");
+        eprintln!("  nanobase key create APP --name NAME [--scopes a,b] [--expires-in 30d]");
+        eprintln!("  nanobase key show APP ID");
+        eprintln!("  nanobase key remove APP ID");
+        eprintln!("  nanobase key bind APP ID");
         return 2;
     };
     let parsed = parse_args(
         &rest[1..],
         &[
             "name",
-            "app",
             "scopes",
             "expires-in",
             "expires-at",
             "data",
+            "url",
+            "token",
             "db-url",
             "db-token",
         ],
@@ -908,7 +930,7 @@ fn cmd_key(rest: &[String]) -> u8 {
         Ok(catalog) => catalog,
         Err(code) => return code,
     };
-    let mut platform = match catalog.load() {
+    let platform = match catalog.load() {
         Ok(p) => p,
         Err(code) => return code,
     };
@@ -919,34 +941,42 @@ fn cmd_key(rest: &[String]) -> u8 {
 
     match sub {
         "list" => {
-            if platform.api_keys.is_empty() {
-                println!("no API keys yet");
-                return 0;
-            }
-            println!(
-                "{:<22} {:<20} {:<14} {:<12} EXPIRES",
-                "ID", "NAME", "SCOPES", "APP"
-            );
-            for key in &platform.api_keys {
-                println!(
-                    "{:<22} {:<20} {:<14} {:<12} {}",
-                    key.id,
-                    key.name,
-                    if key.scopes.is_empty() {
-                        "-".to_string()
-                    } else {
-                        key.scopes.join(",")
-                    },
-                    key.app.clone().unwrap_or_else(|| "any".to_string()),
-                    match key.expires_at {
-                        Some(at) => crate::iso8601(at),
-                        None => "never".to_string(),
+            let Some(app) = parsed.first().map(str::to_string) else {
+                eprintln!("nanobase key list: an app is required");
+                return 2;
+            };
+            if let Some(client) = api_client(&parsed) {
+                let value = match client.request("GET", &format!("/api/apps/{app}/keys"), None) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!("nanobase: {e}");
+                        return 1;
                     }
-                );
+                };
+                let code = print_keys(&value, &platform);
+                report_waiting_keys(&platform);
+                return code;
             }
-            0
+            let service = match service_or_exit(&parsed) {
+                Some(service) => service,
+                None => return 1,
+            };
+            let keys = match service.list_keys(&app) {
+                Ok(keys) => keys,
+                Err(e) => {
+                    eprintln!("nanobase: {e}");
+                    return 1;
+                }
+            };
+            let code = print_key_rows(&keys, &platform);
+            report_waiting_keys(&platform);
+            code
         }
         "create" => {
+            let Some(app) = parsed.first().map(str::to_string) else {
+                eprintln!("nanobase key create: an app is required");
+                return 2;
+            };
             let Some(name) = parsed.get("name").map(str::to_string) else {
                 eprintln!("nanobase key create: --name is required");
                 return 2;
@@ -967,16 +997,6 @@ fn cmd_key(rest: &[String]) -> u8 {
                 );
                 return 2;
             }
-            let app = match parsed.get("app").map(str::to_string) {
-                Some(wanted) => match platform.find_app(&wanted) {
-                    Some(record) => Some(record.id.clone()),
-                    None => {
-                        eprintln!("nanobase key create: no app called {wanted:?}");
-                        return 2;
-                    }
-                },
-                None => None,
-            };
             let expires_at = match expiry_of(&parsed) {
                 Ok(at) => at,
                 Err(message) => {
@@ -984,85 +1004,275 @@ fn cmd_key(rest: &[String]) -> u8 {
                     return 2;
                 }
             };
-            let (record, secret) =
-                crate::apikey::ApiKey::create(&name, app, scopes, expires_at, now_secs());
-            platform.api_keys.push(record);
-            if let Err(code) = catalog.save(&platform) {
-                return code;
+            if let Some(client) = api_client(&parsed) {
+                let mut body = mosql::Object::new();
+                body.set("name", Value::str(name.clone()));
+                body.set(
+                    "scopes",
+                    Value::Array(scopes.iter().map(|s| Value::str(s.clone())).collect()),
+                );
+                if let Some(at) = expires_at {
+                    body.set("expiresAt", Value::Int(at));
+                }
+                let value = match client.request(
+                    "POST",
+                    &format!("/api/apps/{app}/keys"),
+                    Some(&Value::Object(body)),
+                ) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!("nanobase: {e}");
+                        return 1;
+                    }
+                };
+                let secret = value
+                    .get("secret")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                return print_secret(&secret);
             }
-            println!("{secret}");
-            eprintln!();
-            eprintln!("This is the only time the key is shown. Put it in your secret store.");
-            0
+            let service = match service_or_exit(&parsed) {
+                Some(service) => service,
+                None => return 1,
+            };
+            let (_, secret) = match service.create_key(&app, name, scopes, expires_at) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    eprintln!("nanobase: {e}");
+                    return 1;
+                }
+            };
+            print_secret(&secret)
         }
         "show" => {
-            let Some(id) = parsed.first().map(str::to_string) else {
-                eprintln!("nanobase key show: an id is required");
+            let (Some(app), Some(id)) = (
+                parsed.first().map(str::to_string),
+                parsed.second().map(str::to_string),
+            ) else {
+                eprintln!("nanobase key show: an app and a key id are required");
                 return 2;
             };
-            let Some(key) = platform.api_keys.iter().find(|key| key.id == id) else {
-                eprintln!("nanobase key show: no such key");
-                return 1;
+            if let Some(client) = api_client(&parsed) {
+                let value = match client.request("GET", &format!("/api/apps/{app}/keys/{id}"), None)
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!("nanobase: {e}");
+                        return 1;
+                    }
+                };
+                return print_one_key(&value, &platform);
+            }
+            let service = match service_or_exit(&parsed) {
+                Some(service) => service,
+                None => return 1,
             };
-            println!("id:      {}", key.id);
-            println!("name:    {}", key.name);
-            println!("preview: {}", key.preview);
-            println!(
-                "scopes:  {}",
-                if key.scopes.is_empty() {
-                    "-".to_string()
-                } else {
-                    key.scopes.join(", ")
+            let key = match service.find_key(&app, &id) {
+                Ok(key) => key,
+                Err(e) => {
+                    eprintln!("nanobase: {e}");
+                    return 1;
                 }
-            );
-            println!(
-                "app:     {}",
-                key.app.clone().unwrap_or_else(|| "any".to_string())
-            );
-            println!(
-                "expires: {}",
-                match key.expires_at {
-                    Some(at) => crate::iso8601(at),
-                    None => "never".to_string(),
+            };
+            print_one_key(&crate::keys::to_public_row(&key), &platform)
+        }
+        "remove" => {
+            let (Some(app), Some(id)) = (
+                parsed.first().map(str::to_string),
+                parsed.second().map(str::to_string),
+            ) else {
+                eprintln!("nanobase key remove: an app and a key id are required");
+                return 2;
+            };
+            if let Some(client) = api_client(&parsed) {
+                let value =
+                    match client.request("DELETE", &format!("/api/apps/{app}/keys/{id}"), None) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            eprintln!("nanobase: {e}");
+                            return 1;
+                        }
+                    };
+                println!(
+                    "removed {}",
+                    value.get("name").and_then(|v| v.as_str()).unwrap_or("")
+                );
+                return 0;
+            }
+            let service = match service_or_exit(&parsed) {
+                Some(service) => service,
+                None => return 1,
+            };
+            let removed = match service.remove_key(&app, &id) {
+                Ok(removed) => removed,
+                Err(e) => {
+                    eprintln!("nanobase: {e}");
+                    return 1;
                 }
-            );
-            println!("created: {}", key.created_at);
+            };
             println!(
-                "last used: {}",
-                match key.last_used_at {
-                    Some(at) => crate::iso8601(at),
-                    None => "never".to_string(),
-                }
+                "removed {}",
+                removed.get("name").and_then(|v| v.as_str()).unwrap_or("")
             );
             0
         }
-        "remove" => {
-            let Some(id) = parsed.first().map(str::to_string) else {
-                eprintln!("nanobase key remove: an id is required");
+        "bind" => {
+            // A key from an older platform, which was made for the whole
+            // platform rather than for an app. It is given an app here,
+            // and from then on it is that app's key.
+            let (Some(app), Some(id)) = (
+                parsed.first().map(str::to_string),
+                parsed.second().map(str::to_string),
+            ) else {
+                eprintln!("nanobase key bind: an app and a key id are required");
                 return 2;
             };
-            let Some(index) = platform.api_keys.iter().position(|key| key.id == id) else {
-                eprintln!("nanobase key remove: no such key");
-                return 1;
+            let service = match service_or_exit(&parsed) {
+                Some(service) => service,
+                None => return 1,
             };
-            let removed = platform.api_keys.remove(index);
-            if let Err(code) = catalog.save(&platform) {
-                return code;
+            match service.bind_legacy_key(&app, &id) {
+                Ok(key) => {
+                    println!(
+                        "bound {} to {}",
+                        key.get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("the key"),
+                        app
+                    );
+                    0
+                }
+                Err(e) => {
+                    eprintln!("nanobase: {e}");
+                    1
+                }
             }
-            println!("removed {}", removed.name);
-            0
         }
         other => {
             eprintln!("nanobase key: unknown subcommand {other:?}\n");
-            eprintln!("  nanobase key list");
-            eprintln!(
-                "  nanobase key create --name NAME [--app APP] [--scopes a,b] [--expires-in 30d]"
-            );
-            eprintln!("  nanobase key show ID");
-            eprintln!("  nanobase key remove ID");
+            eprintln!("  nanobase key list APP");
+            eprintln!("  nanobase key create APP --name NAME [--scopes a,b] [--expires-in 30d]");
+            eprintln!("  nanobase key show APP ID");
+            eprintln!("  nanobase key remove APP ID");
+            eprintln!("  nanobase key bind APP ID");
             2
         }
     }
+}
+
+/// The keys of an older platform that have not been moved yet.
+///
+/// They are said out loud, because a key that has not been moved into
+/// an app cannot be used: it waits for somebody to say which app it is
+/// for.
+fn report_waiting_keys(platform: &crate::platform::Platform) -> u8 {
+    if platform.legacy_keys.is_empty() {
+        return 0;
+    }
+    eprintln!();
+    eprintln!("These keys are from an older platform and have no app yet:");
+    for key in &platform.legacy_keys {
+        let app = key.app.clone().unwrap_or_else(|| "none".to_string());
+        eprintln!("  {}  {}  (app: {})", key.id, key.name, app);
+    }
+    eprintln!();
+    eprintln!("Bind one to an app with `nanobase key bind APP ID`.");
+    0
+}
+
+/// The keys, as a table.
+fn print_key_rows(keys: &[Value], platform: &crate::platform::Platform) -> u8 {
+    if keys.is_empty() {
+        println!("no API keys yet");
+        return 0;
+    }
+    println!(
+        "{:<22} {:<20} {:<14} {:<20} EXPIRES",
+        "ID", "NAME", "SCOPES", "APP"
+    );
+    for key in keys {
+        let text = |name: &str| {
+            key.get(name)
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string()
+        };
+        // The app is named rather than numbered: a person reading a
+        // list wants to know which app it is for.
+        let app = platform
+            .find_app(&text("app"))
+            .map(|record| record.doc.app.name.clone())
+            .unwrap_or_else(|| text("app"));
+        let scopes = match key.get("scopes").and_then(|v| v.as_array()) {
+            Some(list) if !list.is_empty() => list
+                .iter()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<&str>>()
+                .join(","),
+            _ => "-".to_string(),
+        };
+        println!(
+            "{:<22} {:<20} {:<14} {:<20} {}",
+            text("id"),
+            text("name"),
+            scopes,
+            app,
+            match key.get("expiresAt").and_then(|v| v.as_str()) {
+                Some(at) if !at.is_empty() => at.to_string(),
+                _ => "never".to_string(),
+            }
+        );
+    }
+    0
+}
+
+/// The keys, as the API sends them.
+fn print_keys(value: &Value, platform: &crate::platform::Platform) -> u8 {
+    let keys = value
+        .get("items")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    print_key_rows(&keys, platform)
+}
+
+/// One key, in words.
+fn print_one_key(key: &Value, platform: &crate::platform::Platform) -> u8 {
+    let text = |name: &str| {
+        key.get(name)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    println!("id:        {}", text("id"));
+    println!("name:      {}", text("name"));
+    println!("preview:   {}", text("preview"));
+    let scopes = match key.get("scopes").and_then(|v| v.as_array()) {
+        Some(list) if !list.is_empty() => list
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect::<Vec<&str>>()
+            .join(", "),
+        _ => "-".to_string(),
+    };
+    println!("scopes:    {scopes}");
+    let app = platform
+        .find_app(&text("app"))
+        .map(|record| record.doc.app.name.clone())
+        .unwrap_or_else(|| text("app"));
+    println!("app:       {app}");
+    println!("created:   {}", text("createdAt"));
+    println!("last used: {}", text("lastUsedAt"));
+    0
+}
+
+/// The key itself, and the warning that comes with it.
+fn print_secret(secret: &str) -> u8 {
+    println!("{secret}");
+    eprintln!();
+    eprintln!("This is the only time the key is shown. Put it in your secret store.");
+    0
 }
 
 /// When a key stops working, from `--expires-in 30d` or `--expires-at`.

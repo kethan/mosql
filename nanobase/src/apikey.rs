@@ -76,8 +76,11 @@ pub struct ApiKey {
     /// The first few characters of the key, so a list can show which key
     /// is which without showing the key.
     pub preview: String,
-    /// The app this key is limited to, if it is limited to one.
-    pub app: Option<String>,
+    /// The app this key belongs to.
+    ///
+    /// A key belongs to exactly one app: it is made for that app, it
+    /// may only see that app, and it lives in that app's database.
+    pub app: String,
     /// What it may do.
     pub scopes: Vec<String>,
     /// When it stops working, in Unix seconds.
@@ -98,7 +101,7 @@ impl ApiKey {
     /// one time it can be read.
     pub fn create(
         name: &str,
-        app: Option<String>,
+        app: impl Into<String>,
         scopes: Vec<String>,
         expires_at: Option<i64>,
         now: i64,
@@ -110,7 +113,7 @@ impl ApiKey {
             name: name.to_string(),
             hash: hash_of(&secret),
             preview: preview_of(&secret),
-            app,
+            app: app.into(),
             scopes,
             expires_at,
             created_at: crate::platform::iso8601(now),
@@ -157,8 +160,10 @@ impl ApiKey {
     }
 
     /// Is it limited to one app?
+    ///
+    /// Always: a key belongs to exactly one app.
     pub fn is_scoped_to_app(&self) -> bool {
-        self.app.is_some()
+        true
     }
 
     /// The key as the world sees it: never the hash.
@@ -167,13 +172,7 @@ impl ApiKey {
         o.set("id", Value::str(self.id.clone()));
         o.set("name", Value::str(self.name.clone()));
         o.set("preview", Value::str(self.preview.clone()));
-        o.set(
-            "app",
-            match &self.app {
-                Some(app) => Value::str(app.clone()),
-                None => Value::Null,
-            },
-        );
+        o.set("app", Value::str(self.app.clone()));
         o.set(
             "scopes",
             Value::Array(self.scopes.iter().map(|s| Value::str(s.clone())).collect()),
@@ -237,10 +236,7 @@ impl ApiKey {
             name: o.get("name")?.as_str()?.to_string(),
             hash: o.get("hash")?.as_str()?.to_string(),
             preview: o.get("preview")?.as_str()?.to_string(),
-            app: match o.get("app") {
-                Some(Value::Str(app)) if !app.is_empty() => Some(app.clone()),
-                _ => None,
-            },
+            app: o.get("app")?.as_str()?.to_string(),
             scopes,
             expires_at: match o.get("expiresAt") {
                 Some(Value::Int(at)) => Some(*at),
@@ -260,6 +256,139 @@ impl ApiKey {
     }
 }
 
+/// A key from an older platform, where a key could name no app.
+///
+/// The platform used to keep every key in one list, and a key could be
+/// made for the whole platform rather than for one app. A key now
+/// belongs to an app and lives in that app's database, so a platform
+/// file from before that change is read into this first: the record
+/// itself, and the app it named — if it named one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LegacyKey {
+    /// The key's own id.
+    pub id: String,
+    /// What somebody called it.
+    pub name: String,
+    /// The hash of the key.
+    pub hash: String,
+    /// The first few characters of the key.
+    pub preview: String,
+    /// The app the key named, when it named one.
+    ///
+    /// `None` is the old "a key for the whole platform", which the new
+    /// model does not have: a key belongs to an app. Such a key waits
+    /// until somebody says which app it is for.
+    pub app: Option<String>,
+    /// What it may do.
+    pub scopes: Vec<String>,
+    /// When it stops working.
+    pub expires_at: Option<i64>,
+    /// When it was made.
+    pub created_at: String,
+    /// When it was last used.
+    pub last_used_at: Option<i64>,
+    /// Whether it has been revoked.
+    pub revoked: bool,
+}
+
+impl LegacyKey {
+    /// Read a key from an older platform.
+    pub fn from_value(v: &Value) -> Option<Self> {
+        let o = v.as_object()?;
+        let scopes = match o.get("scopes") {
+            Some(Value::Array(list)) => list
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect(),
+            _ => Vec::new(),
+        };
+        Some(LegacyKey {
+            id: o.get("id")?.as_str()?.to_string(),
+            name: o.get("name")?.as_str()?.to_string(),
+            hash: o.get("hash")?.as_str()?.to_string(),
+            preview: o.get("preview")?.as_str()?.to_string(),
+            app: o
+                .get("app")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|app| !app.is_empty())
+                .map(str::to_string),
+            scopes,
+            expires_at: match o.get("expiresAt") {
+                Some(Value::Int(at)) => Some(*at),
+                _ => None,
+            },
+            created_at: o
+                .get("createdAt")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            last_used_at: match o.get("lastUsedAt") {
+                Some(Value::Int(at)) => Some(*at),
+                _ => None,
+            },
+            revoked: matches!(o.get("revoked"), Some(Value::Bool(true))),
+        })
+    }
+
+    /// The key as the older platform kept it.
+    pub fn to_value(&self) -> Value {
+        let mut o = Object::new();
+        o.set("id", Value::str(self.id.clone()));
+        o.set("name", Value::str(self.name.clone()));
+        o.set("hash", Value::str(self.hash.clone()));
+        o.set("preview", Value::str(self.preview.clone()));
+        o.set(
+            "app",
+            match &self.app {
+                Some(app) => Value::str(app.clone()),
+                None => Value::Null,
+            },
+        );
+        o.set(
+            "scopes",
+            Value::Array(self.scopes.iter().map(|s| Value::str(s.clone())).collect()),
+        );
+        o.set(
+            "expiresAt",
+            match self.expires_at {
+                Some(at) => Value::Int(at),
+                None => Value::Null,
+            },
+        );
+        o.set("createdAt", Value::str(self.created_at.clone()));
+        o.set(
+            "lastUsedAt",
+            match self.last_used_at {
+                Some(at) => Value::Int(at),
+                None => Value::Null,
+            },
+        );
+        o.set("revoked", Value::Bool(self.revoked));
+        Value::Object(o)
+    }
+
+    /// The key as it is now: bound to an app.
+    ///
+    /// The hash comes along, so a key that was working before the
+    /// change keeps working: the secret that was shown once still is
+    /// the secret that is accepted.
+    pub fn bind(&self, app: &str) -> ApiKey {
+        ApiKey {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            hash: self.hash.clone(),
+            preview: self.preview.clone(),
+            app: app.to_string(),
+            scopes: self.scopes.clone(),
+            expires_at: self.expires_at,
+            created_at: self.created_at.clone(),
+            last_used_at: self.last_used_at,
+            revoked: self.revoked,
+        }
+    }
+}
+
 /// The hash of a key, as base64url of its SHA-256.
 pub fn hash_of(secret: &str) -> String {
     b64url_encode(&sha256(secret.as_bytes()))
@@ -267,8 +396,11 @@ pub fn hash_of(secret: &str) -> String {
 
 /// The first few characters of a key, for showing in a list.
 ///
-/// Enough to tell two keys apart; far too little to use one.
-fn preview_of(secret: &str) -> String {
+/// Enough to tell two keys apart; far too little to use one. It is also
+/// how the platform finds the app a presented key belongs to: the
+/// directory is keyed by it, and a directory entry cannot be used as a
+/// key.
+pub fn preview_of(secret: &str) -> String {
     let material = secret.strip_prefix(KEY_PREFIX).unwrap_or(secret);
     let head: String = material.chars().take(6).collect();
     format!("{KEY_PREFIX}{head}…")
@@ -302,7 +434,7 @@ mod tests {
 
     #[test]
     fn a_key_verifies_only_itself() {
-        let (record, secret) = ApiKey::create("deploy", None, vec![], None, 1_700_000_000);
+        let (record, secret) = ApiKey::create("deploy", "app_1", vec![], None, 1_700_000_000);
         assert!(record.verify(&secret));
         assert!(!record.verify("nbk_something_else"));
         assert!(!record.verify(""));
@@ -310,7 +442,7 @@ mod tests {
 
     #[test]
     fn a_key_never_stores_itself() {
-        let (record, secret) = ApiKey::create("deploy", None, vec![], None, 1_700_000_000);
+        let (record, secret) = ApiKey::create("deploy", "app_1", vec![], None, 1_700_000_000);
         let stored = mosql::to_json(&record.to_stored_value());
         assert!(!stored.contains(&secret), "the key is not in the record");
         assert!(stored.contains(&record.hash), "the hash is");
@@ -318,7 +450,7 @@ mod tests {
 
     #[test]
     fn a_key_expires_on_its_own() {
-        let (record, _) = ApiKey::create("deploy", None, vec![], Some(1_700_000_000), 0);
+        let (record, _) = ApiKey::create("deploy", "app_1", vec![], Some(1_700_000_000), 0);
         assert!(!record.is_expired(1_699_999_999));
         assert!(record.is_expired(1_700_000_000));
         assert!(record.is_expired(1_700_000_001));
@@ -326,7 +458,7 @@ mod tests {
 
     #[test]
     fn a_key_without_an_expiry_never_expires() {
-        let (record, _) = ApiKey::create("deploy", None, vec![], None, 0);
+        let (record, _) = ApiKey::create("deploy", "app_1", vec![], None, 0);
         assert!(!record.is_expired(i64::MAX));
     }
 
@@ -334,7 +466,7 @@ mod tests {
     fn scopes_are_exact() {
         let (record, _) = ApiKey::create(
             "read only",
-            None,
+            "app_1",
             vec![SCOPE_ROWS_READ.to_string()],
             None,
             0,
@@ -346,7 +478,7 @@ mod tests {
 
     #[test]
     fn an_admin_key_may_do_everything() {
-        let (record, _) = ApiKey::create("root", None, vec![SCOPE_ADMIN.to_string()], None, 0);
+        let (record, _) = ApiKey::create("root", "app_1", vec![SCOPE_ADMIN.to_string()], None, 0);
         assert!(record.allows(SCOPE_APPS_WRITE));
         assert!(record.allows(SCOPE_ROWS_WRITE));
         assert!(record.allows(SCOPE_ADMIN));
@@ -354,7 +486,7 @@ mod tests {
 
     #[test]
     fn a_key_with_no_scopes_may_do_nothing() {
-        let (record, _) = ApiKey::create("empty", None, vec![], None, 0);
+        let (record, _) = ApiKey::create("empty", "app_1", vec![], None, 0);
         assert!(!record.allows(SCOPE_ROWS_READ));
         assert!(!record.allows(SCOPE_ADMIN));
     }
@@ -362,7 +494,7 @@ mod tests {
     #[test]
     fn a_revoked_key_may_do_nothing() {
         let (mut record, _) =
-            ApiKey::create("revoked", None, vec![SCOPE_ADMIN.to_string()], None, 0);
+            ApiKey::create("revoked", "app_1", vec![SCOPE_ADMIN.to_string()], None, 0);
         assert!(record.allows(SCOPE_ADMIN));
         record.revoked = true;
         assert!(!record.allows(SCOPE_ADMIN));
@@ -373,7 +505,7 @@ mod tests {
     fn a_key_survives_the_round_trip() {
         let (record, _) = ApiKey::create(
             "deploy",
-            Some("app_123".to_string()),
+            "app_123",
             vec![SCOPE_ROWS_READ.to_string(), SCOPE_ROWS_WRITE.to_string()],
             Some(1_800_000_000),
             1_700_000_000,
@@ -391,7 +523,7 @@ mod tests {
 
     #[test]
     fn a_key_is_shaped_like_a_key() {
-        let (_, secret) = ApiKey::create("deploy", None, vec![], None, 0);
+        let (_, secret) = ApiKey::create("deploy", "app_1", vec![], None, 0);
         assert!(looks_like_a_key(&secret));
         assert!(!looks_like_a_key("eyJhbGciOiJIUzI1NiJ9.abc.def"));
         assert!(!looks_like_a_key("nbk_short"));
@@ -408,8 +540,8 @@ mod tests {
 
     #[test]
     fn the_preview_shows_only_the_beginning() {
-        let (_, secret) = ApiKey::create("deploy", None, vec![], None, 0);
-        let (record, _) = ApiKey::create("deploy", None, vec![], None, 0);
+        let (_, secret) = ApiKey::create("deploy", "app_1", vec![], None, 0);
+        let (record, _) = ApiKey::create("deploy", "app_1", vec![], None, 0);
         assert!(record.preview.starts_with(KEY_PREFIX));
         assert!(record.preview.len() < secret.len());
     }

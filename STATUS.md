@@ -152,6 +152,33 @@ walkthrough: build, `init`, `serve`, create the app, put rows in it with
 so the page is served over HTTP rather than from the disk, because a
 `file://` page cannot read an `http://` answer.
 
+### An app's own rules
+
+An app may say who may do what with its rows. The rules are JSON in the
+app's document (`config.acl`), the evaluator is `uflite`'s, and the
+answer is the same in every engine — the rules are about the rows, not
+about the database they are in.
+
+| rule | what it does |
+| --- | --- |
+| `role:resource:method` | `editor:tasks:update` — the role may update the `tasks` resource. A `*` is a wildcard |
+| `{{user}}` and `{{role}}` | the caller's own id and role, substituted before the rule is judged |
+| a **deny** rule | beats every allow: the rules are OR-ed for allows, and a deny is final |
+
+A check is made against **the row**, not the request: a rule that says
+"you may change a task that is not done" is about the row's state now.
+A list is filtered row by row **before** the page is taken, so the page
+a caller sees is a page of rows they may see. The platform owner is
+above the rules — the owner wrote them — and so is a credential with the
+`admin` scope. An app with no rules, or with them switched off, is open.
+
+| file | what it is |
+| --- | --- |
+| `nanobase/src/acl.rs` | the policy, the caller, the substitutions, the checks, the list filter |
+| `nanobase/src/service.rs` | the enforced methods: every row operation is made through them |
+| `uflite/src/acl.rs` | the evaluator both editions share |
+| `nanobase/tests/acl.rs` | 6 tests: hidden rows, unmatched rules, the owner, refused writes, ownership, an open app |
+
 ### API keys
 
 A **session token** is a person. An **API key** is a program. Until now
@@ -160,15 +187,24 @@ script, a cron job — anything that is not the owner — had to borrow the
 owner's token, which is the platform's most powerful credential and the
 one with the longest life.
 
-An API key is made in the console (**API keys** in the sidebar) or from
-the command line (`nanobase key create`), and it can be limited in four
-ways:
+**A key belongs to exactly one app.** It is made for that app, it may
+only see that app, it lists that app only, and it lives in that app's
+own database — in the internal collection `_api_keys`, which is not one
+of the app's collections and which the row routes refuse. The platform
+keeps a **directory**: the app, the key's preview and the id of the row
+that holds the key. The hash, the scopes and the expiry are in the app's
+database and nowhere else, so a platform file that is read cannot be
+used to work out anybody's key.
+
+A key is made in the console (**API keys** in the sidebar) or from the
+command line (`nanobase key create APP --name …`), and it can be limited
+in four ways:
 
 | limit | what it does |
 | --- | --- |
 | a **name** | so the key can be found in a list six months later |
 | **scopes** | `apps:read`, `apps:write`, `rows:read`, `rows:write`, `admin` — a key that may only read rows may not read the app list, and says so with `403` |
-| an **app** | a key bound to one app sees that app only, and lists that app only |
+| its **app** | a key belongs to one app: it sees that app only, and lists that app only |
 | an **expiry** | a date after which the key is refused with `401 EXPIRED_KEY` |
 
 The secret is shown **once**, at the moment it is made, and only its
@@ -178,13 +214,29 @@ with `401 REVOKED_KEY`. The owner's token still exists and still works
 for the privileged operations — making and revoking keys, and everything
 else — but it is no longer the credential a program is expected to hold.
 
+| route | what it does |
+| --- | --- |
+| `GET /api/apps/{app}/keys` | the app's keys, without their hashes |
+| `POST /api/apps/{app}/keys` | make a key; the secret is in the answer and nowhere else |
+| `GET, PATCH, DELETE /api/apps/{app}/keys/{id}` | one key: read it, change it, remove it |
+
+**A platform from before this change is not stranded.** Its keys are
+read into a legacy list and moved into the apps they named — the hash
+comes with them, so a secret that was shown once still works. A key that
+named no app was made for the whole platform, which a key no longer is:
+it waits, the platform says so when it starts, and
+`nanobase key bind APP ID` gives it an app.
+
 | file | what it is |
 | --- | --- |
 | `nanobase/src/apikey.rs` | the key: its hash, its scopes, its app, its expiry, its revocation |
+| `nanobase/src/keys.rs` | the key's row in the app's own database, and the collection it lives in |
+| `nanobase/src/platform.rs` | the directory: which app a presented key belongs to, and which row holds it |
+| `nanobase/src/service.rs` | the key lifecycle, and the migration of an older platform's keys |
 | `nanobase/src/api.rs` | the principal: the owner token or an API key, and what each may do |
-| `nanobase/src/store.rs` | the native SQLite store, with the `api_keys` table |
-| `nanobase/src/store_serverless.rs` | the serverless store, with the same collection |
-| `nanobase/tests/apikeys.rs` | 14 tests: the lifecycle, the scopes, the app binding, the expiry, the revocation |
+| `nanobase/src/store.rs` | the native SQLite store: the directory in `meta`, the old keys in `api_keys` until they are moved |
+| `nanobase/src/store_serverless.rs` | the serverless store, with the same shape |
+| `nanobase/tests/apikeys.rs` | 20 tests: the lifecycle, the scopes, the app binding, the expiry, the revocation, the restart, the migration |
 
 ### The serverless drivers
 
@@ -349,7 +401,7 @@ full edition only, and they are what the full edition grew by.
 | `mosql` | `rust/verify.sh` — fmt, clippy, the tests, **289 builder fixtures and 153 memory fixtures regenerated** against the JavaScript, a `no_std` build and a publish dry-run |
 | `uflite` | `uflite/verify.sh` |
 | `schemaless` | `schemaless/verify.sh` |
-| `nanobase` | `nanobase/verify.sh` — fmt, clippy, the tests, **a `serverless` stage that compiles and tests the second edition**, no external dependencies, a publish dry-run, and a size budget that measures **both** binaries and fails if the serverless one is not smaller. `nanobase/tests/console.rs` covers the console, the security headers, the CORS rules, the rate limit, the search and paging, and the database connection test |
+| `nanobase` | `nanobase/verify.sh` — fmt, clippy, the tests, **a `serverless` stage that compiles and tests the second edition**, no external dependencies, a publish dry-run, and a size budget that measures **both** binaries and fails if the serverless one is not smaller. **339 tests**: `nanobase/tests/console.rs` covers the console, the security headers, the CORS rules, the rate limit, the search and paging, and the database connection test; `nanobase/tests/acl.rs` covers an app's own rules; `nanobase/tests/apikeys.rs` covers the keys |
 | `better-auth-core` | `better-auth-core/verify.sh` — plus the official `better-auth@1.7.27` client driving the release binary over HTTP: 22/22 |
 | `worker` | `worker/verify.sh` and `worker/test.sh` — fmt, clippy, the protocol tests, the schema test, the end-to-end Wrangler run, and a check on the module's import section |
 | `mosql-core` | `mosql-core/verify.sh` — fmt, clippy, the tests, a dependency check that refuses a registry dependency, a **wasm32 build with the standard library switched off**, and a stage that compiles every optional transport |

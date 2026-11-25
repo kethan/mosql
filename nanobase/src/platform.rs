@@ -24,7 +24,6 @@ use std::pin::Pin;
 use mosql::{to_json, Object, Value};
 use uflite::error::{Error, Result};
 
-use crate::apikey::ApiKey;
 use crate::clone::{ClonePlan, CloneRequest};
 use crate::config::AppDoc;
 use crate::crypto::{b64url_decode, b64url_encode, ct_eq, pbkdf2_sha256, random_bytes, random_id};
@@ -199,8 +198,100 @@ pub struct Platform {
     pub jwt_secret: String,
     pub users: Vec<User>,
     pub apps: Vec<AppRecord>,
-    /// The API keys the owner has made.
-    pub api_keys: Vec<ApiKey>,
+    /// Where each app's API keys are.
+    ///
+    /// A directory, not a copy. The preview is public — the console
+    /// shows it, and it is the first few characters of a key — and the
+    /// id says which row in the app's own database holds the key. The
+    /// hash, the scopes and the expiry are in the app's database and
+    /// nowhere else, so a platform whose file is read cannot be used to
+    /// work out anybody's key.
+    pub key_index: Vec<KeyDirectory>,
+    /// The keys an older platform kept, waiting to be moved.
+    ///
+    /// The platform used to keep every key in one list of its own, and
+    /// a key could be made for the whole platform rather than for one
+    /// app. A key now belongs to an app and lives in that app's
+    /// database, so a platform file from before that change is read
+    /// into this list first. The keys here are moved into their app by
+    /// [`crate::service::Service::migrate_keys`]; a key that named no
+    /// app waits until somebody says which app it is for, rather than
+    /// being dropped.
+    pub legacy_keys: Vec<crate::apikey::LegacyKey>,
+}
+
+/// One app's API keys, as the platform knows them.
+///
+/// The directory is a list of previews and the ids of the rows they
+/// point at. It exists so a presented key can be traced to the app
+/// that owns it without opening every app's database; it is not a copy
+/// of the key and cannot be used as one.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct KeyDirectory {
+    /// The app the keys belong to.
+    pub app: String,
+    /// The keys: the preview, and the id of the row in the app's own
+    /// database.
+    pub keys: Vec<(String, String)>,
+    /// Bumped whenever the app's keys change.
+    ///
+    /// A cached decision about a key — "this secret is this key" — is
+    /// only good while the version it was made under still stands, so a
+    /// key that is revoked is refused at once rather than when the
+    /// cache happens to expire.
+    pub version: u64,
+}
+
+impl KeyDirectory {
+    /// A directory for an app.
+    pub fn new(app: impl Into<String>) -> KeyDirectory {
+        KeyDirectory {
+            app: app.into(),
+            keys: Vec::new(),
+            version: 0,
+        }
+    }
+
+    /// The key as the world sees it: never the hash.
+    pub fn to_value(&self) -> Value {
+        let mut o = Object::new();
+        o.set("app", Value::str(self.app.clone()));
+        o.set(
+            "keys",
+            Value::Array(
+                self.keys
+                    .iter()
+                    .map(|(preview, id)| {
+                        let mut k = Object::new();
+                        k.set("preview", Value::str(preview.clone()));
+                        k.set("id", Value::str(id.clone()));
+                        Value::Object(k)
+                    })
+                    .collect(),
+            ),
+        );
+        o.set("version", Value::Int(self.version as i64));
+        Value::Object(o)
+    }
+
+    /// Read a directory.
+    pub fn from_value(v: &Value) -> Option<KeyDirectory> {
+        let o = v.as_object()?;
+        let mut keys = Vec::new();
+        if let Some(Value::Array(list)) = o.get("keys") {
+            for item in list {
+                let entry = item.as_object()?;
+                let preview = entry.get("preview")?.as_str()?.to_string();
+                let id = entry.get("id")?.as_str()?.to_string();
+                keys.push((preview, id));
+            }
+        }
+        Some(KeyDirectory {
+            app: o.get("app")?.as_str()?.to_string(),
+            keys,
+            version: o.get("version").and_then(|v| v.as_f64()).unwrap_or(0.0) as u64,
+        })
+    }
 }
 
 impl Platform {
@@ -217,9 +308,18 @@ impl Platform {
             Value::Array(self.apps.iter().map(AppRecord::to_value).collect()),
         );
         o.set(
-            "apiKeys",
-            Value::Array(self.api_keys.iter().map(ApiKey::to_stored_value).collect()),
+            "keyIndex",
+            Value::Array(self.key_index.iter().map(KeyDirectory::to_value).collect()),
         );
+        // The old keys are written back while any are left, so a
+        // platform that has not been migrated yet does not lose them
+        // the first time it is saved.
+        if !self.legacy_keys.is_empty() {
+            o.set(
+                "apiKeys",
+                Value::Array(self.legacy_keys.iter().map(|k| k.to_value()).collect()),
+            );
+        }
         Value::Object(o)
     }
 
@@ -248,10 +348,20 @@ impl Platform {
                 })?);
             }
         }
-        let mut api_keys = Vec::new();
+        let mut key_index = Vec::new();
+        if let Some(Value::Array(list)) = o.get("keyIndex") {
+            for item in list {
+                key_index.push(KeyDirectory::from_value(item).ok_or_else(|| {
+                    Error::internal("platform file has a key directory that cannot be read")
+                })?);
+            }
+        }
+        // The keys of an older platform, which are moved into their
+        // apps rather than lost.
+        let mut legacy_keys = Vec::new();
         if let Some(Value::Array(list)) = o.get("apiKeys") {
             for item in list {
-                api_keys.push(ApiKey::from_value(item).ok_or_else(|| {
+                legacy_keys.push(crate::apikey::LegacyKey::from_value(item).ok_or_else(|| {
                     Error::internal("platform file has an API key that cannot be read")
                 })?);
             }
@@ -260,7 +370,8 @@ impl Platform {
             jwt_secret,
             users,
             apps,
-            api_keys,
+            key_index,
+            legacy_keys,
         })
     }
 
@@ -781,6 +892,80 @@ impl Platform {
         }
         self.apps[index].doc = doc;
         Ok(&self.apps[index])
+    }
+
+    // ------------------------------------------------------------- keys ---
+
+    /// The directory for an app's keys.
+    pub fn key_directory(&self, app: &str) -> Option<&KeyDirectory> {
+        self.key_index.iter().find(|d| d.app == app)
+    }
+
+    /// The apps a presented key might belong to, and the rows that hold
+    /// them.
+    ///
+    /// The preview is the first few characters of the key, which the
+    /// console shows anyway; it says which app to ask, and the row's id
+    /// says which row to read. Nothing here can be used as a key.
+    ///
+    /// There is usually one answer. Two keys may share a preview — it
+    /// is a few characters, not the whole key — so every answer is
+    /// returned, and the secret itself decides between them.
+    pub fn find_keys(&self, preview: &str) -> Vec<(String, String)> {
+        let mut found = Vec::new();
+        for directory in &self.key_index {
+            for (known, id) in &directory.keys {
+                if known == preview {
+                    found.push((directory.app.clone(), id.clone()));
+                }
+            }
+        }
+        found
+    }
+
+    /// Remember that an app has a key.
+    ///
+    /// The version goes up, so anything cached about the app's keys is
+    /// known to be stale.
+    pub fn register_key(&mut self, app: &str, preview: &str, id: &str) {
+        let index = match self.key_index.iter().position(|d| d.app == app) {
+            Some(index) => index,
+            None => {
+                self.key_index.push(KeyDirectory::new(app));
+                self.key_index.len() - 1
+            }
+        };
+        let directory = &mut self.key_index[index];
+        directory.keys.retain(|(_, known)| known != id);
+        directory.keys.push((preview.to_string(), id.to_string()));
+        directory.version += 1;
+    }
+
+    /// Forget a key.
+    pub fn unregister_key(&mut self, app: &str, id: &str) {
+        let Some(index) = self.key_index.iter().position(|d| d.app == app) else {
+            return;
+        };
+        let directory = &mut self.key_index[index];
+        directory.keys.retain(|(_, known)| known != id);
+        directory.version += 1;
+    }
+
+    /// Forget every key of an app.
+    ///
+    /// What happens when an app is removed: the rows are in the app's
+    /// own database and go with it, and the directory stops pointing at
+    /// them.
+    pub fn forget_app_keys(&mut self, app: &str) {
+        self.key_index.retain(|d| d.app != app);
+    }
+
+    /// The version of an app's key directory.
+    ///
+    /// Zero when the app has no directory: there are no keys, so there
+    /// is nothing cached that could be stale.
+    pub fn key_version(&self, app: &str) -> u64 {
+        self.key_directory(app).map(|d| d.version).unwrap_or(0)
     }
 
     /// App names, sorted case-insensitively, for listing.

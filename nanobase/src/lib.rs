@@ -20,6 +20,7 @@
 // `service` are the platform server; `sqlite` and `store` are the local
 // database. A Worker has neither: the platform provides the database and
 // the network, so those modules are not compiled into it at all.
+pub mod acl;
 #[cfg(feature = "native")]
 pub mod api;
 pub mod apikey;
@@ -40,6 +41,7 @@ pub mod db;
 pub mod http;
 pub mod httpclient;
 pub mod jwt;
+pub mod keys;
 pub mod platform;
 #[cfg(any(feature = "native", feature = "serverless"))]
 pub mod service;
@@ -54,6 +56,7 @@ pub mod store;
 pub mod store_serverless;
 pub mod wire;
 
+pub use acl::Caller;
 #[cfg(feature = "native")]
 pub use api::{Api, Principal};
 pub use apikey::ApiKey;

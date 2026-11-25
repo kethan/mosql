@@ -107,6 +107,8 @@
     list: { search: "", page: 1, perPage: 12, total: 0, pages: 1 },
     apps: [],
     keys: [],
+    keyApp: "",
+    keyApps: [],
   };
 
   var dom = {};
@@ -281,15 +283,69 @@
         el("p", {
           class: "section-note",
           text:
-            "A key may be limited to one app, limited to what it may do, and " +
-            "made to expire on its own. The key itself is shown once, when it " +
-            "is made.",
+            "A key belongs to one app: it may only see that app, it may be " +
+            "limited to what it may do, and it may be made to expire on its " +
+            "own. The key itself is shown once, when it is made.",
         }),
+        el("label", { class: "field" }, [
+          el("span", { text: "App" }),
+          el("select", {
+            id: "key-app",
+            on: {
+              change: function (event) {
+                state.keyApp = event.target.value;
+                loadKeys();
+              },
+            },
+          }),
+        ]),
         el("div", { id: "key-list" }, [el("p", { class: "muted small", text: "Loading…" })]),
       ])
     );
 
-    api("GET", "/api/keys")
+    // The apps a key may belong to.
+    api("GET", "/api/apps?perPage=200")
+      .then(function (result) {
+        state.keyApps = result.items || [];
+        var picker = document.getElementById("key-app");
+        if (!picker) return;
+        clear(picker);
+        if (!state.keyApps.length) {
+          picker.appendChild(
+            el("option", { value: "", text: "no apps yet" })
+          );
+          state.keyApp = "";
+          clear(document.getElementById("key-list")).appendChild(
+            el("p", {
+              class: "muted small",
+              text: "Make an app first: a key belongs to one.",
+            })
+          );
+          return;
+        }
+        state.keyApps.forEach(function (item) {
+          var label =
+            (item.doc && item.doc.app && item.doc.app.name) || item.id;
+          picker.appendChild(el("option", { value: item.id, text: label }));
+        });
+        if (!state.keyApp) {
+          state.keyApp = state.keyApps[0].id;
+        }
+        picker.value = state.keyApp;
+        loadKeys();
+      })
+      .catch(function (error) {
+        clear(document.getElementById("key-list")).appendChild(
+          el("p", { class: "error", text: error.message })
+        );
+      });
+  }
+
+  /** The keys of the app that is being looked at. */
+  function loadKeys() {
+    var box = document.getElementById("key-list");
+    if (!box || !state.keyApp) return;
+    api("GET", "/api/apps/" + encodeURIComponent(state.keyApp) + "/keys")
       .then(function (result) {
         state.keys = result.items || [];
         drawKeys();
@@ -307,7 +363,7 @@
       box.appendChild(
         el("p", {
           class: "muted small",
-          text: "No keys yet. Make one for the programs that talk to this platform.",
+          text: "No keys yet. Make one for the programs that talk to this app.",
         })
       );
       return;
@@ -339,8 +395,7 @@
           el("p", {
             class: "small muted",
             text:
-              "app: " + (key.app || "any") +
-              " · expires: " + (key.expiresAt || "never") +
+              "expires: " + (key.expiresAt || "never") +
               " · last used: " + (key.lastUsedAt || "never"),
           }),
         ])
@@ -350,17 +405,18 @@
 
   function removeKey(key) {
     if (!window.confirm('Remove the key "' + key.name + '"?')) return;
-    api("DELETE", "/api/keys/" + encodeURIComponent(key.id))
+    var app = key.app || state.keyApp;
+    api("DELETE", "/api/apps/" + encodeURIComponent(app) + "/keys/" + encodeURIComponent(key.id))
       .then(function () {
         toast("The key is removed.");
-        renderKeys(clear(dom.panel));
+        loadKeys();
       })
       .catch(function (error) { toast(error.message, true); });
   }
 
   function openCreateKeyDialog() {
     var name = el("input", { type: "text", placeholder: "the deploy script" });
-    var app = el("select", {}, [el("option", { value: "", text: "any app" })]);
+    var app = el("select", {}, []);
     var expires = el("select", {}, [
       el("option", { value: "30", text: "in 30 days" }),
       el("option", { value: "7", text: "in 7 days" }),
@@ -406,15 +462,23 @@
               }
               var days = parseInt(expires.value, 10) || 0;
               var body = { name: name.value.trim(), scopes: scopes };
-              if (app.value) body.app = app.value;
               if (days > 0) {
                 body.expiresAt = Math.floor(Date.now() / 1000) + days * 86400;
               }
-              api("POST", "/api/keys", body)
+              if (!app.value) {
+                toast("A key belongs to an app: choose one", true);
+                return;
+              }
+              api(
+                "POST",
+                "/api/apps/" + encodeURIComponent(app.value) + "/keys",
+                body
+              )
                 .then(function (result) {
                   closeDialog();
                   showSecret(result.secret);
-                  renderKeys(clear(dom.panel));
+                  state.keyApp = app.value;
+                  loadKeys();
                 })
                 .catch(function (error) { toast(error.message, true); });
             },
@@ -435,7 +499,7 @@
     });
     document.body.appendChild(backdrop);
 
-    // The apps the key may be limited to.
+    // The apps the key may belong to.
     api("GET", "/api/apps?perPage=200")
       .then(function (result) {
         (result.items || []).forEach(function (item) {
@@ -443,6 +507,7 @@
             (item.doc && item.doc.app && item.doc.app.name) || item.id;
           app.appendChild(el("option", { value: item.id, text: label }));
         });
+        if (state.keyApp) app.value = state.keyApp;
       })
       .catch(function () { /* the list is a convenience, not a requirement */ });
   }

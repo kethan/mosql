@@ -164,12 +164,28 @@ impl SqliteStore {
         let mut platform = Platform::default();
 
         for row in conn.query("SELECT key, value FROM meta", &[])? {
-            if row.get("key").and_then(Value::as_str) == Some("jwtSecret") {
-                platform.jwt_secret = row
-                    .get("value")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
+            let Some(name) = row.get("key").and_then(Value::as_str) else {
+                continue;
+            };
+            let value = row.get("value").and_then(Value::as_str).unwrap_or_default();
+            match name {
+                "jwtSecret" => platform.jwt_secret = value.to_string(),
+                // Where each app's keys are: a directory of previews and
+                // row ids, and nothing that can be used as a key.
+                "keyIndex" => {
+                    let parsed = mosql::parse_json(value)
+                        .map_err(|_| Error::internal("meta.keyIndex is not JSON"))?;
+                    if let Value::Array(list) = parsed {
+                        for item in list {
+                            let directory = crate::platform::KeyDirectory::from_value(&item)
+                                .ok_or_else(|| {
+                                    Error::internal("meta.keyIndex has a bad directory")
+                                })?;
+                            platform.key_index.push(directory);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -211,6 +227,10 @@ impl SqliteStore {
             });
         }
 
+        // The keys of an older platform, which lived in the platform's
+        // own table. They are read into the legacy list and moved into
+        // their apps; the table is kept so nothing is lost before that
+        // happens.
         for row in conn.query(
             "SELECT id, name, hash, preview, app, scopes, expires_at, created_at,
                     last_used_at, revoked
@@ -224,7 +244,7 @@ impl SqliteStore {
                     .ok_or_else(|| Error::internal(format!("api_keys.{name} is not text")))
             };
             let scopes = text("scopes")?;
-            platform.api_keys.push(crate::apikey::ApiKey {
+            platform.legacy_keys.push(crate::apikey::LegacyKey {
                 id: text("id")?,
                 name: text("name")?,
                 hash: text("hash")?,
@@ -332,7 +352,26 @@ impl SqliteStore {
                 )?;
             }
 
-            for key in &platform.api_keys {
+            // Where each app's keys are. The directory holds a preview
+            // and a row id — nothing that can be used as a key.
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES (?1, ?2)",
+                &[
+                    Value::str("keyIndex"),
+                    Value::str(mosql::to_json(&Value::Array(
+                        platform
+                            .key_index
+                            .iter()
+                            .map(crate::platform::KeyDirectory::to_value)
+                            .collect(),
+                    ))),
+                ],
+            )?;
+
+            // The keys of an older platform, which have not been moved
+            // into their apps yet. They stay in the table until they
+            // have, so nothing is lost in the meantime.
+            for key in &platform.legacy_keys {
                 conn.execute(
                     "INSERT INTO api_keys
                      (id, name, hash, preview, app, scopes, expires_at, created_at,
