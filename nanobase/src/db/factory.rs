@@ -148,13 +148,27 @@ fn open_inner(config: &DatabaseConfig, path: &Path, client: MaybeClient) -> Resu
     }
 }
 
+/// Does this URL need a client that can do TLS?
+///
+/// A `https://` URL plainly does. A *provider* URL — `postgres://`,
+/// `mysql://`, `libsql://`, `d1://` — names a database rather than a
+/// service, and the request goes to that database over HTTPS: every
+/// one of them does, and the plain socket client would refuse it.
+///
+/// The URL that decides is the one the request will use, and for a
+/// provider that is not the URL that was given.
+#[cfg(feature = "curl")]
+fn needs_tls(url: &str) -> bool {
+    url.starts_with("https://") || crate::db::provider::is_provider_url(url)
+}
+
 /// The client the host uses for a URL.
 ///
 /// `https://` needs TLS, and the TLS this build has is `curl`'s.
 /// `http://` is a plain socket, and the plain socket client is enough.
 #[cfg(feature = "curl")]
 fn default_client(url: &str) -> Arc<dyn HttpClient> {
-    if url.starts_with("https://") {
+    if needs_tls(url) {
         Arc::new(crate::httpclient::CurlHttpClient)
     } else {
         #[cfg(feature = "native")]
@@ -349,6 +363,24 @@ mod tests {
             with_token("d1://acct:one@api.cloudflare.com/mydb", Some("two")),
             "d1://acct:one@api.cloudflare.com/mydb"
         );
+    }
+
+    #[test]
+    fn a_provider_url_needs_a_client_that_can_do_tls() {
+        // A provider URL names a database, and the request goes to that
+        // database over HTTPS — every one of them does. The plain
+        // socket client would refuse it, so the choice of client has to
+        // be made by what the request will use, not by the URL as it
+        // was written.
+        assert!(needs_tls("https://db.example.com"));
+        assert!(needs_tls("postgres://host/mydb"));
+        assert!(needs_tls("postgresql://host/mydb"));
+        assert!(needs_tls("mysql://host/mydb"));
+        assert!(needs_tls("libsql://db.turso.io"));
+        assert!(needs_tls("d1://acct@api.cloudflare.com/mydb"));
+        // A service in front of a database is reached over plain HTTP
+        // when it says so.
+        assert!(!needs_tls("http://db.example.com/app"));
     }
 
     #[test]
