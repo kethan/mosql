@@ -63,11 +63,12 @@ USAGE:
     }
     text.push_str(
         r#"KEYS:
-    nanobase key list                                         the API keys
-    nanobase key create --name N [--app A] [--scopes a,b]     make a key
+    nanobase key list <app>                                   an app's API keys
+    nanobase key create <app> --name N [--scopes a,b]         make a key
                       [--expires-in 30d]
-    nanobase key show <id>                                    one key, in detail
-    nanobase key remove <id>                                  remove a key
+    nanobase key show <app> <id>                              one key, in detail
+    nanobase key remove <app> <id>                            remove a key
+    nanobase key bind <app> <id>                              give an old key an app
 
 "#,
     );

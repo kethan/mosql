@@ -137,6 +137,24 @@ are the platform's own code, in `nanobase/src/middleware.rs`, with the
 headers, the CORS rules and the sliding window each in one place and a
 test beside it.
 
+**A second leak found and closed.** An app's document holds its database
+password, its token and its storage keys, and the API handed the whole
+document to anybody who could read the app list: a program holding
+`apps:read` could read every app's credentials. The export was
+redacted; the API was not.
+
+The document the API hands out now has its secrets taken out, the same
+way the shareable export does — the URL is still there, because it says
+which database it is, but not the password in it. Beside the document
+the answer says which fields hold a secret (`config.database.token`, and
+so on), so an editor can say "there is a token here" without being told
+the token. The **owner** — the platform's own root credential — may ask
+for them with `?includeSecrets=true`; a program with a key may not, and
+is told so. The console sends only the fields a person actually
+changed, so a save that did not mean to touch a secret does not wipe it,
+and the connection test uses the platform's own password rather than the
+client's.
+
 **One leak found and closed.** `User::to_value` said "never the password
 hash" in its own comment and then put the hash — and the salt — into
 every answer that carried a user. `POST /api/auth/login` and
@@ -401,7 +419,7 @@ full edition only, and they are what the full edition grew by.
 | `mosql` | `rust/verify.sh` — fmt, clippy, the tests, **289 builder fixtures and 153 memory fixtures regenerated** against the JavaScript, a `no_std` build and a publish dry-run |
 | `uflite` | `uflite/verify.sh` |
 | `schemaless` | `schemaless/verify.sh` |
-| `nanobase` | `nanobase/verify.sh` — fmt, clippy, the tests, **a `serverless` stage that compiles and tests the second edition**, no external dependencies, a publish dry-run, and a size budget that measures **both** binaries and fails if the serverless one is not smaller. **339 tests**: `nanobase/tests/console.rs` covers the console, the security headers, the CORS rules, the rate limit, the search and paging, and the database connection test; `nanobase/tests/acl.rs` covers an app's own rules; `nanobase/tests/apikeys.rs` covers the keys |
+| `nanobase` | `nanobase/verify.sh` — fmt, clippy, the tests, **a `serverless` stage that compiles and tests the second edition**, no external dependencies, a publish dry-run, and a size budget that measures **both** binaries and fails if the serverless one is not smaller. **347 tests**: `nanobase/tests/console.rs` covers the console, the security headers, the CORS rules, the rate limit, the search and paging, and the database connection test; `nanobase/tests/acl.rs` covers an app's own rules; `nanobase/tests/apikeys.rs` covers the keys; `nanobase/tests/redaction.rs` covers the app's secrets |
 | `better-auth-core` | `better-auth-core/verify.sh` — plus the official `better-auth@1.7.27` client driving the release binary over HTTP: 22/22 |
 | `worker` | `worker/verify.sh` and `worker/test.sh` — fmt, clippy, the protocol tests, the schema test, the end-to-end Wrangler run, and a check on the module's import section |
 | `mosql-core` | `mosql-core/verify.sh` — fmt, clippy, the tests, a dependency check that refuses a registry dependency, a **wasm32 build with the standard library switched off**, and a stage that compiles every optional transport |

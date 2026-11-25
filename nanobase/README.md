@@ -58,21 +58,26 @@ makes a key for the thing that needs one, and the key can be limited:
 | limit | what it does |
 | --- | --- |
 | a **name** | so the key can be found in a list six months later |
-| an **app** | the key may only touch that app, and may only see that app in a list |
+| its **app** | a key belongs to one app: it may only touch that app, and may only see that app in a list |
 | a **scope** | `rows:read`, `rows:write`, `apps:read`, `apps:write`, `admin` |
 | an **expiry** | the key stops working on its own |
 
 ```
-nanobase key create --name "the deploy script" --app todos --scopes rows:read,rows:write --expires-in 30d
-nanobase key list
-nanobase key show key_djf2qK9rsqIK
-nanobase key remove key_djf2qK9rsqIK
+nanobase key create todos --name "the deploy script" --scopes rows:read,rows:write --expires-in 30d
+nanobase key list todos
+nanobase key show todos key_djf2qK9rsqIK
+nanobase key remove todos key_djf2qK9rsqIK
 ```
 
 The key is shown once, when it is made. The platform keeps a hash of it,
 so there is no second chance to read it — the same bargain as a
 password, except that the hash is a fast SHA-256 rather than a slow
 PBKDF2, because there is nothing to guess about 256 random bits.
+
+The key itself lives in the app's own database, beside that app's rows,
+and the platform keeps only a directory of which keys exist and which
+app they belong to. A platform file that is read cannot be used to work
+out anybody's key.
 
 A key goes in a request like a token:
 
