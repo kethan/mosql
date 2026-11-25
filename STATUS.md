@@ -45,13 +45,13 @@ each one is allowed to reach for.
 
 | | **full** — `nanobase` | **serverless** — `nanobase-serverless` |
 | --- | --- | --- |
-| Release size | 1,983,408 bytes (1.89 MiB) | 836,896 bytes (817 KiB) — **42 % of the full one** |
+| Release size | 2,199,184 bytes (2.10 MiB) | 996,112 bytes (973 KiB) — **45 % of the full one** |
 | Peak RSS at `--version` | 10,148 KiB | 10,184 KiB |
 | Platform state | one local SQLite file (`--data`) | a serverless database (`--db-url`) |
 | Listener | `nanobase serve`, `nanobase db serve` | **none** — no TCP code in the binary |
 | Local database | SQLite, vendored and compiled in | **none** |
 | Build | `cargo build --release` | `cargo build --release --no-default-features --features serverless` |
-| Tests | 290 | 112 (a second, separate suite) |
+| Tests | 364 | 150 (a second, separate suite) |
 
 The split is enforced by Cargo features, not by convention:
 
@@ -86,6 +86,52 @@ exactly two imports — `host.host_now_ms` and `host.host_random` —
 which `worker/verify.sh` reads out of the module and fails if it asks
 for anything else. The Better Auth `AuthStore` eight-operation
 boundary and the equivalent D1 row decoding are preserved.
+
+### The database matrix, and a clone that says what it does
+
+An app's rows used to live in a local SQLite file, with a remote
+escape hatch behind an HTTP service. They now live in whatever engine
+the app's document names, behind one `AppDb` and one contract: a
+collection of documents, the filters are `mosql`'s matcher, and the
+operations are the same in every engine.
+
+| engine | how it is reached | what it is |
+| --- | --- | --- |
+| `sqlite` | a local file | the default; vendored and compiled in |
+| `memory` | in the process | gone when the process stops |
+| `libsql` / `turso` | the libSQL pipeline | Turso, in its own protocol |
+| `d1` | the D1 query API | Cloudflare D1 |
+| `postgres` | the `/sql` API | Neon, Vercel Postgres |
+| `mysql` | TiDB's proxy, Vitess' `Execute` | TiDB Cloud, PlanetScale |
+| `http://` | a service speaking this platform's protocol | anything with a service in front |
+| `tcp://` | a socket | the same protocol, over a socket |
+
+The provider adapter is the odd one out: it speaks the *database's*
+protocol rather than this platform's, which is what lets an app's rows
+live in Neon or Turso with no database service in front of them. It
+needs no new dependency — `mosql-core/` already speaks all five
+protocols over HTTP — and the rows are stored the way the local file
+stores them: one table per collection, an `id` and a `data` column
+holding the row as JSON.
+
+**The platform's own state is the owner's choice, and is chosen at run
+time.** `--db-url postgres://…` puts the catalog in a serverless
+PostgreSQL; with no such URL the local file is used.
+
+**Cloning an app says what happens to the rows.** `omit` — the
+default — starts the clone without copied rows. `copy` asks for a
+destination database and copies the rows into it, and copying into the
+source's own URL is refused. `share` keeps the source's database, and
+so its token with it. A clone of an app in a serverless database gets
+**no database at all** until somebody names one: `DbKind::None` is
+that state — a schema, rules and auth, and nowhere to put the rows
+yet — rather than a clone that quietly shares production rows.
+
+**A clone that cannot be finished is taken back out.** The rows are
+copied one at a time, and a copy that fails half way is undone: the
+rows it wrote are removed and the clone is removed from the platform,
+so the person who asked for it gets an error and no app rather than an
+app that is quietly incomplete.
 
 ### The console and the platform's security
 
@@ -465,7 +511,6 @@ full edition only, and they are what the full edition grew by.
 | item | state | why |
 | --- | --- | --- |
 | **An app's own sign-in endpoint** | **next** | The app document has the shape for it (`config.auth.features.emailPassword`) and the console writes it, but the platform still serves only the owner's token. A front end has to borrow the owner's token today. |
-| **Postgres and MySQL app databases** | **next** | The drivers are written — `mosql-core/` speaks to Neon, TiDB and PlanetScale — but the platform's own database factory still only offers the generic HTTP adapter and says so plainly rather than pretending: `the postgres engine is not built into this binary yet`. Wiring the new crate into the factory is the remaining half. |
 | The JavaScript runtime adapters (`src/drivers.js`, `src/client.js`, `src/schemaless.js`) | not ported, **by decision** | I/O glue that would pull in async + TLS + socket crates and break the zero-dependency goal. |
 | `uflite`'s `auth.js` and `sql-adapter-factory.js` | not ported | The same I/O glue; the authentication engine is `better-auth-core` instead. |
 | `schemaless`'s MongoDB backend | not ported | It is a driver, not a SQL dialect. |
@@ -484,7 +529,7 @@ full edition only, and they are what the full edition grew by.
 | `mosql` | `rust/verify.sh` — fmt, clippy, the tests, **289 builder fixtures and 153 memory fixtures regenerated** against the JavaScript, a `no_std` build and a publish dry-run |
 | `uflite` | `uflite/verify.sh` |
 | `schemaless` | `schemaless/verify.sh` |
-| `nanobase` | `nanobase/verify.sh` — fmt, clippy, the tests, **a `serverless` stage that compiles and tests the second edition**, no external dependencies, a publish dry-run, and a size budget that measures **both** binaries and fails if the serverless one is not smaller. **363 tests**: `nanobase/tests/console.rs` covers the console, the security headers, the CORS rules, the rate limit, the search and paging, and the database connection test; `nanobase/tests/acl.rs` covers an app's own rules; `nanobase/tests/apikeys.rs` covers the keys and the migration; `nanobase/tests/redaction.rs` covers the app's secrets; `nanobase/tests/keydirectory.rs` covers the key directory, its versions and the preview collisions |
+| `nanobase` | `nanobase/verify.sh` — fmt, clippy, the tests, **a `serverless` stage that compiles and tests the second edition**, no external dependencies, a publish dry-run, and a size budget that measures **both** binaries and fails if the serverless one is not smaller. **364 tests**: `nanobase/tests/console.rs` covers the console, the security headers, the CORS rules, the rate limit, the search and paging, and the database connection test; `nanobase/tests/acl.rs` covers an app's own rules; `nanobase/tests/apikeys.rs` covers the keys and the migration; `nanobase/tests/redaction.rs` covers the app's secrets; `nanobase/tests/keydirectory.rs` covers the key directory, its versions and the preview collisions; `nanobase/tests/engines.rs` covers the same app in every engine, and a clone whose copy fails |
 | `better-auth-core` | `better-auth-core/verify.sh` — plus the official `better-auth@1.7.27` client driving the release binary over HTTP: 22/22 |
 | `worker` | `worker/verify.sh` and `worker/test.sh` — fmt, clippy, the protocol tests, the schema test, the end-to-end Wrangler run, and a check on the module's import section |
 | `mosql-core` | `mosql-core/verify.sh` — fmt, clippy, the tests, a dependency check that refuses a registry dependency, a **wasm32 build with the standard library switched off**, and a stage that compiles every optional transport |

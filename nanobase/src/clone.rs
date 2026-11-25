@@ -264,10 +264,31 @@ fn destination(
 /// to each other the way the original's did.
 pub fn copy_rows(source: &dyn AppDb, destination: &dyn AppDb) -> Result<usize> {
     let mut copied = 0usize;
+    // What has been put in the destination so far, so that a failure
+    // part way through can be undone: a copy that failed must not
+    // leave half a copy behind.
+    let mut written: Vec<(String, String)> = Vec::new();
     for collection in source.collections()? {
         for row in source.rows(&collection)? {
-            destination.insert(&collection, row)?;
-            copied += 1;
+            let id = row
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            match destination.insert(&collection, row) {
+                Ok(_) => {
+                    written.push((collection.clone(), id));
+                    copied += 1;
+                }
+                Err(e) => {
+                    for (collection, id) in written.iter().rev() {
+                        let mut filter = mosql::Object::new();
+                        filter.set("id", mosql::Value::str(id.clone()));
+                        let _ = destination.remove(collection, &mosql::Value::Object(filter));
+                    }
+                    return Err(e);
+                }
+            }
         }
     }
     Ok(copied)

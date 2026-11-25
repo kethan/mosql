@@ -787,7 +787,18 @@ impl Service {
         if plan.copy_rows {
             let source = self.db(&plan.source_id)?;
             let destination = self.db(&record.id)?;
-            copied = crate::clone::copy_rows(source.as_ref(), destination.as_ref())?;
+            match crate::clone::copy_rows(source.as_ref(), destination.as_ref()) {
+                Ok(count) => copied = count,
+                Err(e) => {
+                    // The copy did not work. The clone is taken back
+                    // out, so a failure leaves no half-made app behind:
+                    // the person who asked for the clone gets an error
+                    // and no app, rather than an app that is quietly
+                    // incomplete.
+                    self.unmake_app(&record.id);
+                    return Err(e);
+                }
+            }
         }
         let summary = CloneSummary {
             id: record.id.clone(),
@@ -804,6 +815,23 @@ impl Service {
         self.run_after(&ctx);
         self.fire(Event::Created, &ctx);
         Ok(summary)
+    }
+
+    /// Take an app back out of the platform.
+    ///
+    /// Used when a clone could not be finished: the app is removed, its
+    /// keys are forgotten, and the platform is written. The rows that
+    /// were copied into the destination are taken out by the copy
+    /// itself, so nothing is left behind.
+    fn unmake_app(&self, id: &str) {
+        let mut platform = self.inner.platform.lock().expect("not poisoned");
+        let index = match platform.apps.iter().position(|app| app.id == id) {
+            Some(index) => index,
+            None => return,
+        };
+        platform.apps.remove(index);
+        platform.forget_app_keys(id);
+        let _ = block_on(self.inner.store.save(&platform));
     }
 
     /// Replace an app's document. Fires [`Event::Updated`].

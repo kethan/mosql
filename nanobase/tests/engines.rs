@@ -242,6 +242,122 @@ fn a_clone_that_shares_the_database_says_so() {
 }
 
 #[test]
+fn a_clone_whose_copy_fails_leaves_nothing_behind() {
+    // A copy that fails part way through must not leave a half-made
+    // app: the person who asked for the clone gets an error and no app.
+    use nanobase::platform::AppRecord;
+
+    // A destination that refuses the second row and accepts the first.
+    struct HalfBroken {
+        inner: MemoryDb,
+    }
+    impl AppDb for HalfBroken {
+        fn kind(&self) -> &'static str {
+            "half-broken"
+        }
+        fn collections(&self) -> uflite::error::Result<Vec<String>> {
+            self.inner.collections()
+        }
+        fn rows(&self, collection: &str) -> uflite::error::Result<Vec<mosql::Value>> {
+            self.inner.rows(collection)
+        }
+        fn find_one(
+            &self,
+            collection: &str,
+            query: &mosql::Value,
+        ) -> uflite::error::Result<Option<mosql::Value>> {
+            self.inner.find_one(collection, query)
+        }
+        fn find(
+            &self,
+            collection: &str,
+            query: &mosql::Value,
+            limit: Option<u64>,
+            offset: Option<u64>,
+        ) -> uflite::error::Result<Vec<mosql::Value>> {
+            self.inner.find(collection, query, limit, offset)
+        }
+        fn count(&self, collection: &str, query: &mosql::Value) -> uflite::error::Result<u64> {
+            self.inner.count(collection, query)
+        }
+        fn insert(
+            &self,
+            collection: &str,
+            row: mosql::Value,
+        ) -> uflite::error::Result<mosql::Value> {
+            let id = row.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+            if id == "u2" {
+                return Err(uflite::error::Error::internal("the database said no"));
+            }
+            self.inner.insert(collection, row)
+        }
+        fn update(
+            &self,
+            collection: &str,
+            query: &mosql::Value,
+            changes: &mosql::Value,
+        ) -> uflite::error::Result<Option<mosql::Value>> {
+            self.inner.update(collection, query, changes)
+        }
+        fn remove(&self, collection: &str, query: &mosql::Value) -> uflite::error::Result<u64> {
+            self.inner.remove(collection, query)
+        }
+    }
+
+    let store = nanobase::platform::MemoryStore::default();
+    let source_db = Arc::new(MemoryDb::new());
+    let source_for_the_resolver = Arc::clone(&source_db);
+    let destination_db = Arc::new(HalfBroken {
+        inner: MemoryDb::new(),
+    });
+    let destination_for_the_resolver = Arc::clone(&destination_db);
+    let service = Service::new("apps", Arc::new(store))
+        .unwrap()
+        .with_dbs(Arc::new(move |record: &AppRecord| {
+            if record.doc.app.name == "todos" {
+                Ok(source_for_the_resolver.clone() as Arc<dyn AppDb>)
+            } else {
+                Ok(destination_for_the_resolver.clone() as Arc<dyn AppDb>)
+            }
+        }));
+
+    // The source has two rows.
+    let mut row = mosql::Object::new();
+    row.set("id", mosql::Value::str("u1"));
+    source_db
+        .insert("tasks", mosql::Value::Object(row))
+        .expect("a row");
+    let mut row = mosql::Object::new();
+    row.set("id", mosql::Value::str("u2"));
+    source_db
+        .insert("tasks", mosql::Value::Object(row))
+        .expect("a row");
+
+    let created = service.create(AppDoc::empty("todos")).unwrap();
+    let id = created
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap()
+        .to_string();
+
+    // The clone asks for a database of its own and a copy of the rows.
+    let request = CloneRequest::named("todos-staging")
+        .with_data(CloneData::Copy)
+        .with_database("memory");
+    let err = service.clone_app(&id, &request).unwrap_err();
+    assert!(err.to_string().contains("said no"), "{err}");
+
+    // The clone is gone.
+    assert!(
+        service.find("todos-staging").unwrap().is_none(),
+        "the failed clone is still there"
+    );
+    // And the rows it copied are gone: the destination is as it was.
+    let rows = destination_db.rows("tasks").unwrap();
+    assert!(rows.is_empty(), "the destination still holds {rows:?}");
+}
+
+#[test]
 fn copying_the_rows_of_a_serverless_app_needs_a_destination() {
     let mut doc = AppDoc::empty("todos");
     doc.config.database.kind = DbKind::Postgres;
