@@ -292,12 +292,10 @@ impl Builder {
                 if total > 1 {
                     out.push('(');
                 }
-                let mut written = 0;
-                for (op, val) in conditions.iter() {
+                for (written, (op, val)) in conditions.iter().enumerate() {
                     if written > 0 {
                         out.push_str(" AND ");
                     }
-                    written += 1;
                     let cast = match val {
                         Value::Int(_) | Value::Float(_) => Cast::Numeric,
                         Value::Bool(_) => Cast::Boolean,
@@ -490,7 +488,7 @@ impl Builder {
         for doc in docs {
             if let Some(obj) = doc.as_object() {
                 for k in obj.keys() {
-                    if !keys.iter().any(|x| *x == k) {
+                    if !keys.contains(&k) {
                         keys.push(k);
                     }
                 }
