@@ -24,7 +24,7 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use crate::driver::encoding::percent_decode;
+use crate::driver::encoding::{percent_decode, percent_encode};
 use crate::driver::{DbError, Dialect, Provider};
 
 /// Everything a driver needs to know about a connection.
@@ -128,14 +128,14 @@ impl DriverConfig {
             Provider::Turso => {
                 // The token is either in the user info (`libsql://token@host`)
                 // or in the query (`?authToken=…`).
+                // The query was decoded when it was parsed, and so was
+                // the user info: decoding either of them again would
+                // change a token that happens to carry a `%`.
                 config.token = params
                     .iter()
                     .find(|(key, _)| key == "authToken")
                     .map(|(_, value)| value.clone())
                     .or_else(|| config.username.clone());
-                if let Some(token) = &config.token {
-                    config.token = Some(percent_decode(token)?);
-                }
                 if config.host.is_empty() {
                     return Err(DbError::new("the URL names no host"));
                 }
@@ -207,7 +207,7 @@ impl DriverConfig {
             }
             Provider::Neon => {
                 // The whole connection string goes back in a header.
-                config.connection_string = normalise_postgres(raw);
+                config.connection_string = normalise_postgres(&config, &params);
                 let endpoint = params
                     .iter()
                     .find(|(key, _)| key == "fetch_endpoint")
@@ -375,9 +375,43 @@ fn non_empty(text: &str) -> Option<String> {
 /// The Postgres connection string, as Neon and Vercel want it.
 ///
 /// They take the whole thing — scheme, user, password, host, port,
-/// database — in a header, and they are fussy about it.
-fn normalise_postgres(raw: &str) -> String {
-    raw.trim().to_string()
+/// database — in a header, and they are fussy about it. So the string is
+/// put back together from the parts that were parsed: a password with
+/// an `@` in it has to arrive as `%40`, or the string means something
+/// else.
+fn normalise_postgres(config: &DriverConfig, params: &[(String, String)]) -> String {
+    let mut out = String::from("postgres://");
+    if let Some(user) = &config.username {
+        out.push_str(&percent_encode(user));
+        if let Some(password) = &config.password {
+            out.push(':');
+            out.push_str(&percent_encode(password));
+        }
+        out.push('@');
+    }
+    out.push_str(&config.host);
+    if let Some(port) = config.port {
+        out.push(':');
+        out.push_str(&port.to_string());
+    }
+    if let Some(database) = &config.database {
+        out.push('/');
+        out.push_str(&percent_encode(database));
+    }
+    if !params.is_empty() {
+        out.push('?');
+        let mut first = true;
+        for (key, value) in params {
+            if !first {
+                out.push('&');
+            }
+            first = false;
+            out.push_str(&percent_encode(key));
+            out.push('=');
+            out.push_str(&percent_encode(value));
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -405,6 +439,17 @@ mod tests {
     fn a_turso_token_may_be_in_the_user_info() {
         let config = DriverConfig::from_url("libsql://token@db.turso.io").unwrap();
         assert_eq!(config.token.as_deref(), Some("token"));
+    }
+
+    #[test]
+    fn a_turso_token_is_decoded_once() {
+        // The user info and the query are decoded when the URL is
+        // parsed. Decoding either of them a second time would change a
+        // token that carries a `%` of its own.
+        let config = DriverConfig::from_url("libsql://a%25b@db.turso.io").unwrap();
+        assert_eq!(config.token.as_deref(), Some("a%b"));
+        let config = DriverConfig::from_url("libsql://db.turso.io?authToken=a%25b").unwrap();
+        assert_eq!(config.token.as_deref(), Some("a%b"));
     }
 
     #[test]
@@ -571,6 +616,20 @@ mod tests {
     fn a_password_with_punctuation_survives() {
         let config = DriverConfig::from_url("postgres://user:p%40ss%2Fw%3Ard@host/db").unwrap();
         assert_eq!(config.password.as_deref(), Some("p@ss/w:rd"));
+    }
+
+    #[test]
+    fn the_connection_string_is_put_back_together() {
+        // The string Neon is given has to mean the same thing as the
+        // URL it came from, so the password goes back in encoded.
+        let config = DriverConfig::from_url(
+            "postgres://user:p%40ss@ep-cool.us-east-2.aws.neon.tech:5432/mydb?sslmode=require",
+        )
+        .unwrap();
+        assert_eq!(
+            config.connection_string,
+            "postgres://user:p%40ss@ep-cool.us-east-2.aws.neon.tech:5432/mydb?sslmode=require"
+        );
     }
 
     #[test]

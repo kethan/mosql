@@ -94,6 +94,32 @@ pub fn hex_encode(data: &[u8]) -> String {
     out
 }
 
+/// The hex digits, in the case a URL uses.
+const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+/// Encode text for a URL.
+///
+/// Everything but the unreserved characters is escaped, so the text can
+/// go into a URL — or into the user info of one — without changing what
+/// it means. A password with an `@` in it has to arrive as `%40`, or the
+/// URL means something else.
+pub fn percent_encode(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(byte as char)
+            }
+            other => {
+                out.push('%');
+                out.push(HEX[(other >> 4) as usize] as char);
+                out.push(HEX[(other & 0x0f) as usize] as char);
+            }
+        }
+    }
+    out
+}
+
 /// Decode hex. An odd number of digits is an error.
 pub fn hex_decode(input: &str) -> Result<Vec<u8>, DbError> {
     let bytes = input.as_bytes();
@@ -194,6 +220,19 @@ mod tests {
         assert_eq!(hex_encode(b"f"), "66");
         assert_eq!(hex_encode(b"fo"), "666f");
         assert_eq!(hex_encode(b"foo"), "666f6f");
+    }
+
+    #[test]
+    fn percent_encoding_round_trips() {
+        assert_eq!(percent_encode("abcXYZ019-._~"), "abcXYZ019-._~");
+        assert_eq!(percent_encode("a@b"), "a%40b");
+        assert_eq!(percent_encode("a b"), "a%20b");
+        assert_eq!(percent_encode("a/b"), "a%2Fb");
+        assert_eq!(percent_encode("100%"), "100%25");
+        for text in ["a@b", "a b", "a/b", "p:ss", "100%", "ünïcode"] {
+            let encoded = percent_encode(text);
+            assert_eq!(percent_decode(&encoded).unwrap(), text, "{text}");
+        }
     }
 
     #[test]
