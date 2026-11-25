@@ -1,0 +1,40 @@
+name = "mosql-auth"
+main = "js/index.js"
+compatibility_date = "2025-01-01"
+
+# The module registry is what makes a source-phase `.wasm` import work: the
+# platform compiles the module when the Worker is built and hands the
+# script a `WebAssembly.Module`, instead of the script compiling bytes at
+# runtime — which the runtime forbids.
+compatibility_flags = ["new_module_registry"]
+
+# The durable store. The schema is in `schema.sql`; apply it with
+#   wrangler d1 execute mosql-auth --file=schema.sql
+[[d1_databases]]
+binding = "DB"
+database_name = "mosql-auth"
+# PLACEHOLDER: the id `wrangler d1 create mosql-auth` prints. The one
+# below is not a real database, and a deployment with it fails.
+database_id = "00000000-0000-0000-0000-000000000000"
+
+# The cache. Optional: without it, the session cache is not used and every
+# lookup goes to the database.
+[[kv_namespaces]]
+binding = "CACHE"
+# PLACEHOLDER: the id `wrangler kv namespace create mosql-auth-cache`
+# prints.
+id = "00000000000000000000000000000000"
+
+# The bucket. Optional: without it, the blob routes answer 404.
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "mosql-auth"
+
+[vars]
+# Where the API is reachable. The OAuth callbacks and the emailed links
+# are built from it, so it has to be the address clients use.
+AUTH_BASE_URL = "http://localhost:8787"
+
+# The signing key and the allowed origins are secrets, not variables:
+#   wrangler secret put AUTH_SECRET
+#   wrangler secret put ALLOWED_ORIGINS

@@ -1,0 +1,7 @@
+target/
+# The module is built by build.sh and imported by the Worker script; it
+# is a build product, not a source file.
+js/mosql_worker.wasm
+# Wrangler's local state: the development database, the cache and the
+# bucket.
+.wrangler/

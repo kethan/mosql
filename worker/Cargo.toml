@@ -1,0 +1,57 @@
+[package]
+name = "mosql-worker"
+version = "0.1.0"
+edition = "2021"
+description = "The authentication engine as a Cloudflare Worker: the Rust stack compiled to WebAssembly, with D1 as the database and KV and R2 as optional adapters."
+license = "ISC"
+repository = "https://github.com/kethan/mosql"
+readme = "README.md"
+keywords = ["auth", "cloudflare", "workers", "wasm", "d1"]
+categories = ["authentication", "web-programming::http-server", "wasm"]
+
+# The engine is built from the repository's own crates, exactly as the native
+# binary is: `mosql` for JSON, `better-auth-core` for the routes and the
+# store contract, `nanobase` for the shared HTTP types and the verified
+# crypto. Nothing is fetched from a registry.
+#
+# The `worker` feature of `better-auth-core` is what makes this build
+# different: it leaves the local SQLite store, the TCP server and the
+# standalone binary out of the graph, so the WebAssembly module has no
+# SQLite, no socket, no subprocess, no thread and no clock of its own.
+[dependencies]
+mosql = { version = "0.1", path = "../rust" }
+nanobase = { version = "0.1", path = "../nanobase", default-features = false }
+better-auth-core = { version = "0.1", path = "../better-auth-core", default-features = false, features = ["worker"] }
+
+# The tests play the part of the host, and answer the engine's questions
+# from a real SQLite database — so the statements the engine writes are
+# checked against a real engine, not a mock.
+[dev-dependencies]
+nanobase = { version = "0.1", path = "../nanobase", default-features = false, features = ["sqlite"] }
+
+[lib]
+name = "mosql_worker"
+path = "src/lib.rs"
+# A `cdylib` cannot be doctested: rustdoc has no way to link one.
+doctest = false
+# The `cdylib` is what the Worker imports; the `rlib` is what the tests
+# link against, so the protocol can be exercised without a browser.
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "schema"
+path = "src/bin/schema.rs"
+required-features = ["schema"]
+
+[features]
+default = []
+# The schema printer. It is a program, not a library, so it is not built
+# into the WebAssembly module.
+schema = []
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
