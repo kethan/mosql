@@ -10,8 +10,11 @@
 //! The host chooses the transport. [`PlainHttpClient`] speaks `http://`
 //! only; [`CurlHttpClient`] speaks both.
 
+#[cfg(feature = "native")]
 use std::io::{BufRead, BufReader, Read as IoRead, Write};
+#[cfg(feature = "native")]
 use std::net::TcpStream;
+#[cfg(feature = "native")]
 use std::process::{Command, Stdio};
 
 use mosql::Value;
@@ -58,16 +61,61 @@ impl HttpResponse {
 /// Sends a request and returns the reply. Blocking: the server runs each
 /// request on a worker thread. The host provides the transport — a plain
 /// `std::net` one for `http://`, a TLS-capable one in production.
+#[cfg(feature = "native")]
 pub trait HttpClient: Send + Sync {
     fn request(&self, request: &HttpRequest) -> ApiResult<HttpResponse>;
+}
+
+/// A shared client is still a client.
+///
+/// This is what lets a caller keep a handle on the client it handed over —
+/// a test that wants to see what was asked of it, say — without giving up
+/// the single trait the engine talks to.
+#[cfg(feature = "native")]
+impl<C: HttpClient + ?Sized> HttpClient for std::sync::Arc<C> {
+    fn request(&self, request: &HttpRequest) -> ApiResult<HttpResponse> {
+        (**self).request(request)
+    }
+}
+
+/// The asynchronous face of the outbound client.
+///
+/// A Worker has no blocking I/O: its transport is a promise that resolves
+/// when the platform says so. So the engine talks to this trait, and the
+/// native transports answer through [`SyncHttpClient`], which wraps a
+/// blocking call in a future that is already done.
+pub trait AsyncHttpClient: Send + Sync {
+    fn request<'a>(
+        &'a self,
+        request: &'a HttpRequest,
+    ) -> crate::platform::BoxFuture<'a, ApiResult<HttpResponse>>;
+}
+
+/// Wraps a blocking [`HttpClient`] as an [`AsyncHttpClient`].
+///
+/// The work happens when the future is first polled, and the answer is
+/// there on the same poll — a blocking transport has nothing to wait for.
+#[cfg(feature = "native")]
+pub struct SyncHttpClient<C>(pub C);
+
+#[cfg(feature = "native")]
+impl<C: HttpClient> AsyncHttpClient for SyncHttpClient<C> {
+    fn request<'a>(
+        &'a self,
+        request: &'a HttpRequest,
+    ) -> crate::platform::BoxFuture<'a, ApiResult<HttpResponse>> {
+        Box::pin(async move { self.0.request(request) })
+    }
 }
 
 /// A plain `std::net` HTTP/1.1 client. `https://` is refused: there is no
 /// TLS in this build, and pretending otherwise would be worse than an
 /// error the operator can act on.
+#[cfg(feature = "native")]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PlainHttpClient;
 
+#[cfg(feature = "native")]
 impl HttpClient for PlainHttpClient {
     fn request(&self, request: &HttpRequest) -> ApiResult<HttpResponse> {
         let (host, port, path) = split_url(&request.url)?;
@@ -103,6 +151,7 @@ impl HttpClient for PlainHttpClient {
 }
 
 /// Reads an HTTP/1.1 reply: status line, headers, body by length or chunked.
+#[cfg(feature = "native")]
 fn read_http_reply(stream: &TcpStream) -> ApiResult<HttpResponse> {
     let mut reader = BufReader::new(stream.try_clone().map_err(ApiError::from)?);
     let mut line = String::new();
@@ -178,9 +227,11 @@ pub fn split_url(url: &str) -> ApiResult<(String, u16, String)> {
 /// An `HttpClient` that shells out to `curl`, which every server has and
 /// which brings TLS. The body goes in through stdin so nothing is spelled
 /// out on a command line.
+#[cfg(feature = "native")]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CurlHttpClient;
 
+#[cfg(feature = "native")]
 impl HttpClient for CurlHttpClient {
     fn request(&self, request: &HttpRequest) -> ApiResult<HttpResponse> {
         let mut command = Command::new("curl");

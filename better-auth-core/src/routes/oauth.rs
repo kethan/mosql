@@ -113,7 +113,7 @@ async fn begin(auth: &Arc<Auth>, req: &Request, force_link: bool) -> AuthResult<
     }
     // A provider that publishes an OpenID configuration says where its
     // endpoints are; read them before building the redirect.
-    let config = auth.resolve_provider(&config)?;
+    let config = auth.resolve_provider(&config).await?;
     let callback_url = redirect_target(auth, req, &body, "callbackURL")?;
     let error_callback_url = redirect_target(auth, req, &body, "errorCallbackURL")?;
     let login_hint = opt_field(&body, "loginHint");
@@ -280,7 +280,7 @@ pub async fn callback(auth: &Arc<Auth>, req: &Request, provider: &str) -> AuthRe
 
     // The provider may have been described by discovery when the redirect
     // was built; read it the same way here.
-    let config = match auth.resolve_provider(&config) {
+    let config = match auth.resolve_provider(&config).await {
         Ok(config) => config,
         Err(error) => return Ok(fail(error, error_callback_url, callback_url)),
     };
@@ -312,16 +312,18 @@ async fn finish(
     // ---- code for tokens ------------------------------------------------
     let (_, body, headers) =
         config.token_request(code, &flow.redirect_uri, flow.code_verifier.as_deref());
-    let response = auth.send(&HttpRequest {
-        method: match config.token_method {
-            Method::Get => "GET",
-            Method::Post => "POST",
-        }
-        .into(),
-        url: config.token_url.clone(),
-        headers,
-        body,
-    })?;
+    let response = auth
+        .send(&HttpRequest {
+            method: match config.token_method {
+                Method::Get => "GET",
+                Method::Post => "POST",
+            }
+            .into(),
+            url: config.token_url.clone(),
+            headers,
+            body,
+        })
+        .await?;
     let status = response.status;
     let text = String::from_utf8_lossy(&response.body).into_owned();
     let token = match mosql::parse_json(&text) {
@@ -374,7 +376,8 @@ async fn finish(
                     id_token,
                     flow.nonce.as_deref(),
                     now_secs(),
-                )?;
+                )
+                .await?;
                 Some(claims)
             }
             None => {
@@ -572,16 +575,18 @@ async fn fetch_profile(
                 headers,
                 body,
             }) => {
-                let reply = auth.send(&HttpRequest {
-                    method: match method {
-                        Method::Get => "GET",
-                        Method::Post => "POST",
-                    }
-                    .into(),
-                    url,
-                    headers,
-                    body,
-                })?;
+                let reply = auth
+                    .send(&HttpRequest {
+                        method: match method {
+                            Method::Get => "GET",
+                            Method::Post => "POST",
+                        }
+                        .into(),
+                        url,
+                        headers,
+                        body,
+                    })
+                    .await?;
                 if reply.status >= 400 {
                     return Err(AuthError::bad_request(
                         "OAUTH_PROFILE_FAILED",
@@ -644,16 +649,18 @@ async fn fetch_email(
     let Some(endpoint) = &config.email_endpoint else {
         return Ok(None);
     };
-    let reply = auth.send(&HttpRequest {
-        method: "GET".into(),
-        url: endpoint.url.clone(),
-        headers: vec![
-            ("authorization".into(), format!("Bearer {access_token}")),
-            ("accept".into(), "application/json".into()),
-            ("user-agent".into(), "better-auth".into()),
-        ],
-        body: Vec::new(),
-    })?;
+    let reply = auth
+        .send(&HttpRequest {
+            method: "GET".into(),
+            url: endpoint.url.clone(),
+            headers: vec![
+                ("authorization".into(), format!("Bearer {access_token}")),
+                ("accept".into(), "application/json".into()),
+                ("user-agent".into(), "better-auth".into()),
+            ],
+            body: Vec::new(),
+        })
+        .await?;
     if reply.status >= 400 {
         return Ok(None);
     }

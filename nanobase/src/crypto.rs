@@ -16,7 +16,9 @@
 //! remains defensible because the iteration count is high and the salt is
 //! random per password.
 
+#[cfg(feature = "native")]
 use std::collections::hash_map::RandomState;
+#[cfg(feature = "native")]
 use std::hash::{BuildHasher, Hasher};
 
 // -------------------------------------------------------------- SHA-256 ---
@@ -522,6 +524,48 @@ pub fn random_bytes(n: usize) -> Vec<u8> {
     if n == 0 {
         return Vec::new();
     }
+    // A host that has no random device of its own — a Worker, where the
+    // only entropy is the one the platform hands over — installs a source
+    // with [`set_random_source`] before anything asks for randomness.
+    if let Some(source) = RANDOM.get() {
+        let mut buf = vec![0u8; n];
+        source(&mut buf);
+        return buf;
+    }
+    #[cfg(feature = "native")]
+    {
+        os_random(n)
+    }
+    // Without an operating system there is no entropy to read, and a
+    // program that has not installed a source has a bug rather than a slow
+    // request. Predictable identifiers are worse than a loud failure.
+    #[cfg(not(feature = "native"))]
+    {
+        panic!("no random source installed: call nanobase::crypto::set_random_source first")
+    }
+}
+
+/// A source of random bytes, given a buffer to fill.
+pub type RandomSource = fn(&mut [u8]);
+
+static RANDOM: std::sync::OnceLock<RandomSource> = std::sync::OnceLock::new();
+
+/// Install the source the platform draws randomness from.
+///
+/// The first call wins, so two halves of a program cannot disagree about
+/// where the entropy comes from.
+pub fn set_random_source(source: RandomSource) {
+    let _ = RANDOM.set(source);
+}
+
+/// Whether a random source has been installed.
+pub fn has_random_source() -> bool {
+    RANDOM.get().is_some()
+}
+
+/// The operating system's random bytes.
+#[cfg(feature = "native")]
+fn os_random(n: usize) -> Vec<u8> {
     // `/dev/urandom` is an endless stream, so it has to be read with an exact
     // length: `fs::read` would consume it forever.
     let mut buf = vec![0u8; n];
@@ -534,6 +578,10 @@ pub fn random_bytes(n: usize) -> Vec<u8> {
     fallback_random(n)
 }
 
+/// The last resort when there is no random device: the standard library's
+/// per-process random hash keys, mixed with a counter, the clock and the
+/// process id.
+#[cfg(feature = "native")]
 fn fallback_random(n: usize) -> Vec<u8> {
     let mut out = Vec::with_capacity(n);
     let pid = std::process::id() as u64;

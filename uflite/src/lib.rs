@@ -56,6 +56,10 @@ pub mod db;
 pub mod error;
 pub mod matcher;
 pub mod params;
+// The storage services — a file-backed local store and an S3 dispatcher —
+// need an operating system, so they are not compiled into a target that has
+// none. A Worker keeps its blobs in the platform's own bucket instead.
+#[cfg(feature = "native")]
 pub mod storage;
 pub mod table;
 

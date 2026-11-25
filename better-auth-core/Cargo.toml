@@ -18,8 +18,8 @@ categories = ["authentication", "web-programming::http-server"]
 # into the binary than shell out.
 [dependencies]
 mosql = { version = "0.1", path = "../rust" }
-uflite = { version = "0.1", path = "../uflite" }
-nanobase = { version = "0.1", path = "../nanobase" }
+uflite = { version = "0.1", path = "../uflite", default-features = false }
+nanobase = { version = "0.1", path = "../nanobase", default-features = false }
 
 [lib]
 doctest = false
@@ -29,9 +29,17 @@ path = "src/lib.rs"
 [[bin]]
 name = "better-auth-core"
 path = "src/main.rs"
+required-features = ["native"]
 
 [features]
-default = []
+default = ["native"]
+# The server face: the local SQLite store, the remote stores, the query
+# server and the standalone binary. It is what the crate has always been.
+native = ["nanobase/native", "nanobase/sqlite", "uflite/native"]
+# The Worker face: the same engine, with no local database, no TCP server
+# and no binary — the platform provides the database, the network and the
+# clock, and this crate must not reach for an operating system at all.
+worker = []
 # Reserved for a future `reqwest`-backed HTTP client. Off by default because it
 # is the one dependency that needs a registry; to use it, add
 # `reqwest = { version = "0.12", default-features = false, features =

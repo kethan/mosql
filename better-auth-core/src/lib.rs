@@ -8,8 +8,10 @@ pub mod models;
 pub mod oauth_presets;
 pub mod oidc;
 pub mod query;
+#[cfg(feature = "native")]
 pub mod query_server;
 pub mod routes;
+pub mod sql;
 pub mod store;
 
 /// An async test: the body runs under `uflite::db::block_on`, since this

@@ -280,10 +280,12 @@ pub trait PlatformStore: Send + Sync {
 /// Kept only so an existing platform can be imported into SQLite by
 /// [`SqliteStore::migrate_from_json`](crate::store::SqliteStore::migrate_from_json).
 /// It is not the default store: platform state belongs in a database.
+#[cfg(feature = "native")]
 pub struct FileStore {
     path: PathBuf,
 }
 
+#[cfg(feature = "native")]
 impl FileStore {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         FileStore { path: path.into() }
@@ -327,6 +329,7 @@ impl FileStore {
     }
 }
 
+#[cfg(feature = "native")]
 impl PlatformStore for FileStore {
     fn load(&self) -> BoxFuture<'_, Result<Platform>> {
         Box::pin(async move { self.load_now() })
@@ -517,8 +520,49 @@ fn black_box<T>(value: T) -> T {
     std::hint::black_box(value)
 }
 
+/// A source of wall-clock time, in seconds since the Unix epoch.
+///
+/// The default is the operating system's clock. A host that has none of its
+/// own — a Worker, where the only time is the one the platform hands over —
+/// installs its own with [`set_clock`] before anything asks for the time.
+pub type Clock = fn() -> i64;
+
+static CLOCK: std::sync::OnceLock<Clock> = std::sync::OnceLock::new();
+
+/// Install the clock the platform reads the time from.
+///
+/// The first call wins: a host that has already installed a clock cannot be
+/// talked out of it, so two halves of a program cannot disagree about what
+/// time it is.
+pub fn set_clock(clock: Clock) {
+    let _ = CLOCK.set(clock);
+}
+
+/// Whether a clock has been installed.
+pub fn has_clock() -> bool {
+    CLOCK.get().is_some()
+}
+
 /// Seconds since the Unix epoch.
 pub fn now_secs() -> i64 {
+    if let Some(clock) = CLOCK.get() {
+        return clock();
+    }
+    #[cfg(feature = "native")]
+    {
+        system_now_secs()
+    }
+    // Without an operating system there is no clock to read, and a program
+    // that has not installed one has a bug rather than a slow request.
+    #[cfg(not(feature = "native"))]
+    {
+        panic!("no clock installed: call nanobase::platform::set_clock first")
+    }
+}
+
+/// The operating system's clock.
+#[cfg(feature = "native")]
+fn system_now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)

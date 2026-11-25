@@ -23,10 +23,14 @@
 //! that are not done. The matcher is `mosql`'s, the same one the in-process
 //! engine uses, so a query means the same thing in every adapter.
 
+#[cfg(feature = "native")]
 pub mod factory;
+#[cfg(feature = "native")]
 pub mod http;
 pub mod memory;
+#[cfg(feature = "sqlite")]
 pub mod sqlite;
+#[cfg(feature = "native")]
 pub mod tcp;
 
 use std::sync::Arc;
@@ -403,6 +407,7 @@ impl DbServer {
 ///
 /// One connection carries as many requests as the client sends: each line
 /// is a request, each reply is a line.
+#[cfg(feature = "native")]
 pub fn serve_tcp(server: Arc<DbServer>, listener: std::net::TcpListener) -> std::io::Result<()> {
     use std::io::BufReader;
     for stream in listener.incoming() {
@@ -420,6 +425,7 @@ pub fn serve_tcp(server: Arc<DbServer>, listener: std::net::TcpListener) -> std:
     Ok(())
 }
 
+#[cfg(feature = "native")]
 /// Answer one request on a connection; returns whether to keep it open.
 ///
 /// A request is a JSON line, optionally preceded by header lines — the
@@ -467,7 +473,7 @@ fn error_value(code: &str, message: &str) -> Value {
     Value::Object(body)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "native"))]
 mod tests {
     use super::*;
     use mosql::Object;

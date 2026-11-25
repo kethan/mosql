@@ -16,3 +16,11 @@ mosql = { version = "0.1", path = "../rust" }
 
 [lib]
 doctest = false
+
+# One switch, for the same reason the platform crate has one: the parts that
+# need an operating system are not compiled into a target that has none.
+# A Worker has no thread to park on and no directory to write to, so the
+# executor and the file-backed storage are left out of it entirely.
+[features]
+default = ["native"]
+native = []

@@ -27,7 +27,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use better_auth_core::auth::{
-    Auth, AuthConfig, ConsoleMailer, CurlHttpClient, HttpClient, PlainHttpClient,
+    AsyncHttpClient, Auth, AuthConfig, ConsoleMailer, CurlHttpClient, HttpClient, PlainHttpClient,
+    SyncHttpClient,
 };
 use better_auth_core::http::{self, Request, Response};
 use better_auth_core::oauth_presets::PRESETS;
@@ -124,6 +125,13 @@ fn usage() -> String {
     )
 }
 
+/// Which outbound transport the deployment uses.
+#[derive(Clone, Copy)]
+enum Transport {
+    Plain,
+    Curl,
+}
+
 fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
@@ -175,20 +183,33 @@ fn run(args: Args) -> Result<(), String> {
         eprintln!("warning: {problem}");
     }
 
-    let http: Option<Arc<dyn HttpClient>> = match env("BETTER_AUTH_HTTP").as_deref() {
+    // Which transport to use. The engine wants the asynchronous face of it;
+    // the remote store wants the blocking one, and both are the same
+    // transport underneath.
+    let transport: Option<Transport> = match env("BETTER_AUTH_HTTP").as_deref() {
         Some("none") => None,
-        Some("plain") => Some(Arc::new(PlainHttpClient)),
-        Some("curl") => Some(Arc::new(CurlHttpClient)),
+        Some("plain") => Some(Transport::Plain),
+        Some("curl") => Some(Transport::Curl),
         _ => {
             if oauth.is_empty() {
                 None
             } else if which_curl() {
-                Some(Arc::new(CurlHttpClient))
+                Some(Transport::Curl)
             } else {
                 eprintln!("warning: curl not found; OAuth over https:// will not work (set BETTER_AUTH_HTTP=plain for http:// providers)");
-                Some(Arc::new(PlainHttpClient))
+                Some(Transport::Plain)
             }
         }
+    };
+    let http: Option<Arc<dyn HttpClient>> = match transport {
+        Some(Transport::Plain) => Some(Arc::new(PlainHttpClient)),
+        Some(Transport::Curl) => Some(Arc::new(CurlHttpClient)),
+        None => None,
+    };
+    let http_async: Option<Arc<dyn AsyncHttpClient>> = match transport {
+        Some(Transport::Plain) => Some(Arc::new(SyncHttpClient(PlainHttpClient))),
+        Some(Transport::Curl) => Some(Arc::new(SyncHttpClient(CurlHttpClient))),
+        None => None,
     };
 
     let store = open_store(&data, &http)?;
@@ -201,7 +222,7 @@ fn run(args: Args) -> Result<(), String> {
     let auth = Arc::new(
         Auth::new(store, config)
             .with_oauth(oauth)
-            .with_http_opt(http)
+            .with_http_opt(http_async)
             .with_mailer_opt(mailer),
     );
     let threads = std::thread::available_parallelism()

@@ -84,6 +84,10 @@ impl SqliteStore {
     /// The first release kept its state in a JSON file. Rather than make
     /// everyone start over, a JSON file beside the database is read once and
     /// then renamed out of the way. Returns whether an import happened.
+    ///
+    /// The file is read with the operating system, so this is not part of a
+    /// build without one.
+    #[cfg(feature = "native")]
     pub fn migrate_from_json(&self) -> Result<bool> {
         let legacy = self.path.with_extension("json");
         if !legacy.exists() {

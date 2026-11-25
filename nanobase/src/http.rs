@@ -15,9 +15,14 @@
 //! and the authentication server that embeds it speak exactly the same
 //! protocol and fail in exactly the same way.
 
+#[cfg(feature = "native")]
 use std::collections::VecDeque;
+#[cfg(feature = "native")]
 use std::io::{BufRead, BufReader, Read as IoRead, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::SocketAddr;
+#[cfg(feature = "native")]
+use std::net::{TcpListener, TcpStream};
+#[cfg(feature = "native")]
 use std::sync::{Arc, Condvar, Mutex};
 
 use mosql::Value;
@@ -111,6 +116,7 @@ impl From<mosql::Error> for ApiError {
     }
 }
 
+#[cfg(feature = "native")]
 impl From<std::io::Error> for ApiError {
     fn from(e: std::io::Error) -> Self {
         ApiError::internal(format!("i/o: {e}"))
@@ -120,6 +126,7 @@ impl From<std::io::Error> for ApiError {
 /// The largest request body accepted. Verification emails and sign-ups are
 /// a few hundred bytes; a megabyte is already generous.
 pub const MAX_BODY_BYTES: usize = 1024 * 1024;
+#[cfg(feature = "native")]
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 
 /// One request, parsed. Header names are lower-cased for lookup.
@@ -277,6 +284,7 @@ impl Response {
         self
     }
 
+    #[cfg(feature = "native")]
     fn reason(&self) -> &'static str {
         status_text(self.status)
     }
@@ -380,6 +388,7 @@ fn split_query(target: &str) -> (String, String) {
 // ---------------------------------------------------------------- reading ---
 
 /// What reading from a connection produced.
+#[cfg(feature = "native")]
 pub enum Incoming {
     /// The peer closed before sending anything: a clean end.
     Eof,
@@ -391,6 +400,7 @@ pub enum Incoming {
 }
 
 /// Read one request from the connection.
+#[cfg(feature = "native")]
 pub fn read_request(stream: &mut TcpStream) -> Incoming {
     let remote = match stream.peer_addr() {
         Ok(addr) => addr,
@@ -486,12 +496,14 @@ pub fn read_request(stream: &mut TcpStream) -> Incoming {
     Incoming::Request(request)
 }
 
+#[cfg(feature = "native")]
 enum ReadError {
     TooLarge,
     Malformed,
 }
 
 /// RFC 9112 chunked transfer coding, as browsers send it.
+#[cfg(feature = "native")]
 fn read_chunked(reader: &mut impl BufRead) -> Result<Vec<u8>, ReadError> {
     let mut body = Vec::new();
     loop {
@@ -522,6 +534,7 @@ fn read_chunked(reader: &mut impl BufRead) -> Result<Vec<u8>, ReadError> {
 
 // ---------------------------------------------------------------- writing ---
 
+#[cfg(feature = "native")]
 pub fn write_response(
     stream: &mut TcpStream,
     response: &Response,
@@ -547,6 +560,7 @@ pub fn write_response(
 
 /// Accept connections on `addr` and answer them with `handler`, using
 /// `threads` workers. Blocks until the listener fails.
+#[cfg(feature = "native")]
 pub fn serve<H>(addr: SocketAddr, threads: usize, handler: H) -> std::io::Result<()>
 where
     H: Fn(Request) -> Response + Send + Sync + 'static,
@@ -555,6 +569,7 @@ where
 }
 
 /// [`serve`] on a listener the caller already holds.
+#[cfg(feature = "native")]
 pub fn serve_on<H>(listener: TcpListener, threads: usize, handler: H) -> std::io::Result<()>
 where
     H: Fn(Request) -> Response + Send + Sync + 'static,
@@ -596,6 +611,7 @@ where
 }
 
 /// Answer every request on one connection until it closes or asks to.
+#[cfg(feature = "native")]
 fn handle_connection<H>(mut stream: TcpStream, handler: &H) -> std::io::Result<()>
 where
     H: Fn(Request) -> Response,
@@ -633,7 +649,7 @@ where
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "native"))]
 mod tests {
     use super::*;
 

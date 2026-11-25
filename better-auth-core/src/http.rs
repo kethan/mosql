@@ -5,6 +5,10 @@
 //! rest of the engine keeps using `crate::http::…` unchanged.
 
 pub use nanobase::http::{
-    form_encode, parse_query, percent_decode, percent_encode, read_request, serve, serve_on,
-    status_text, write_response, ApiError, Incoming, Request, Response, MAX_BODY_BYTES,
+    form_encode, parse_query, percent_decode, percent_encode, status_text, ApiError, Request,
+    Response, MAX_BODY_BYTES,
 };
+// The socket half of the platform's HTTP module. A Worker is handed a
+// request and returns a response; there is no connection to read from.
+#[cfg(feature = "native")]
+pub use nanobase::http::{read_request, serve, serve_on, write_response, Incoming};

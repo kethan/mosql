@@ -10,7 +10,9 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use better_auth_core::async_test;
-use better_auth_core::auth::{Auth, AuthConfig, HttpClient, HttpRequest, HttpResponse};
+use better_auth_core::auth::{
+    Auth, AuthConfig, HttpClient, HttpRequest, HttpResponse, SyncHttpClient,
+};
 use better_auth_core::oauth_presets::OAuthRegistry;
 use better_auth_core::store::MemoryStore;
 use common::*;
@@ -139,7 +141,7 @@ fn rig_with(providers: &[(&str, &str, &str)], stub: Arc<Stub>) -> Rig {
     assert!(problems.is_empty(), "{problems:?}");
     let auth = Auth::new(Arc::new(MemoryStore::new()), config)
         .with_oauth(registry)
-        .with_http(stub);
+        .with_http(Arc::new(SyncHttpClient(stub)));
     Rig {
         auth: Arc::new(auth),
         mailer: Arc::new(better_auth_core::auth::MemoryMailer::default()),

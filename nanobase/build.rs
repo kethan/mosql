@@ -25,6 +25,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
+    // The Worker build has no SQLite: the platform provides the database, and
+    // compiling the amalgamation for it would drag a C toolchain into a
+    // target that cannot link it anyway.
+    if env::var_os("CARGO_FEATURE_SQLITE").is_none() {
+        return;
+    }
+
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let target = env::var("TARGET").expect("TARGET");
     let msvc = target.contains("msvc");

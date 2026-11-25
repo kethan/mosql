@@ -14,7 +14,9 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use better_auth_core::async_test;
-use better_auth_core::auth::{Auth, AuthConfig, HttpClient, HttpRequest, HttpResponse};
+use better_auth_core::auth::{
+    Auth, AuthConfig, HttpClient, HttpRequest, HttpResponse, SyncHttpClient,
+};
 use better_auth_core::bigint::BigUint;
 use better_auth_core::oauth_presets::{CustomProvider, OAuthRegistry, ProviderConfig};
 use better_auth_core::store::MemoryStore;
@@ -215,7 +217,7 @@ fn rig_with_headers(
     auth_config.password_scrypt_n = 1024;
     let auth = Auth::new(Arc::new(MemoryStore::new()), auth_config)
         .with_oauth(registry)
-        .with_http(provider);
+        .with_http(std::sync::Arc::new(SyncHttpClient(provider)));
     Rig {
         auth: Arc::new(auth),
         mailer: Arc::new(better_auth_core::auth::MemoryMailer::default()),

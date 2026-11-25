@@ -12,7 +12,7 @@
 
 use mosql::Value;
 
-use crate::auth::{HttpClient, HttpRequest, HttpResponse};
+use crate::auth::{AsyncHttpClient, HttpRequest, HttpResponse};
 use crate::bigint::BigUint;
 use crate::error::{AuthError, AuthResult};
 
@@ -101,19 +101,21 @@ impl Discovery {
     ///
     /// The headers are the ones the provider asked for: a discovery
     /// document is sometimes behind a gateway that wants a key of its own.
-    pub fn fetch(
+    pub async fn fetch(
         url: &str,
         headers: &[(String, String)],
-        client: &dyn HttpClient,
+        client: &dyn AsyncHttpClient,
     ) -> AuthResult<Discovery> {
         let mut request_headers = vec![("accept".into(), "application/json".into())];
         request_headers.extend(headers.iter().cloned());
-        let response = client.request(&HttpRequest {
-            method: "GET".into(),
-            url: url.to_string(),
-            headers: request_headers,
-            body: Vec::new(),
-        })?;
+        let response = client
+            .request(&HttpRequest {
+                method: "GET".into(),
+                url: url.to_string(),
+                headers: request_headers,
+                body: Vec::new(),
+            })
+            .await?;
         Discovery::from_response(url, response)
     }
 
@@ -210,19 +212,21 @@ impl Jwks {
 
     /// Fetch the key set.
     /// Fetch the key set, with the headers the provider asked for.
-    pub fn fetch(
+    pub async fn fetch(
         url: &str,
         headers: &[(String, String)],
-        client: &dyn HttpClient,
+        client: &dyn AsyncHttpClient,
     ) -> AuthResult<Jwks> {
         let mut request_headers = vec![("accept".into(), "application/json".into())];
         request_headers.extend(headers.iter().cloned());
-        let response = client.request(&HttpRequest {
-            method: "GET".into(),
-            url: url.to_string(),
-            headers: request_headers,
-            body: Vec::new(),
-        })?;
+        let response = client
+            .request(&HttpRequest {
+                method: "GET".into(),
+                url: url.to_string(),
+                headers: request_headers,
+                body: Vec::new(),
+            })
+            .await?;
         Jwks::from_response(url, response)
     }
 
@@ -290,9 +294,9 @@ pub fn apply(
 /// The claims are only returned when they check out: the signature over
 /// the exact bytes that were signed, the issuer, the audience and the
 /// token's life.
-pub fn verify_for(
+pub async fn verify_for(
     config: &crate::oauth_presets::ProviderConfig,
-    client: &dyn HttpClient,
+    client: &dyn AsyncHttpClient,
     id_token: &str,
     nonce: Option<&str>,
     now: i64,
@@ -300,7 +304,7 @@ pub fn verify_for(
     let jwks_uri = config.jwks_uri.as_deref().ok_or_else(|| {
         AuthError::internal(format!("{}: the provider has no key set", config.id))
     })?;
-    let jwks = Jwks::fetch(jwks_uri, &config.discovery_headers, client)?;
+    let jwks = Jwks::fetch(jwks_uri, &config.discovery_headers, client).await?;
     let issuer = config.issuer.as_deref().unwrap_or_default();
     let claims = verify_id_token(id_token, &jwks, issuer, &config.client_id, now)?;
     if !config.disable_id_token_nonce_binding {

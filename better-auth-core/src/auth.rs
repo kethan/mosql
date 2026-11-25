@@ -23,9 +23,13 @@ use crate::store::{AuthStore, AuthStoreExt, WhereClause};
 
 // The outbound HTTP client lives in the platform crate, so the platform's
 // own adapters and this engine share one transport.
-pub use nanobase::httpclient::{
-    split_url, CurlHttpClient, HttpClient, HttpRequest, HttpResponse, PlainHttpClient,
-};
+//
+// The engine talks to the asynchronous face of it. A Worker cannot block on
+// a socket, so its transport is a promise; the blocking transports answer
+// through the same interface.
+pub use nanobase::httpclient::{split_url, AsyncHttpClient, HttpRequest, HttpResponse};
+#[cfg(feature = "native")]
+pub use nanobase::httpclient::{CurlHttpClient, HttpClient, PlainHttpClient, SyncHttpClient};
 
 /// Where the whole API hangs off the host.
 pub const PATH_PREFIX: &str = "/api/auth";
@@ -192,7 +196,7 @@ pub struct Auth {
     pub store: Arc<dyn AuthStore>,
     pub config: AuthConfig,
     pub oauth: OAuthRegistry,
-    pub http: Option<Arc<dyn HttpClient>>,
+    pub http: Option<Arc<dyn AsyncHttpClient>>,
     pub mailer: Option<Arc<dyn Mailer>>,
     /// What each provider's OpenID configuration said, read once.
     discovery: std::sync::Mutex<std::collections::HashMap<String, crate::oidc::Discovery>>,
@@ -226,12 +230,12 @@ impl Auth {
         self
     }
 
-    pub fn with_http(mut self, http: Arc<dyn HttpClient>) -> Self {
+    pub fn with_http(mut self, http: Arc<dyn AsyncHttpClient>) -> Self {
         self.http = Some(http);
         self
     }
 
-    pub fn with_http_opt(mut self, http: Option<Arc<dyn HttpClient>>) -> Self {
+    pub fn with_http_opt(mut self, http: Option<Arc<dyn AsyncHttpClient>>) -> Self {
         self.http = http;
         self
     }
@@ -254,7 +258,7 @@ impl Auth {
     ///
     /// Panics when there is none: every caller that reaches this has
     /// already checked.
-    pub fn http_client(&self) -> &dyn HttpClient {
+    pub fn http_client(&self) -> &dyn AsyncHttpClient {
         self.http.as_deref().expect("no HttpClient configured")
     }
 
@@ -262,7 +266,7 @@ impl Auth {
     ///
     /// The document is read once and remembered: it changes rarely, and
     /// every sign-in would otherwise pay for it again.
-    pub fn resolve_provider(
+    pub async fn resolve_provider(
         &self,
         config: &crate::oauth_presets::ProviderConfig,
     ) -> AuthResult<crate::oauth_presets::ProviderConfig> {
@@ -275,7 +279,8 @@ impl Auth {
             }
         }
         let discovery =
-            crate::oidc::Discovery::fetch(&url, &config.discovery_headers, self.http_client())?;
+            crate::oidc::Discovery::fetch(&url, &config.discovery_headers, self.http_client())
+                .await?;
         if let Ok(mut cache) = self.discovery.lock() {
             cache.insert(url, discovery.clone());
         }
@@ -283,11 +288,12 @@ impl Auth {
     }
 
     /// `POST` something with the configured client.
-    pub fn send(&self, request: &HttpRequest) -> AuthResult<HttpResponse> {
+    pub async fn send(&self, request: &HttpRequest) -> AuthResult<HttpResponse> {
         self.http
             .as_ref()
             .ok_or_else(|| AuthError::internal("no HttpClient configured; set one to use OAuth"))?
             .request(request)
+            .await
     }
 
     pub fn send_mail(

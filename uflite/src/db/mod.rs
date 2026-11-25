@@ -28,6 +28,7 @@
 pub mod collection;
 mod memory;
 
+#[cfg(feature = "native")]
 use core::future::Future;
 
 use mosql::{Object, Value};
@@ -619,6 +620,7 @@ fn get_skip(params: &Params) -> i64 {
 /// it; consumers have a runtime. Park-based, so it only works for futures that
 /// never need another thread to make progress — which the memory engine never
 /// does.
+#[cfg(feature = "native")]
 pub fn block_on<F: Future>(fut: F) -> F::Output {
     use std::sync::Arc;
     use std::task::{Context, Poll, Wake, Waker};

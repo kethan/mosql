@@ -17,18 +17,28 @@
 //! local file.
 
 use std::future::Future;
+#[cfg(feature = "native")]
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Mutex, PoisonError};
 
 use mosql::Value;
-use nanobase::sqlite::{Connection, Row};
 
+#[cfg(feature = "native")]
 pub mod http_store;
+#[cfg(feature = "native")]
 pub mod tcp_store;
 
+#[cfg(feature = "native")]
+use nanobase::sqlite::Connection;
+
 use crate::error::{AuthError, AuthResult};
-use crate::models::{self, Record, RecordMap, EXTRA_COLUMN};
+use crate::models::{self, Record, RecordMap};
+use crate::sql::{check_field, check_model, check_update};
+#[cfg(feature = "native")]
+use crate::sql::{
+    count_sql, delete_sql, insert_sql, row_to_record, select_one_sql, select_sql, update_sql,
+};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -83,7 +93,7 @@ impl WhereClause {
         WhereClause::eq("id", Value::str(id))
     }
 
-    fn check(&self, model: &str) -> AuthResult<()> {
+    pub(crate) fn check(&self, model: &str) -> AuthResult<()> {
         check_field(model, &self.field)
     }
 }
@@ -219,26 +229,6 @@ impl<S: AuthStore + ?Sized> AuthStoreExt for S {}
 
 // ------------------------------------------------------------ description ---
 
-fn check_field(model: &str, field: &str) -> AuthResult<()> {
-    let columns = models::columns(model)
-        .ok_or_else(|| AuthError::internal(format!("unknown model {model}")))?;
-    if columns.contains(&field) {
-        Ok(())
-    } else {
-        Err(AuthError::internal(format!(
-            "{model} has no field {field:?}"
-        )))
-    }
-}
-
-fn check_model(model: &str) -> AuthResult<()> {
-    if models::columns(model).is_some() {
-        Ok(())
-    } else {
-        Err(AuthError::internal(format!("unknown model {model}")))
-    }
-}
-
 /// Values compared the way SQL compares them: integers and floats by
 /// number, 1/0 as booleans, everything else by equality.
 pub fn values_equal(a: &Value, b: &Value) -> bool {
@@ -349,19 +339,6 @@ pub fn prepare_create(model: &str, mut data: RecordMap) -> AuthResult<RecordMap>
         data.set("updatedAt", Value::str(now));
     }
     Ok(data)
-}
-
-fn check_update(model: &str, update: &RecordMap) -> AuthResult<()> {
-    for (key, _) in update.iter() {
-        let declared = models::columns(model)
-            .ok_or_else(|| AuthError::internal(format!("unknown model {model}")))?;
-        if !declared.contains(&key.as_str()) {
-            return Err(AuthError::internal(format!(
-                "{model} has no field {key:?}; undeclared fields can only be set at create time"
-            )));
-        }
-    }
-    Ok(())
 }
 
 fn poisoned<T>(_: PoisonError<T>) -> AuthError {
@@ -566,11 +543,13 @@ fn apply_update(model: &str, record: &mut RecordMap, update: &RecordMap) {
 /// Records live in the five declared tables. Fields a table does not declare
 /// are kept in its `data` column as JSON and merged back on read, so the
 /// eight-method contract holds for any record, not just the declared columns.
+#[cfg(feature = "native")]
 pub struct SqliteAuthStore {
     conn: Mutex<Connection>,
     path: PathBuf,
 }
 
+#[cfg(feature = "native")]
 impl std::fmt::Debug for SqliteAuthStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SqliteAuthStore")
@@ -579,6 +558,7 @@ impl std::fmt::Debug for SqliteAuthStore {
     }
 }
 
+#[cfg(feature = "native")]
 impl SqliteAuthStore {
     /// Open or create a file database and make sure the tables exist.
     pub fn open(path: impl AsRef<Path>) -> AuthResult<Self> {
@@ -622,38 +602,22 @@ impl SqliteAuthStore {
     }
 
     fn find_one_now(&self, model: &str, r#where: &[WhereClause]) -> AuthResult<Option<RecordMap>> {
-        let (where_sql, params) = where_sql(model, r#where)?;
-        let sql = format!("SELECT * FROM {model:?} {where_sql} LIMIT 1");
+        let (sql, params) = select_one_sql(model, r#where)?;
         let row = self.with(|conn| conn.query_one(&sql, &params))?;
-        Ok(row.map(|row| row_to_record(model, &row)))
+        Ok(row.map(|row| row_to_record(model, &row.columns, &row.values)))
     }
 
     fn find_many_now(&self, model: &str, query: &FindManyQuery) -> AuthResult<Vec<RecordMap>> {
-        let (where_sql, params) = where_sql(model, &query.r#where)?;
-        let mut sql = format!("SELECT * FROM {model:?} {where_sql}");
-        if let Some((field, ascending)) = &query.sort_by {
-            check_field(model, field)?;
-            sql.push_str(&format!(
-                " ORDER BY {field:?} {}",
-                if *ascending { "ASC" } else { "DESC" }
-            ));
-        }
-        let mut params = params;
-        if let Some(limit) = query.limit {
-            sql.push_str(" LIMIT ?");
-            params.push(Value::Int(limit as i64));
-        }
-        if let Some(offset) = query.offset {
-            sql.push_str(" OFFSET ?");
-            params.push(Value::Int(offset as i64));
-        }
+        let (sql, params) = select_sql(model, query)?;
         let rows = self.with(|conn| conn.query(&sql, &params))?;
-        Ok(rows.iter().map(|row| row_to_record(model, row)).collect())
+        Ok(rows
+            .iter()
+            .map(|row| row_to_record(model, &row.columns, &row.values))
+            .collect())
     }
 
     fn count_now(&self, model: &str, r#where: &[WhereClause]) -> AuthResult<u64> {
-        let (where_sql, params) = where_sql(model, r#where)?;
-        let sql = format!("SELECT COUNT(*) AS n FROM {model:?} {where_sql}");
+        let (sql, params) = count_sql(model, r#where)?;
         let row = self.with(|conn| conn.query_one(&sql, &params))?;
         Ok(row
             .and_then(|r| {
@@ -685,24 +649,9 @@ impl SqliteAuthStore {
         r#where: &[WhereClause],
         update: &RecordMap,
     ) -> AuthResult<u64> {
-        check_update(model, update)?;
-        let declared = models::columns(model).expect("checked");
-        let mut sets = Vec::new();
-        let mut params = Vec::new();
-        for (key, value) in update.iter() {
-            sets.push(format!("{key:?} = ?"));
-            params.push(param(value));
-        }
-        if declared.contains(&"updatedAt") && update.get("updatedAt").is_none() {
-            sets.push("\"updatedAt\" = ?".to_string());
-            params.push(Value::str(models::now_iso()));
-        }
-        if sets.is_empty() {
+        let Some((sql, params)) = update_sql(model, r#where, update)? else {
             return Ok(0);
-        }
-        let (where_sql, where_params) = where_sql(model, r#where)?;
-        params.extend(where_params);
-        let sql = format!("UPDATE {model:?} SET {} {where_sql}", sets.join(", "));
+        };
         self.with(|conn| conn.execute(&sql, &params))
     }
 
@@ -711,12 +660,12 @@ impl SqliteAuthStore {
     }
 
     fn delete_many_now(&self, model: &str, r#where: &[WhereClause]) -> AuthResult<u64> {
-        let (where_sql, params) = where_sql(model, r#where)?;
-        let sql = format!("DELETE FROM {model:?} {where_sql}");
+        let (sql, params) = delete_sql(model, r#where)?;
         self.with(|conn| conn.execute(&sql, &params))
     }
 }
 
+#[cfg(feature = "native")]
 impl AuthStore for SqliteAuthStore {
     fn create<'a>(
         &'a self,
@@ -791,147 +740,6 @@ impl AuthStore for SqliteAuthStore {
         let result = self.delete_many_now(model, r#where);
         Box::pin(async move { result })
     }
-}
-
-// ------------------------------------------------------------------- SQL ---
-
-/// A value as bound to a parameter: booleans as 1/0, everything else as is.
-fn param(value: &Value) -> Value {
-    match value {
-        Value::Bool(b) => Value::Int(i64::from(*b)),
-        other => other.clone(),
-    }
-}
-
-/// `WHERE …` or empty. Clause groups are joined exactly as [`matches`]
-/// groups them: AND binds tighter than OR.
-fn where_sql(model: &str, r#where: &[WhereClause]) -> AuthResult<(String, Vec<Value>)> {
-    if r#where.is_empty() {
-        return Ok((String::new(), Vec::new()));
-    }
-    let mut sql = String::from("WHERE ");
-    let mut params = Vec::new();
-    for (index, clause) in r#where.iter().enumerate() {
-        clause.check(model)?;
-        if index > 0 {
-            sql.push_str(if clause.connector_or { " OR " } else { " AND " });
-        }
-        let column = format!("{:?}", clause.field);
-        match clause.op {
-            FilterOp::Eq if clause.value.is_null() => sql.push_str(&format!("{column} IS NULL")),
-            FilterOp::Ne if clause.value.is_null() => {
-                sql.push_str(&format!("{column} IS NOT NULL"))
-            }
-            FilterOp::Eq => {
-                sql.push_str(&format!("{column} = ?"));
-                params.push(param(&clause.value));
-            }
-            FilterOp::Ne => {
-                sql.push_str(&format!("{column} != ?"));
-                params.push(param(&clause.value));
-            }
-            FilterOp::Lt => {
-                sql.push_str(&format!("{column} < ?"));
-                params.push(param(&clause.value));
-            }
-            FilterOp::Lte => {
-                sql.push_str(&format!("{column} <= ?"));
-                params.push(param(&clause.value));
-            }
-            FilterOp::Gt => {
-                sql.push_str(&format!("{column} > ?"));
-                params.push(param(&clause.value));
-            }
-            FilterOp::Gte => {
-                sql.push_str(&format!("{column} >= ?"));
-                params.push(param(&clause.value));
-            }
-            FilterOp::In => {
-                let items = clause.value.as_array().cloned().unwrap_or_default();
-                if items.is_empty() {
-                    // `IN ()` is a syntax error; an empty list matches nothing.
-                    sql.push_str("1 = 0");
-                } else {
-                    let marks = vec!["?"; items.len()].join(", ");
-                    sql.push_str(&format!("{column} IN ({marks})"));
-                    params.extend(items.iter().map(param));
-                }
-            }
-            FilterOp::Contains | FilterOp::StartsWith | FilterOp::EndsWith => {
-                let pattern = match clause.op {
-                    FilterOp::Contains => format!("%{}%", like_escape(&clause.value)),
-                    FilterOp::StartsWith => format!("{}%", like_escape(&clause.value)),
-                    FilterOp::EndsWith => format!("%{}", like_escape(&clause.value)),
-                    _ => unreachable!(),
-                };
-                sql.push_str(&format!("{column} LIKE ? ESCAPE '\\'"));
-                params.push(Value::str(pattern));
-            }
-        }
-    }
-    Ok((sql, params))
-}
-
-fn like_escape(value: &Value) -> String {
-    let text = value.as_str().unwrap_or("");
-    text.replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_")
-}
-
-fn insert_sql(model: &str, record: &RecordMap) -> AuthResult<(String, Vec<Value>)> {
-    check_model(model)?;
-    let declared = models::columns(model).expect("checked");
-    let mut columns = Vec::new();
-    let mut params = Vec::new();
-    let mut extra = RecordMap::new();
-    for (key, value) in record.iter() {
-        if declared.contains(&key.as_str()) {
-            columns.push(format!("{key:?}"));
-            params.push(param(value));
-        } else {
-            extra.set(key.clone(), value.clone());
-        }
-    }
-    columns.push(format!("{EXTRA_COLUMN:?}"));
-    params.push(Value::str(mosql::to_json(&Value::Object(extra))));
-    let marks = vec!["?"; columns.len()].join(", ");
-    Ok((
-        format!(
-            "INSERT INTO {model:?} ({}) VALUES ({marks})",
-            columns.join(", ")
-        ),
-        params,
-    ))
-}
-
-fn row_to_record(model: &str, row: &Row) -> RecordMap {
-    let mut record = RecordMap::new();
-    let booleans = models::boolean_columns(model);
-    for (column, value) in row.columns.iter().zip(&row.values) {
-        if column == EXTRA_COLUMN {
-            if let Some(text) = value.as_str() {
-                if let Ok(Value::Object(extra)) = mosql::parse_json(text) {
-                    for (key, value) in extra.iter() {
-                        if record.get(key).is_none() {
-                            record.set(key.clone(), value.clone());
-                        }
-                    }
-                }
-            }
-            continue;
-        }
-        let value = if booleans.contains(&column.as_str()) {
-            match value {
-                Value::Int(i) => Value::Bool(*i != 0),
-                other => other.clone(),
-            }
-        } else {
-            value.clone()
-        };
-        record.set(column.clone(), value);
-    }
-    record
 }
 
 #[cfg(test)]
