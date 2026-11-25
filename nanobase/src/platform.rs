@@ -233,12 +233,20 @@ pub struct KeyDirectory {
     /// The keys: the preview, and the id of the row in the app's own
     /// database.
     pub keys: Vec<(String, String)>,
-    /// Bumped whenever the app's keys change.
+    /// Bumped whenever the app's *set* of keys changes: one is made,
+    /// or one is removed.
     ///
     /// A cached decision about a key — "this secret is this key" — is
     /// only good while the version it was made under still stands, so a
-    /// key that is revoked is refused at once rather than when the
-    /// cache happens to expire.
+    /// key that is gone is refused at once rather than when the cache
+    /// happens to expire.
+    ///
+    /// A key that is *changed* rather than removed — renamed, its
+    /// scopes cut, revoked — carries a version of its own, in its own
+    /// row in the app's database. The two are kept apart on purpose:
+    /// this one is about which keys exist, and that one is about what a
+    /// key may do. A change to a key is one write in one place, so it
+    /// cannot leave the two disagreeing.
     pub version: u64,
 }
 

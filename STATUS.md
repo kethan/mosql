@@ -232,6 +232,23 @@ with `401 REVOKED_KEY`. The owner's token still exists and still works
 for the privileged operations — making and revoking keys, and everything
 else — but it is no longer the credential a program is expected to hold.
 
+**Two versions, kept apart on purpose.** The *directory* has a version,
+and it goes up when the app's **set** of keys changes: one is made, or
+one is removed. A *key* has a version of its own, and it goes up when
+the key **changes** — renamed, its scopes cut, revoked — and it does not
+go up when the key is used, because the time a key was last used is not
+a permission. The key's version lives in the key's own row, so the
+change and the version that says so are one write and cannot disagree:
+the key is in the app's database and the directory is somewhere else
+entirely, and a promise that spans two stores is a promise that can be
+broken by one of them failing.
+
+**A preview may be shared.** The preview is six characters of a
+256-bit key, so two keys sharing one is a one-in-sixty-eight-billion
+accident. The platform keeps every candidate for a preview rather than
+the first one it finds, and the secret itself decides between them —
+a key is not refused because another key happened to look like it.
+
 | route | what it does |
 | --- | --- |
 | `GET /api/apps/{app}/keys` | the app's keys, without their hashes |
@@ -419,7 +436,7 @@ full edition only, and they are what the full edition grew by.
 | `mosql` | `rust/verify.sh` — fmt, clippy, the tests, **289 builder fixtures and 153 memory fixtures regenerated** against the JavaScript, a `no_std` build and a publish dry-run |
 | `uflite` | `uflite/verify.sh` |
 | `schemaless` | `schemaless/verify.sh` |
-| `nanobase` | `nanobase/verify.sh` — fmt, clippy, the tests, **a `serverless` stage that compiles and tests the second edition**, no external dependencies, a publish dry-run, and a size budget that measures **both** binaries and fails if the serverless one is not smaller. **347 tests**: `nanobase/tests/console.rs` covers the console, the security headers, the CORS rules, the rate limit, the search and paging, and the database connection test; `nanobase/tests/acl.rs` covers an app's own rules; `nanobase/tests/apikeys.rs` covers the keys; `nanobase/tests/redaction.rs` covers the app's secrets |
+| `nanobase` | `nanobase/verify.sh` — fmt, clippy, the tests, **a `serverless` stage that compiles and tests the second edition**, no external dependencies, a publish dry-run, and a size budget that measures **both** binaries and fails if the serverless one is not smaller. **361 tests**: `nanobase/tests/console.rs` covers the console, the security headers, the CORS rules, the rate limit, the search and paging, and the database connection test; `nanobase/tests/acl.rs` covers an app's own rules; `nanobase/tests/apikeys.rs` covers the keys; `nanobase/tests/redaction.rs` covers the app's secrets; `nanobase/tests/keydirectory.rs` covers the key directory, its versions and the preview collisions |
 | `better-auth-core` | `better-auth-core/verify.sh` — plus the official `better-auth@1.7.27` client driving the release binary over HTTP: 22/22 |
 | `worker` | `worker/verify.sh` and `worker/test.sh` — fmt, clippy, the protocol tests, the schema test, the end-to-end Wrangler run, and a check on the module's import section |
 | `mosql-core` | `mosql-core/verify.sh` — fmt, clippy, the tests, a dependency check that refuses a registry dependency, a **wasm32 build with the standard library switched off**, and a stage that compiles every optional transport |

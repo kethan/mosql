@@ -91,6 +91,18 @@ pub struct ApiKey {
     pub last_used_at: Option<i64>,
     /// Whether it has been revoked.
     pub revoked: bool,
+    /// The version of this key's own record.
+    ///
+    /// It goes up when the record changes in a way a reader might have
+    /// cached: the name, the scopes, the expiry, the revoked flag. It
+    /// does **not** go up for `lastUsedAt`, which is approximate by
+    /// design and is not a permission.
+    ///
+    /// The version lives in the key's own row, so a change to a key and
+    /// the version that says so are one write and cannot disagree —
+    /// which matters, because the key is in the app's database and the
+    /// platform's directory is somewhere else entirely.
+    pub version: u64,
 }
 
 impl ApiKey {
@@ -119,6 +131,7 @@ impl ApiKey {
             created_at: crate::platform::iso8601(now),
             last_used_at: None,
             revoked: false,
+            version: 0,
         };
         (record, secret)
     }
@@ -193,6 +206,7 @@ impl ApiKey {
             },
         );
         o.set("revoked", Value::Bool(self.revoked));
+        o.set("version", Value::Int(self.version as i64));
         Value::Object(o)
     }
 
@@ -252,6 +266,7 @@ impl ApiKey {
                 _ => None,
             },
             revoked: matches!(o.get("revoked"), Some(Value::Bool(true))),
+            version: o.get("version").and_then(|v| v.as_f64()).unwrap_or(0.0) as u64,
         })
     }
 }
@@ -385,6 +400,9 @@ impl LegacyKey {
             created_at: self.created_at.clone(),
             last_used_at: self.last_used_at,
             revoked: self.revoked,
+            // A key from before the version existed starts at zero: it
+            // has not changed since it was read.
+            version: 0,
         }
     }
 }

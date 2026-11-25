@@ -82,8 +82,8 @@ $app = "app_7585e98765bed55cd83fce11"
 
 The API needs a credential. A **person** signs in and gets a session
 token; a **program** — this page, a deploy script, a CI job — gets an
-API key instead. A key can be limited to one app, limited to what it may
-do, and made to expire on its own.
+API key instead. A key belongs to one app, is limited to what it may
+do, and can be made to expire on its own.
 
 The key is made on the platform's own state, so the server may be
 running or not:
@@ -91,13 +91,13 @@ running or not:
 **cmd.exe**
 
 ```
-.\target\release\nanobase.exe key create --name "the todo page" --app %APP% --scopes rows:read,rows:write --expires-in 30d
+.\target\release\nanobase.exe key create %APP% --name "the todo page" --scopes rows:read,rows:write --expires-in 30d
 ```
 
 **PowerShell**
 
 ```powershell
-.\target\release\nanobase.exe key create --name "the todo page" --app $app --scopes rows:read,rows:write --expires-in 30d
+.\target\release\nanobase.exe key create $app --name "the todo page" --scopes rows:read,rows:write --expires-in 30d
 ```
 
 The key is printed once, and never again — the platform keeps a hash of
@@ -127,9 +127,9 @@ A key works the same as a token in a request — `Authorization: Bearer
 To see the keys, and to remove one:
 
 ```
-.\target\release\nanobase.exe key list
-.\target\release\nanobase.exe key show key_djf2qK9rsqIK
-.\target\release\nanobase.exe key remove key_djf2qK9rsqIK
+.\target\release\nanobase.exe key list %APP%
+.\target\release\nanobase.exe key show %APP% key_djf2qK9rsqIK
+.\target\release\nanobase.exe key remove %APP% key_djf2qK9rsqIK
 ```
 
 A key that may only read cannot write, whatever it is asked to do; a key
@@ -288,7 +288,7 @@ A key is a credential a program holds. It has a name, it may be limited
 to one app, it may be limited to what it may do, and it may expire:
 
 ```
-.\target\release\nanobase.exe key create --name "the deploy script" --app todos --scopes rows:read,rows:write --expires-in 30d
+.\target\release\nanobase.exe key create todos --name "the deploy script" --scopes rows:read,rows:write --expires-in 30d
 ```
 
 | scope | what it allows |

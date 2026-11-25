@@ -431,6 +431,14 @@ impl Service {
     pub fn patch_key(&self, app: &str, id: &str, changes: &Value) -> Result<Value> {
         let key = self.find_key(app, id)?;
         let mut key = key;
+        // What the record was before the change, so the version is
+        // moved only when something really changed.
+        let before = (
+            key.name.clone(),
+            key.scopes.clone(),
+            key.expires_at,
+            key.revoked,
+        );
         if let Some(name) = changes.get("name").and_then(|v| v.as_str()) {
             let name = name.trim();
             if name.is_empty() {
@@ -461,6 +469,20 @@ impl Service {
         }
         if let Some(Value::Bool(revoked)) = changes.get("revoked") {
             key.revoked = *revoked;
+        }
+        // The version goes up with the change it describes, in the same
+        // write: the key is in the app's own database, and a reader
+        // that compares the version cannot be told a change that did
+        // not happen, nor miss one that did.
+        if before
+            != (
+                key.name.clone(),
+                key.scopes.clone(),
+                key.expires_at,
+                key.revoked,
+            )
+        {
+            key.version += 1;
         }
         let db = self.db(app)?;
         let mut filter = Object::new();
@@ -626,6 +648,11 @@ impl Service {
     /// The write is at most one a minute: a key used a thousand times a
     /// second must not write a thousand times a second, and "when was
     /// this last used" does not need to be exact to the second.
+    ///
+    /// The version does **not** go up. The time a key was last used is
+    /// not a permission — it is a fact about the past, it is
+    /// approximate, and a reader that cached it would be caching a
+    /// number that is wrong by up to a minute anyway.
     pub fn touch_key(&self, app: &str, id: &str, now: i64) -> Result<()> {
         let Ok(mut key) = self.find_key(app, id) else {
             return Ok(());
