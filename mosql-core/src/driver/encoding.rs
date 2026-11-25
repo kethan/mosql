@@ -18,15 +18,19 @@ const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwx
 /// Encode bytes as base64, with padding.
 pub fn base64_encode(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    let mut chunks = data.chunks_exact(3);
-    for chunk in &mut chunks {
-        let n = (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]);
+    // Three bytes in, four characters out.
+    let mut index = 0usize;
+    while index + 3 <= data.len() {
+        let n = (u32::from(data[index]) << 16)
+            | (u32::from(data[index + 1]) << 8)
+            | u32::from(data[index + 2]);
         out.push(ALPHABET[(n >> 18) as usize & 63] as char);
         out.push(ALPHABET[(n >> 12) as usize & 63] as char);
         out.push(ALPHABET[(n >> 6) as usize & 63] as char);
         out.push(ALPHABET[n as usize & 63] as char);
+        index += 3;
     }
-    let rest = chunks.remainder();
+    let rest = &data[index..];
     match rest.len() {
         1 => {
             let n = u32::from(rest[0]) << 16;
@@ -99,10 +103,13 @@ pub fn hex_decode(input: &str) -> Result<Vec<u8>, DbError> {
         ));
     }
     let mut out = Vec::with_capacity(bytes.len() / 2);
-    for pair in bytes.chunks_exact(2) {
-        let high = digit(pair[0])?;
-        let low = digit(pair[1])?;
+    // Two digits in, one byte out.
+    let mut index = 0usize;
+    while index + 1 < bytes.len() {
+        let high = digit(bytes[index])?;
+        let low = digit(bytes[index + 1])?;
         out.push((high << 4) | low);
+        index += 2;
     }
     Ok(out)
 }

@@ -32,6 +32,7 @@ The in-memory engine — CHECK find=2831 groups=2 city=London
 | `nanobase/` | the platform: app documents, secrets, an owner account, a platform store, a service layer with events and hooks, an HTTP API, a web console, security middleware, and the command line | 262 (full) · 100 (serverless) |
 | `better-auth-core/` | a Better Auth-compatible authentication server: bearer JWT sessions, eight plugins, every social provider, OpenID Connect with verified ID tokens | 172, plus the official client **22/22** |
 | `worker/` | the same engine as a Cloudflare Worker: Rust compiled to WebAssembly, D1 as the database, KV and R2 as optional adapters | 12, plus the end-to-end Wrangler run |
+| `mosql-core/` | the serverless drivers: Turso, Cloudflare D1, Neon, TiDB Cloud and PlanetScale, from one connection URL. No crates.io dependency, no global state, and it builds for WebAssembly | 80 |
 
 The JavaScript implementation is untouched and remains the oracle for
 parity.
@@ -44,13 +45,13 @@ each one is allowed to reach for.
 
 | | **full** — `nanobase` | **serverless** — `nanobase-serverless` |
 | --- | --- | --- |
-| Release size | 1,924,848 bytes (1.84 MiB) | 816,336 bytes (797 KiB) — **42 % of the full one** |
+| Release size | 1,983,408 bytes (1.89 MiB) | 836,896 bytes (817 KiB) — **42 % of the full one** |
 | Peak RSS at `--version` | 10,148 KiB | 10,184 KiB |
 | Platform state | one local SQLite file (`--data`) | a serverless database (`--db-url`) |
 | Listener | `nanobase serve`, `nanobase db serve` | **none** — no TCP code in the binary |
 | Local database | SQLite, vendored and compiled in | **none** |
 | Build | `cargo build --release` | `cargo build --release --no-default-features --features serverless` |
-| Tests | 227 | 100 (a second, separate suite) |
+| Tests | 288 | 112 (a second, separate suite) |
 
 The split is enforced by Cargo features, not by convention:
 
@@ -151,6 +152,90 @@ walkthrough: build, `init`, `serve`, create the app, put rows in it with
 so the page is served over HTTP rather than from the disk, because a
 `file://` page cannot read an `http://` answer.
 
+### API keys
+
+A **session token** is a person. An **API key** is a program. Until now
+the platform had only the first, so a front end on another origin, a
+script, a cron job — anything that is not the owner — had to borrow the
+owner's token, which is the platform's most powerful credential and the
+one with the longest life.
+
+An API key is made in the console (**API keys** in the sidebar) or from
+the command line (`nanobase key create`), and it can be limited in four
+ways:
+
+| limit | what it does |
+| --- | --- |
+| a **name** | so the key can be found in a list six months later |
+| **scopes** | `apps:read`, `apps:write`, `rows:read`, `rows:write`, `admin` — a key that may only read rows may not read the app list, and says so with `403` |
+| an **app** | a key bound to one app sees that app only, and lists that app only |
+| an **expiry** | a date after which the key is refused with `401 EXPIRED_KEY` |
+
+The secret is shown **once**, at the moment it is made, and only its
+SHA-256 hash is stored: a leaked database of platform state does not
+leak a usable key. A key can be revoked, and a revoked key is refused
+with `401 REVOKED_KEY`. The owner's token still exists and still works
+for the privileged operations — making and revoking keys, and everything
+else — but it is no longer the credential a program is expected to hold.
+
+| file | what it is |
+| --- | --- |
+| `nanobase/src/apikey.rs` | the key: its hash, its scopes, its app, its expiry, its revocation |
+| `nanobase/src/api.rs` | the principal: the owner token or an API key, and what each may do |
+| `nanobase/src/store.rs` | the native SQLite store, with the `api_keys` table |
+| `nanobase/src/store_serverless.rs` | the serverless store, with the same collection |
+| `nanobase/tests/apikeys.rs` | 14 tests: the lifecycle, the scopes, the app binding, the expiry, the revocation |
+
+### The serverless drivers
+
+`mosql-core/` is a crate that talks to the five serverless databases
+that matter, **from one connection URL**, so a caller does not have to
+know which one it is talking to.
+
+| provider | dialect | endpoint |
+| --- | --- | --- |
+| Turso / libSQL | SQLite | `https://{host}/v2/pipeline` |
+| Cloudflare D1 | SQLite | `https://api.cloudflare.com/client/v4/accounts/{acct}/d1/database/{db}/query` |
+| Neon / Vercel Postgres | PostgreSQL | `https://{host}/sql` |
+| TiDB Cloud Serverless | MySQL | `https://http-{host}/v1beta/sql` |
+| PlanetScale | MySQL (Vitess) | `https://{host}/psdb.v1alpha1.Database/Execute` |
+
+```rust
+let driver = AnyServerlessDriver::from_url(
+    "postgres://user:pass@ep-cool.us-east-2.aws.neon.tech/mydb",
+    transport,
+)?;
+let rows = driver.execute("SELECT id FROM users WHERE age > $1", &[SqlValue::Int(18)]).await?;
+```
+
+**No crates.io dependencies.** The JSON model, the parser and the writer
+come from the repository's own `mosql` crate, so there is no `sqlx`, no
+Diesel, no OpenSSL, no Tokio, no Serde, no `url` crate, no base64 crate
+and no `chrono` — and the crate builds for a WebAssembly module as
+happily as for a server.
+
+**No global state.** No `static`, no `OnceLock`, no environment variable
+read inside the driver: a driver owns its configuration and its
+transport, and the caller owns the driver. That is what makes it
+possible to check a wire protocol with a mock transport and nothing else.
+
+The transport is a trait, and the concrete ones are behind features: a
+`curl`-backed transport for a native build — the platform's own answer
+to "HTTPS without a registry" — and a host-provided `fetch` for a Worker,
+which is what `worker::Fetch::Request` is.
+
+The parameters are dealt with per dialect. PostgreSQL renumbers them to
+`$1`, `$2`, …; MySQL inlines them, escaped, so a value cannot change
+the statement, and refuses a float that is not finite; SQLite sends them
+as arguments, with a whole number as a string, because a JSON number
+cannot hold every `i64` exactly and a database row can. A `?` inside a
+string, a quoted identifier or a comment is not a parameter, and the
+count has to match or the statement is refused before it is sent.
+
+TiDB and PlanetScale keep a session, and it travels with the request, so
+`BEGIN` and `COMMIT` reach the same conversation; a statement that fails
+gets a `ROLLBACK` before the error is returned.
+
 ### The Rust optimisation
 
 The builder used to build a statement out of a dozen `String`s and
@@ -245,12 +330,13 @@ full edition only, and they are what the full edition grew by.
 | item | state | why |
 | --- | --- | --- |
 | **An app's own sign-in endpoint** | **next** | The app document has the shape for it (`config.auth.features.emailPassword`) and the console writes it, but the platform still serves only the owner's token. A front end has to borrow the owner's token today. |
-| **Postgres and MySQL app databases** | **next** | They want a driver. The factory says so plainly rather than pretending: `the postgres engine is not built into this binary yet`. |
+| **Postgres and MySQL app databases** | **next** | The drivers are written — `mosql-core/` speaks to Neon, TiDB and PlanetScale — but the platform's own database factory still only offers the generic HTTP adapter and says so plainly rather than pretending: `the postgres engine is not built into this binary yet`. Wiring the new crate into the factory is the remaining half. |
 | The JavaScript runtime adapters (`src/drivers.js`, `src/client.js`, `src/schemaless.js`) | not ported, **by decision** | I/O glue that would pull in async + TLS + socket crates and break the zero-dependency goal. |
 | `uflite`'s `auth.js` and `sql-adapter-factory.js` | not ported | The same I/O glue; the authentication engine is `better-auth-core` instead. |
 | `schemaless`'s MongoDB backend | not ported | It is a driver, not a SQL dialect. |
 | Better Auth's generic-OAuth *transform callbacks*, *refresh parameters* and *discovery-derived logout* | deliberately out | The README says why for each. The headers a provider asks for are there. |
 | A `reqwest`-backed HTTP client in `better-auth-core` | reserved | It is the one dependency that needs a registry; the feature exists and is off. |
+| A `ureq`-backed transport in `mosql-core` | reserved | The same reason. The `transport-curl` transport covers the same ground without a registry, and `transport-worker` covers a Worker. |
 | A `LICENSE` file at the repository root | missing | `license = "ISC"` matches `package.json`, and `include = ["LICENSE*"]` is already in place for it. |
 | The crate names on crates.io | unverified | The sandbox had no registry access. |
 
@@ -266,5 +352,6 @@ full edition only, and they are what the full edition grew by.
 | `nanobase` | `nanobase/verify.sh` — fmt, clippy, the tests, **a `serverless` stage that compiles and tests the second edition**, no external dependencies, a publish dry-run, and a size budget that measures **both** binaries and fails if the serverless one is not smaller. `nanobase/tests/console.rs` covers the console, the security headers, the CORS rules, the rate limit, the search and paging, and the database connection test |
 | `better-auth-core` | `better-auth-core/verify.sh` — plus the official `better-auth@1.7.27` client driving the release binary over HTTP: 22/22 |
 | `worker` | `worker/verify.sh` and `worker/test.sh` — fmt, clippy, the protocol tests, the schema test, the end-to-end Wrangler run, and a check on the module's import section |
+| `mosql-core` | `mosql-core/verify.sh` — fmt, clippy, the tests, a dependency check that refuses a registry dependency, a **wasm32 build with the standard library switched off**, and a stage that compiles every optional transport |
 
 CI gives each stage its own step, so a red X says which stage broke.
