@@ -39,6 +39,7 @@ on:
       - "nanobase/**"
       - "better-auth-core/**"
       - "worker/**"
+      - "mosql-core/**"
       # The JS implementation is the oracle for the parity fixtures, so a change
       # to it can make the Rust port drift even though rust/ is untouched.
       - "src/**"
@@ -55,6 +56,7 @@ on:
       - "nanobase/**"
       - "better-auth-core/**"
       - "worker/**"
+      - "mosql-core/**"
       - "src/**"
       - "lite/**"
       - "tiny/**"
@@ -323,6 +325,45 @@ jobs:
       - name: module
         shell: bash
         run: ./worker/verify.sh module
+
+  mosql-core:
+    # The serverless drivers: Turso, Cloudflare D1, Neon, TiDB Cloud and
+    # PlanetScale, from one connection URL. The crate has no registry
+    # dependency at all, so the whole graph is the repository's own JSON
+    # model — and the WebAssembly build is the one a Cloudflare Worker
+    # runs.
+    name: mosql-core
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mosql-core
+      # One step per stage rather than a single "verify" step: a red X beside
+      # the stage that broke is worth far more than one beside the whole job.
+      - name: fmt
+        shell: bash
+        run: ./mosql-core/verify.sh fmt
+      - name: clippy
+        shell: bash
+        run: ./mosql-core/verify.sh clippy
+      - name: test
+        shell: bash
+        run: ./mosql-core/verify.sh test
+      - name: dependencies
+        shell: bash
+        run: ./mosql-core/verify.sh deps
+      - name: wasm32
+        shell: bash
+        run: ./mosql-core/verify.sh wasm
+      - name: features
+        shell: bash
+        run: ./mosql-core/verify.sh features
 
   # `cargo publish --dry-run` needs the crates.io index, which the sandbox that
   # developed this crate had no access to. CI has it, so this is the gate that
