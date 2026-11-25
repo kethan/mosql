@@ -7,7 +7,7 @@
 #   ./verify.sh --quick      every stage except the publish dry-run
 #   ./verify.sh <stage>      just that stage
 #
-# Stages: fmt, clippy, test, deps, publish, size
+# Stages: fmt, clippy, test, serverless, deps, publish, size
 #
 # The stages are separately addressable so CI can give each one its own step:
 # a red X next to "clippy" is worth more than one next to "verify", and the
@@ -19,14 +19,14 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-STAGES=(fmt clippy test deps publish size)
+STAGES=(fmt clippy test serverless deps publish size)
 QUICK=0
 ONLY=()
 
 for arg in "$@"; do
   case "$arg" in
     --quick) QUICK=1 ;;
-    fmt|clippy|test|deps|publish|size) ONLY+=("$arg") ;;
+    fmt|clippy|test|serverless|deps|publish|size) ONLY+=("$arg") ;;
     *) echo "verify: unknown argument '$arg'" >&2; exit 2 ;;
   esac
 done
@@ -77,6 +77,19 @@ fi
 if run test; then
   echo "== test =="
   stage test cargo test --tests
+fi
+
+if run serverless; then
+  echo "== serverless =="
+  # The second edition is a different binary, so it gets its own compile
+  # and its own tests: a feature gate that quietly removes the listener
+  # from one build and not the other is exactly the kind of mistake these
+  # two editions exist to prevent.
+  stage serverless-clippy \
+    cargo clippy --all-targets --no-default-features --features serverless \
+    -- -D warnings
+  stage serverless-test \
+    cargo test --no-default-features --features serverless
 fi
 
 if run deps; then
@@ -133,6 +146,25 @@ if run size; then
     exit 1
   fi
   echo "size: ok (${SIZE} bytes, budget ${BUDGET})"
+
+  # The serverless edition is the one that ships to a small host, so it
+  # gets its own budget: it must be smaller than the full one, and it
+  # must not grow by accident either.
+  cargo build --release --quiet --no-default-features --features serverless \
+    --bin nanobase-serverless
+  SERVERLESS=target/release/nanobase-serverless
+  SL_SIZE=$(wc -c < "$SERVERLESS")
+  SL_BUDGET=$((2 * 1024 * 1024))
+  echo "serverless binary: ${SL_SIZE} bytes"
+  if (( SL_SIZE > SL_BUDGET )); then
+    echo "verify: ${SL_SIZE} bytes exceeds the ${SL_BUDGET}-byte budget" >&2
+    exit 1
+  fi
+  if (( SL_SIZE >= SIZE )); then
+    echo "verify: the serverless binary (${SL_SIZE}) is not smaller than the full one (${SIZE})" >&2
+    exit 1
+  fi
+  echo "size: ok (${SL_SIZE} bytes, budget ${SL_BUDGET}, smaller than ${SIZE})"
 fi
 
 echo "verify: ok"

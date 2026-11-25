@@ -10,11 +10,13 @@
 //! The host chooses the transport. [`PlainHttpClient`] speaks `http://`
 //! only; [`CurlHttpClient`] speaks both.
 
+#[cfg(feature = "curl")]
+use std::io::Write;
 #[cfg(feature = "native")]
-use std::io::{BufRead, BufReader, Read as IoRead, Write};
+use std::io::{BufRead, BufReader, Read as IoRead};
 #[cfg(feature = "native")]
 use std::net::TcpStream;
-#[cfg(feature = "native")]
+#[cfg(feature = "curl")]
 use std::process::{Command, Stdio};
 
 use mosql::Value;
@@ -61,7 +63,7 @@ impl HttpResponse {
 /// Sends a request and returns the reply. Blocking: the server runs each
 /// request on a worker thread. The host provides the transport — a plain
 /// `std::net` one for `http://`, a TLS-capable one in production.
-#[cfg(feature = "native")]
+#[cfg(feature = "curl")]
 pub trait HttpClient: Send + Sync {
     fn request(&self, request: &HttpRequest) -> ApiResult<HttpResponse>;
 }
@@ -71,7 +73,7 @@ pub trait HttpClient: Send + Sync {
 /// This is what lets a caller keep a handle on the client it handed over —
 /// a test that wants to see what was asked of it, say — without giving up
 /// the single trait the engine talks to.
-#[cfg(feature = "native")]
+#[cfg(feature = "curl")]
 impl<C: HttpClient + ?Sized> HttpClient for std::sync::Arc<C> {
     fn request(&self, request: &HttpRequest) -> ApiResult<HttpResponse> {
         (**self).request(request)
@@ -227,11 +229,11 @@ pub fn split_url(url: &str) -> ApiResult<(String, u16, String)> {
 /// An `HttpClient` that shells out to `curl`, which every server has and
 /// which brings TLS. The body goes in through stdin so nothing is spelled
 /// out on a command line.
-#[cfg(feature = "native")]
+#[cfg(feature = "curl")]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CurlHttpClient;
 
-#[cfg(feature = "native")]
+#[cfg(feature = "curl")]
 impl HttpClient for CurlHttpClient {
     fn request(&self, request: &HttpRequest) -> ApiResult<HttpResponse> {
         let mut command = Command::new("curl");
@@ -263,6 +265,16 @@ impl HttpClient for CurlHttpClient {
             .write_all(&request.body)
             .map_err(ApiError::from)?;
         let output = child.wait_with_output().map_err(ApiError::from)?;
+        // curl reports a failed connection on stderr and exits non-zero.
+        // Without this the empty body would be read as an empty answer,
+        // and a database that is not there would look like a database that
+        // said nothing.
+        if !output.status.success() {
+            return Err(ApiError::internal(format!(
+                "curl failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
         let mut bytes = output.stdout;
         let status = bytes
             .rsplit(|b| *b == b'\n')

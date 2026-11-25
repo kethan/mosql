@@ -22,7 +22,11 @@
 // the network, so those modules are not compiled into it at all.
 #[cfg(feature = "native")]
 pub mod api;
-#[cfg(feature = "native")]
+// The command line belongs to the two binaries, and neither of them is
+// built for the Worker: the Worker has no command line.
+#[cfg(any(feature = "native", feature = "serverless"))]
+pub mod cli;
+#[cfg(feature = "curl")]
 pub mod client;
 pub mod config;
 pub mod crypto;
@@ -31,17 +35,19 @@ pub mod http;
 pub mod httpclient;
 pub mod jwt;
 pub mod platform;
-#[cfg(feature = "native")]
+#[cfg(any(feature = "native", feature = "serverless"))]
 pub mod service;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 #[cfg(feature = "sqlite")]
 pub mod store;
+#[cfg(feature = "serverless")]
+pub mod store_serverless;
 pub mod wire;
 
 #[cfg(feature = "native")]
 pub use api::Api;
-#[cfg(feature = "native")]
+#[cfg(feature = "curl")]
 pub use client::ApiClient;
 pub use config::{
     AclConfig, AppConfig, AppDoc, AppMeta, AppType, AuthConfig, CollectionDef, ColumnDef,
@@ -55,8 +61,10 @@ pub use db::{AppDb, DbOp, DbRequest, DbResponse};
 pub use http::{read_request, serve, serve_on, write_response, Incoming};
 pub use http::{ApiError, Request, Response};
 pub use httpclient::{AsyncHttpClient, HttpRequest, HttpResponse};
+#[cfg(feature = "curl")]
+pub use httpclient::{CurlHttpClient, HttpClient};
 #[cfg(feature = "native")]
-pub use httpclient::{CurlHttpClient, HttpClient, PlainHttpClient, SyncHttpClient};
+pub use httpclient::{PlainHttpClient, SyncHttpClient};
 #[cfg(feature = "native")]
 pub use platform::FileStore;
 pub use platform::{
@@ -64,12 +72,14 @@ pub use platform::{
     set_clock, verify_login, AppRecord, BoxFuture, MemoryStore, PasswordHash, Platform,
     PlatformStore, User, MIN_PASSWORD_LEN, PBKDF2_ITERATIONS, ROLE_OWNER, SESSION_TTL_SECS,
 };
-#[cfg(feature = "native")]
+#[cfg(any(feature = "native", feature = "serverless"))]
 pub use service::{CustomMethod, Event, EventContext, Hook, Hooks, Listener, Phase, Service};
 #[cfg(feature = "sqlite")]
 pub use sqlite::{Connection, Row, Statement};
 #[cfg(feature = "sqlite")]
 pub use store::SqliteStore;
+#[cfg(feature = "serverless")]
+pub use store_serverless::ServerlessStore;
 
 /// The version of the platform, from `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

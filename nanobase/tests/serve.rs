@@ -1,5 +1,9 @@
 //! The server and the command line's client, end to end over HTTP.
 
+// The serverless edition has no file store, no local database and no
+// listener, so this test belongs to the full edition only.
+#![cfg(feature = "native")]
+
 use std::sync::Arc;
 
 use mosql::Value;

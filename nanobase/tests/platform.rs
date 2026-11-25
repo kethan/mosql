@@ -1,6 +1,10 @@
 //! The owner account, the platform file, and the rules that keep a password
 //! from being stored or a login from leaking which emails exist.
 
+// The serverless edition has no file store, no local database and no
+// listener, so this test belongs to the full edition only.
+#![cfg(feature = "native")]
+
 use std::path::PathBuf;
 
 use nanobase::crypto::random_id;

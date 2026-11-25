@@ -6,7 +6,9 @@
 //! prints what comes back — so an operator and a script reach exactly the
 //! same API the platform serves.
 
-use crate::httpclient::{CurlHttpClient, HttpClient, HttpRequest, PlainHttpClient};
+#[cfg(feature = "native")]
+use crate::httpclient::PlainHttpClient;
+use crate::httpclient::{CurlHttpClient, HttpClient, HttpRequest};
 use mosql::Value;
 
 /// A client for a running platform.
@@ -58,12 +60,7 @@ impl ApiClient {
             headers,
             body: payload,
         };
-        // `https://` needs TLS, which only curl brings.
-        let client: Box<dyn HttpClient> = if request.url.starts_with("https://") {
-            Box::new(CurlHttpClient)
-        } else {
-            Box::new(PlainHttpClient)
-        };
+        let client = transport(&request.url);
         let response = client.request(&request).map_err(|e| e.to_string())?;
         let text = String::from_utf8_lossy(&response.body).to_string();
         let value = if text.trim().is_empty() {
@@ -86,4 +83,23 @@ impl ApiClient {
         }
         Ok(value)
     }
+}
+
+/// The transport for an address.
+///
+/// `https://` needs TLS, which only curl brings. Without the `std::net`
+/// transport — the serverless build — everything goes through curl, which
+/// speaks plain HTTP as well.
+#[cfg(feature = "native")]
+fn transport(url: &str) -> Box<dyn HttpClient> {
+    if url.starts_with("https://") {
+        Box::new(CurlHttpClient)
+    } else {
+        Box::new(PlainHttpClient)
+    }
+}
+
+#[cfg(not(feature = "native"))]
+fn transport(_url: &str) -> Box<dyn HttpClient> {
+    Box::new(CurlHttpClient)
 }

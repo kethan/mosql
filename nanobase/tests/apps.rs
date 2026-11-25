@@ -1,5 +1,9 @@
 //! Creating, renaming, cloning, exporting and deleting apps.
 
+// The serverless edition has no file store, no local database and no
+// listener, so this test belongs to the full edition only.
+#![cfg(feature = "native")]
+
 use nanobase::platform::{create_owner_with, iso8601, FileStore, Platform, PlatformStore};
 use nanobase::{AppDoc, DbKind, Secrets};
 use uflite::db::block_on;

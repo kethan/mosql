@@ -548,20 +548,24 @@ pub fn now_secs() -> i64 {
     if let Some(clock) = CLOCK.get() {
         return clock();
     }
-    #[cfg(feature = "native")]
+    // The operating system's clock is the default everywhere there is
+    // one. The `native` feature is about the listener and the local
+    // file, not about whether the program has an operating system: the
+    // serverless build has one, and the Worker does not.
+    #[cfg(not(target_arch = "wasm32"))]
     {
         system_now_secs()
     }
     // Without an operating system there is no clock to read, and a program
     // that has not installed one has a bug rather than a slow request.
-    #[cfg(not(feature = "native"))]
+    #[cfg(target_arch = "wasm32")]
     {
         panic!("no clock installed: call nanobase::platform::set_clock first")
     }
 }
 
 /// The operating system's clock.
-#[cfg(feature = "native")]
+#[cfg(not(target_arch = "wasm32"))]
 fn system_now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

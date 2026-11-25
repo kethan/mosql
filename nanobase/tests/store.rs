@@ -4,6 +4,10 @@
 //! the same invariants hold when the state is in SQLite on disk, and that an
 //! install kept in the old JSON file is carried across.
 
+// The serverless edition has no file store, no local database and no
+// listener, so this test belongs to the full edition only.
+#![cfg(all(feature = "native", feature = "sqlite"))]
+
 use std::path::{Path, PathBuf};
 
 use nanobase::platform::{create_owner_with, now_secs, FileStore, Platform, PlatformStore};

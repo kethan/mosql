@@ -229,6 +229,9 @@ jobs:
       - name: test
         shell: bash
         run: ./nanobase/verify.sh test
+      - name: serverless edition
+        shell: bash
+        run: ./nanobase/verify.sh serverless
       - name: dependencies
         shell: bash
         run: ./nanobase/verify.sh deps

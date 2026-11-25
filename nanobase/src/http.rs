@@ -116,7 +116,7 @@ impl From<mosql::Error> for ApiError {
     }
 }
 
-#[cfg(feature = "native")]
+#[cfg(any(feature = "native", feature = "curl"))]
 impl From<std::io::Error> for ApiError {
     fn from(e: std::io::Error) -> Self {
         ApiError::internal(format!("i/o: {e}"))

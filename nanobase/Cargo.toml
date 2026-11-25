@@ -30,18 +30,35 @@ name = "nanobase"
 path = "src/main.rs"
 required-features = ["native", "sqlite"]
 
-# Two switches, because the crate has two faces. The default one is the
-# binary that runs on a server: a local SQLite database, a TCP listener, a
-# `curl` transport. The other is the Worker face, where the platform
-# provides the database, the network and the clock, and the crate must not
-# reach for an operating system at all.
+# The other half: the same command line, with no listener and no local
+# file. The platform's own state lives in a serverless database.
+[[bin]]
+name = "nanobase-serverless"
+path = "src/bin/serverless.rs"
+required-features = ["serverless"]
+
+# Three switches, because the crate has three faces. The default one is
+# the binary that runs on a server: a local SQLite database, a TCP
+# listener, a `curl` transport. The second is the serverless one: no
+# listener, no local file, and the platform's state in a serverless
+# database. The third is the Worker face, where the platform provides the
+# database, the network and the clock, and the crate must not reach for an
+# operating system at all.
 [features]
 default = ["sqlite", "native"]
 # The vendored SQLite engine and the local database that uses it.
 sqlite = []
+# The outbound HTTPS transport. It shells out to `curl`, which every
+# server has, because there is no TLS in this build otherwise. Both the
+# server build and the serverless build need it: a serverless database is
+# reached over the network.
+curl = []
 # Everything that needs an operating system: the TCP server, the `std::net`
-# and `curl` transports, and the file-backed platform store.
-native = []
+# transport, and the file-backed platform store.
+native = ["curl"]
+# The client-only build: no listener, no local file, and the platform's
+# state in a serverless database.
+serverless = ["curl"]
 
 # The only dependencies are the two sibling crates. SQLite is not a crate
 # dependency: `build.rs` compiles it from the vendored amalgamation so its

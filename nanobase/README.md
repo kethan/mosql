@@ -14,8 +14,46 @@ ships), with every optional feature omitted at the preprocessor level — that i
 the lever a prebuilt library does not give. Building needs a C compiler; that
 is the only tool beyond Rust itself.
 
-Release binary today: **~1.4 MB** (SQLite is ~0.9 MB of it), against a 3 MB
-budget that [`verify.sh`](verify.sh) enforces.
+Release binary today: **~1.8 MB** (SQLite is ~0.9 MB of it), against a 3 MB
+budget that [`verify.sh`](verify.sh) enforces. The serverless edition is
+**~0.8 MB**: no SQLite, no listener, no local file.
+
+## Two editions
+
+The platform ships as two binaries built from the same crate. They share one
+command line and one implementation; they differ in what they are allowed to
+reach for.
+
+| | **full** (`nanobase`) | **serverless** (`nanobase-serverless`) |
+| --- | --- | --- |
+| Release size | ~1.8 MB | ~0.8 MB |
+| Platform state | one local SQLite file (`--data`) | a serverless database (`--db-url`) |
+| Listener | yes — `nanobase serve` | **no** — there is no TCP code in the binary |
+| Local database | yes — SQLite, vendored and compiled in | no |
+| Build | `cargo build --release` | `cargo build --release --no-default-features --features serverless` |
+
+The split is enforced by Cargo features, not by convention: `native` brings
+the TCP server, the file-backed platform store and the `std::net` transport;
+`serverless` brings the HTTP transport and the serverless platform store;
+`sqlite` brings the vendored engine. The serverless binary contains no
+listener, no SQLite and no local file — the platform's own state lives in a
+serverless database, and the app's data lives wherever the app says.
+
+The serverless edition needs to be told where the platform's state is:
+
+```
+$ nanobase-serverless init --email ada@example.com --password '…' \
+    --db-url http://127.0.0.1:8091
+Owner created: ada@example.com
+Platform database: http://127.0.0.1:8091
+
+$ nanobase-serverless app list --db-url http://127.0.0.1:8091
+```
+
+`--db-url` (or `$NANOBASE_DB_URL`) and `--db-token` (or
+`$NANOBASE_DB_TOKEN`) are the serverless edition's `--data` and `--token`.
+`nanobase db serve` — the full edition's database-over-HTTP server — is what
+a serverless deployment points at.
 
 ## Status
 
@@ -29,6 +67,7 @@ budget that [`verify.sh`](verify.sh) enforces.
 | Service layer: events, hooks, custom methods | done — 7 tests |
 | HTTP API and the server | done — 19 tests |
 | Command line as an API client | done |
+| Two editions: full (TCP, local SQLite) and serverless (no TCP, no file) | done — one command line, two binaries |
 | App database: memory, SQLite, HTTP, TCP | done — 6 tests |
 | Serving an app's rows over the API | done — 8 tests |
 | SQL engines (Postgres, MySQL) | next — needs a driver |
@@ -357,6 +396,12 @@ All of them take `--data <file>` for the platform's state, defaulting to
 `$NANOBASE_DATA` and then `./data/nanobase.db`. Passwords can come from
 `NANOBASE_PASSWORD` instead of a flag, which keeps them out of a shell history.
 
+In the serverless edition there is no `--data`: the platform's state is a
+serverless database named with `--db-url` (`$NANOBASE_DB_URL`), and
+`--db-token` (`$NANOBASE_DB_TOKEN`) is the bearer token for it. `nanobase
+serve` and `nanobase db serve` are not in that binary at all — there is no
+listener to serve.
+
 The app commands can also talk to a running platform instead of the local
 file, which makes them thin API clients:
 
@@ -384,10 +429,14 @@ nanobase: 5 problem(s)
 ## Develop
 
 ```
-./verify.sh            fmt, clippy, tests, publish dry-run, size budget
+./verify.sh            fmt, clippy, tests, serverless edition, publish dry-run, size budget
 ./verify.sh --quick    same, minus the dry-run (offline sandboxes)
+./verify.sh serverless only the serverless edition's compile and tests
 ```
 
 The last step of `verify.sh` fails if the release binary grows past 3 MB. It is
 a tripwire for an accidental dependency, not a target to shave bytes against;
-the room left is for the HTTP server and the query runtime.
+the room left is for the HTTP server and the query runtime. The same step
+measures the serverless binary and fails if it is not *smaller* than the full
+one — a feature gate that quietly stops excluding the listener is exactly the
+regression the two editions exist to prevent.

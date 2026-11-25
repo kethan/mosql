@@ -23,9 +23,8 @@
 //! that are not done. The matcher is `mosql`'s, the same one the in-process
 //! engine uses, so a query means the same thing in every adapter.
 
-#[cfg(feature = "native")]
 pub mod factory;
-#[cfg(feature = "native")]
+#[cfg(feature = "curl")]
 pub mod http;
 pub mod memory;
 #[cfg(feature = "sqlite")]

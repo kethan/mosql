@@ -3,6 +3,10 @@
 //! Every adapter is held to the same contract, because an app's document
 //! chooses the engine and the code that serves the app does not change.
 
+// The serverless edition has no file store, no local database and no
+// listener, so this test belongs to the full edition only.
+#![cfg(all(feature = "native", feature = "sqlite"))]
+
 use std::sync::Arc;
 
 use mosql::{Object, Value};

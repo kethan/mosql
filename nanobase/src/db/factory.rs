@@ -15,23 +15,28 @@ use std::sync::Arc;
 use uflite::error::{Error, Result};
 
 use crate::config::{DatabaseConfig, DbKind};
+#[cfg(feature = "curl")]
 use crate::db::http::HttpDb;
 use crate::db::memory::MemoryDb;
+#[cfg(feature = "sqlite")]
 use crate::db::sqlite::SqliteDb;
+#[cfg(feature = "native")]
 use crate::db::tcp::TcpDb;
 use crate::db::AppDb;
 
 /// The prefix that says a database is on a socket rather than on the web.
+#[cfg(feature = "native")]
 const TCP_SCHEME: &str = "tcp://";
 
 /// Open the database an app's configuration asks for.
 ///
 /// `path` is where a local file goes: the app's own data directory. A
 /// remote engine uses the URL in the configuration instead.
-pub fn open(config: &DatabaseConfig, path: &Path) -> Result<Arc<dyn AppDb>> {
+pub fn open(config: &DatabaseConfig, _path: &Path) -> Result<Arc<dyn AppDb>> {
     // A socket is a socket whatever the engine says: the protocol is the
     // app-database one, and it does not care which engine is behind it.
     // The scheme in the URL is what picks the transport.
+    #[cfg(feature = "native")]
     if let Some(address) = config
         .url
         .as_deref()
@@ -41,7 +46,9 @@ pub fn open(config: &DatabaseConfig, path: &Path) -> Result<Arc<dyn AppDb>> {
     }
     match config.kind {
         DbKind::Memory => Ok(Arc::new(MemoryDb::new())),
-        DbKind::Sqlite => Ok(Arc::new(SqliteDb::open(path.join("app.db"))?)),
+        #[cfg(feature = "sqlite")]
+        DbKind::Sqlite => Ok(Arc::new(SqliteDb::open(_path.join("app.db"))?)),
+        #[cfg(feature = "curl")]
         DbKind::Libsql | DbKind::D1 => {
             let url = config
                 .url
@@ -53,7 +60,7 @@ pub fn open(config: &DatabaseConfig, path: &Path) -> Result<Arc<dyn AppDb>> {
             }
             Ok(Arc::new(db))
         }
-        DbKind::Postgres | DbKind::Mysql => Err(Error::internal(format!(
+        _ => Err(Error::internal(format!(
             "the {} engine is not built into this binary yet",
             config.kind.as_str()
         ))),
@@ -64,6 +71,7 @@ pub fn open(config: &DatabaseConfig, path: &Path) -> Result<Arc<dyn AppDb>> {
 ///
 /// The URL is a `host:port`, so a database service on the same network
 /// answers the same protocol the HTTP service does.
+#[cfg(feature = "native")]
 pub fn open_tcp(config: &DatabaseConfig) -> Result<Arc<dyn AppDb>> {
     match config.kind {
         DbKind::Postgres | DbKind::Mysql | DbKind::Libsql | DbKind::D1 => {
@@ -81,6 +89,7 @@ pub fn open_tcp(config: &DatabaseConfig) -> Result<Arc<dyn AppDb>> {
 }
 
 /// The same, at an address the caller already knows.
+#[cfg(feature = "native")]
 fn open_tcp_at(config: &DatabaseConfig, address: &str) -> Result<Arc<dyn AppDb>> {
     let mut db = TcpDb::new(address);
     if let Some(token) = &config.token {

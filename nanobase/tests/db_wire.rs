@@ -5,6 +5,10 @@
 //! in, the wrong one does not, and a request that never arrives is
 //! refused rather than treated as a guest.
 
+// The serverless edition has no file store, no local database and no
+// listener, so this test belongs to the full edition only.
+#![cfg(feature = "native")]
+
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::sync::Arc;

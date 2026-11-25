@@ -4,6 +4,10 @@
 //! does not change when the engine does. These drive the API over HTTP
 //! and the service underneath it.
 
+// The serverless edition has no file store, no local database and no
+// listener, so this test belongs to the full edition only.
+#![cfg(feature = "native")]
+
 use std::sync::Arc;
 
 use mosql::{Object, Value};

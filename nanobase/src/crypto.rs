@@ -16,9 +16,9 @@
 //! remains defensible because the iteration count is high and the salt is
 //! random per password.
 
-#[cfg(feature = "native")]
+#[cfg(not(target_arch = "wasm32"))]
 use std::collections::hash_map::RandomState;
-#[cfg(feature = "native")]
+#[cfg(not(target_arch = "wasm32"))]
 use std::hash::{BuildHasher, Hasher};
 
 // -------------------------------------------------------------- SHA-256 ---
@@ -532,14 +532,14 @@ pub fn random_bytes(n: usize) -> Vec<u8> {
         source(&mut buf);
         return buf;
     }
-    #[cfg(feature = "native")]
+    #[cfg(not(target_arch = "wasm32"))]
     {
         os_random(n)
     }
     // Without an operating system there is no entropy to read, and a
     // program that has not installed a source has a bug rather than a slow
     // request. Predictable identifiers are worse than a loud failure.
-    #[cfg(not(feature = "native"))]
+    #[cfg(target_arch = "wasm32")]
     {
         panic!("no random source installed: call nanobase::crypto::set_random_source first")
     }
@@ -564,7 +564,7 @@ pub fn has_random_source() -> bool {
 }
 
 /// The operating system's random bytes.
-#[cfg(feature = "native")]
+#[cfg(not(target_arch = "wasm32"))]
 fn os_random(n: usize) -> Vec<u8> {
     // `/dev/urandom` is an endless stream, so it has to be read with an exact
     // length: `fs::read` would consume it forever.
@@ -581,7 +581,7 @@ fn os_random(n: usize) -> Vec<u8> {
 /// The last resort when there is no random device: the standard library's
 /// per-process random hash keys, mixed with a counter, the clock and the
 /// process id.
-#[cfg(feature = "native")]
+#[cfg(not(target_arch = "wasm32"))]
 fn fallback_random(n: usize) -> Vec<u8> {
     let mut out = Vec::with_capacity(n);
     let pid = std::process::id() as u64;

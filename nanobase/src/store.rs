@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS apps (
 ";
 
 /// A platform catalog in one SQLite file.
+#[derive(Clone)]
 pub struct SqliteStore {
     path: PathBuf,
 }

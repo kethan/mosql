@@ -1,5 +1,9 @@
 //! The HTTP API: the routes, the bearer token, and the events.
 
+// The serverless edition has no file store, no local database and no
+// listener, so this test belongs to the full edition only.
+#![cfg(feature = "native")]
+
 use std::sync::Arc;
 
 use mosql::{Object, Value};
