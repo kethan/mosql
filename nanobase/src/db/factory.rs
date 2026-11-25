@@ -48,7 +48,19 @@ use crate::db::sqlite::SqliteDb;
 #[cfg(feature = "native")]
 use crate::db::tcp::TcpDb;
 use crate::db::AppDb;
+#[cfg(feature = "curl")]
 use crate::httpclient::HttpClient;
+
+/// The client a caller may hand over, when this build has one.
+///
+/// A build without `curl` has no blocking HTTP client of its own — a
+/// Worker is given one by its host, and this factory is not what opens
+/// the Worker’s databases — so there is nothing to hand over and
+/// nothing here can open a remote database.
+#[cfg(feature = "curl")]
+type MaybeClient = Option<Arc<dyn HttpClient>>;
+#[cfg(not(feature = "curl"))]
+type MaybeClient = Option<()>;
 
 /// The prefix that says a database is on a socket rather than on the web.
 #[cfg(feature = "native")]
@@ -60,7 +72,7 @@ const TCP_SCHEME: &str = "tcp://";
 /// remote engine uses the URL in the configuration instead.
 #[cfg_attr(not(feature = "sqlite"), allow(unused_variables))]
 pub fn open(config: &DatabaseConfig, path: &Path) -> Result<Arc<dyn AppDb>> {
-    open_with(config, path, None)
+    open_inner(config, path, None)
 }
 
 /// Open the database an app's configuration asks for, over a client the
@@ -70,12 +82,20 @@ pub fn open(config: &DatabaseConfig, path: &Path) -> Result<Arc<dyn AppDb>> {
 /// test with a mock — hands it over here, and the request goes through
 /// it. With no client, the host's own is used: `curl` for `https://`,
 /// and the plain socket client for `http://`.
+#[cfg(feature = "curl")]
 #[cfg_attr(not(feature = "sqlite"), allow(unused_variables))]
 pub fn open_with(
     config: &DatabaseConfig,
     path: &Path,
     client: Option<Arc<dyn HttpClient>>,
 ) -> Result<Arc<dyn AppDb>> {
+    open_inner(config, path, client)
+}
+
+/// The opening itself, with or without a client.
+#[cfg_attr(not(feature = "sqlite"), allow(unused_variables))]
+#[cfg_attr(not(feature = "curl"), allow(unused_variables))]
+fn open_inner(config: &DatabaseConfig, path: &Path, client: MaybeClient) -> Result<Arc<dyn AppDb>> {
     // A socket is a socket whatever the engine says: the protocol is the
     // app-database one, and it does not care which engine is behind it.
     // The scheme in the URL is what picks the transport.
@@ -87,11 +107,6 @@ pub fn open_with(
     {
         return open_tcp_at(config, address);
     }
-    let url = config
-        .url
-        .as_deref()
-        .map(str::trim)
-        .filter(|u| !u.is_empty());
     match config.kind {
         DbKind::None => Err(Error::internal(
             "this app has no database yet; point it at one first",
@@ -100,20 +115,24 @@ pub fn open_with(
         #[cfg(feature = "sqlite")]
         DbKind::Sqlite => Ok(Arc::new(SqliteDb::open(path.join("app.db"))?)),
         _ => {
-            let url = url.ok_or_else(|| {
-                Error::internal(format!("the {} engine needs a url", config.kind.as_str()))
-            })?;
             // A URL that names a provider is the database itself.
             #[cfg(feature = "curl")]
-            if is_provider_url(url) {
-                let client = client.unwrap_or_else(|| default_client(url));
-                let db = ProviderDb::new(&with_token(url, config.token.as_deref()), client)?;
-                return Ok(Arc::new(db));
-            }
-            // Anything else on the web is a service that speaks this
-            // platform's own app-database protocol.
-            #[cfg(feature = "curl")]
             {
+                let url = config
+                    .url
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|u| !u.is_empty())
+                    .ok_or_else(|| {
+                        Error::internal(format!("the {} engine needs a url", config.kind.as_str()))
+                    })?;
+                if is_provider_url(url) {
+                    let client = client.unwrap_or_else(|| default_client(url));
+                    let db = ProviderDb::new(&with_token(url, config.token.as_deref()), client)?;
+                    return Ok(Arc::new(db));
+                }
+                // Anything else on the web is a service that speaks this
+                // platform's own app-database protocol.
                 let client = client.unwrap_or_else(|| default_client(url));
                 let mut db = HttpDb::new(url, client);
                 if let Some(token) = &config.token {

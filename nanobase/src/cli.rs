@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use crate::config::DbKind;
 use crate::db::AppDb;
 use crate::platform::PlatformStore;
-#[cfg(feature = "native")]
+#[cfg(all(feature = "native", feature = "sqlite"))]
 use crate::Api;
 #[cfg(feature = "curl")]
 use crate::ServerlessStore;

@@ -128,19 +128,13 @@ impl HttpClient for Provider {
                 issuer = self.issuer,
                 jwks = jwks
             );
-            return Ok(HttpResponse {
-                status: 200,
-                body: body.into_bytes(),
-            });
+            return Ok(HttpResponse::new(200, body.into_bytes()));
         }
         if url.contains("/jwks") {
             let body = format!(
                 r#"{{"keys":[{{"kty":"RSA","kid":"key-1","alg":"RS256","n":"{N_B64URL}","e":"{E_B64URL}"}}]}}"#
             );
-            return Ok(HttpResponse {
-                status: 200,
-                body: body.into_bytes(),
-            });
+            return Ok(HttpResponse::new(200, body.into_bytes()));
         }
         if url.contains("/token") {
             // The nonce the authorization request asked for, so the token
@@ -171,15 +165,12 @@ impl HttpClient for Provider {
             let body = format!(
                 r#"{{"access_token":"at-1","token_type":"Bearer","expires_in":3600,"id_token":"{id_token}"}}"#
             );
-            return Ok(HttpResponse {
-                status: 200,
-                body: body.into_bytes(),
-            });
+            return Ok(HttpResponse::new(200, body.into_bytes()));
         }
-        Ok(HttpResponse {
-            status: 200,
-            body: br#"{"sub":"user-1","email":"ada@x.co"}"#.to_vec(),
-        })
+        Ok(HttpResponse::new(
+            200,
+            br#"{"sub":"user-1","email":"ada@x.co"}"#.to_vec(),
+        ))
     }
 }
 

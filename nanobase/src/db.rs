@@ -96,6 +96,9 @@ pub trait AppDb: Send + Sync {
 ///
 /// A collection name is a name an app chose, so it is quoted rather than
 /// trusted — and reduced, so that a name cannot become a statement.
+///
+/// Only the adapters that keep a table per collection need this.
+#[cfg(any(feature = "sqlite", feature = "curl"))]
 pub(crate) fn sanitize(name: &str) -> String {
     let cleaned: String = name
         .chars()
@@ -115,6 +118,9 @@ pub(crate) fn sanitize(name: &str) -> String {
 /// what the JS side accepts, and both mean the same thing here as in the
 /// in-process engine: this is the same rule, written out once, so every
 /// adapter changes a row the same way.
+///
+/// Only the adapters that keep a table per collection need this.
+#[cfg(any(feature = "sqlite", feature = "curl"))]
 pub(crate) fn apply_changes(row: &mut Row, changes: &Value) -> Result<()> {
     let Some(object) = changes.as_object() else {
         return Err(uflite::error::Error::internal(

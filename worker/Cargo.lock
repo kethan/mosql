@@ -16,6 +16,13 @@ name = "mosql"
 version = "0.1.0"
 
 [[package]]
+name = "mosql-core"
+version = "0.1.0"
+dependencies = [
+ "mosql",
+]
+
+[[package]]
 name = "mosql-worker"
 version = "0.1.0"
 dependencies = [
@@ -29,6 +36,7 @@ name = "nanobase"
 version = "0.1.0"
 dependencies = [
  "mosql",
+ "mosql-core",
  "uflite",
 ]
 

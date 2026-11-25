@@ -103,22 +103,16 @@ impl HttpClient for Stub {
                     }
                 }
             }
-            return Ok(HttpResponse {
-                status: 200,
-                body: mosql::to_json(&Value::Object(o)).into_bytes(),
-            });
+            return Ok(HttpResponse::new(
+                200,
+                mosql::to_json(&Value::Object(o)).into_bytes(),
+            ));
         }
         if url.contains("emails") {
             let body = self.email_list.clone().unwrap_or_else(|| "[]".into());
-            return Ok(HttpResponse {
-                status: 200,
-                body: body.into_bytes(),
-            });
+            return Ok(HttpResponse::new(200, body.into_bytes()));
         }
-        Ok(HttpResponse {
-            status: 200,
-            body: self.profile.clone().into_bytes(),
-        })
+        Ok(HttpResponse::new(200, self.profile.clone().into_bytes()))
     }
 }
 

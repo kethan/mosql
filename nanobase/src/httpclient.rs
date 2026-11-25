@@ -48,6 +48,19 @@ pub struct HttpResponse {
 }
 
 impl HttpResponse {
+    /// A reply with a status and a body, and no headers.
+    ///
+    /// Most replies are made by hand — in a test, or by a transport that
+    /// has nothing to say in the headers — and a constructor means a
+    /// field added to the reply later does not break every one of them.
+    pub fn new(status: u16, body: Vec<u8>) -> HttpResponse {
+        HttpResponse {
+            status,
+            body,
+            headers: Vec::new(),
+        }
+    }
+
     /// The body as JSON, or an error naming the status.
     pub fn json(self) -> ApiResult<Value> {
         let text = std::str::from_utf8(&self.body)

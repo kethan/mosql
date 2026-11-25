@@ -61,7 +61,7 @@ impl AsyncHttpClient for FetchClient {
                 .unwrap_or("")
                 .as_bytes()
                 .to_vec();
-            Ok(HttpResponse { status, body })
+            Ok(HttpResponse::new(status, body))
         })
     }
 }
