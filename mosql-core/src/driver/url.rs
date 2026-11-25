@@ -58,6 +58,26 @@ pub struct DriverConfig {
 impl DriverConfig {
     /// Read a connection URL and work out which provider it is.
     pub fn from_url(raw_url: &str) -> Result<DriverConfig, DbError> {
+        Self::from_url_with_provider(raw_url, None)
+    }
+
+    /// Read a connection URL, and take the provider as given.
+    ///
+    /// A URL says a good deal about which cloud it is for — the
+    /// scheme, the host, and sometimes a `?provider=` of its own — but
+    /// a URL is not always enough. A gateway in front of a database, a
+    /// host that looks like nothing in particular, a proxy that
+    /// rewrites the address: there are deployments where only the
+    /// operator knows which cloud it is.
+    ///
+    /// When the provider is given, it is the provider: the dialect, the
+    /// endpoint and the token all follow it, and the URL is only the
+    /// connection string. When the URL says `?provider=` as well, the
+    /// two have to agree.
+    pub fn from_url_with_provider(
+        raw_url: &str,
+        provider: Option<Provider>,
+    ) -> Result<DriverConfig, DbError> {
         let raw = raw_url.trim();
         if raw.is_empty() {
             return Err(DbError::new("the connection URL is empty"));
@@ -108,7 +128,7 @@ impl DriverConfig {
         // The host and the port.
         let (host, port) = split_host_port(hostport)?;
 
-        let provider = detect_provider(&scheme, &host, &params)?;
+        let provider = detect_provider(&scheme, &host, &params, provider)?;
 
         let mut config = DriverConfig {
             provider,
@@ -257,23 +277,43 @@ impl DriverConfig {
 }
 
 /// Which provider a URL is for.
+///
+/// The provider may be given — by the caller, because the operator said
+/// so — and then the URL is only the connection string. Otherwise it is
+/// worked out from the scheme, the host, and a `?provider=` in the
+/// query.
 pub fn detect_provider(
     scheme: &str,
     host: &str,
     params: &[(String, String)],
+    given: Option<Provider>,
 ) -> Result<Provider, DbError> {
-    // An explicit `?provider=` settles it, whatever the scheme.
+    // A `?provider=` in the URL settles it, whatever the scheme.
     if let Some((_, wanted)) = params.iter().find(|(key, _)| key == "provider") {
-        return match wanted.to_ascii_lowercase().as_str() {
-            "turso" | "libsql" => Ok(Provider::Turso),
-            "d1" | "cloudflare" => Ok(Provider::D1),
-            "neon" | "vercel" | "postgres" => Ok(Provider::Neon),
-            "tidb" => Ok(Provider::Tidb),
-            "planetscale" | "pscale" => Ok(Provider::PlanetScale),
-            other => Err(DbError::new(format!(
-                "there is no provider called {other:?}"
-            ))),
-        };
+        let wanted = Provider::from_name(wanted).ok_or_else(|| {
+            DbError::new(format!(
+                "there is no provider called {wanted:?}; the providers are {}",
+                Provider::names().join(", ")
+            ))
+        })?;
+        // And a provider given by the caller has to agree with it: two
+        // instructions that contradict each other are a mistake, not a
+        // thing to guess about.
+        if let Some(given) = given {
+            if given != wanted {
+                return Err(DbError::new(format!(
+                    "the URL says the provider is {} and the configuration says it is {}",
+                    wanted.as_str(),
+                    given.as_str()
+                )));
+            }
+        }
+        return Ok(wanted);
+    }
+    // A caller that knows which cloud it is talking to does not have to
+    // be guessed at.
+    if let Some(given) = given {
+        return Ok(given);
     }
     match scheme {
         "libsql" | "turso" => Ok(Provider::Turso),
@@ -680,6 +720,63 @@ mod tests {
         let config = DriverConfig::from_url("mysql://:s3cret@host/db?provider=tidb").unwrap();
         assert_eq!(config.password.as_deref(), Some("s3cret"));
         assert!(config.basic_auth().is_some());
+    }
+
+    #[test]
+    fn a_provider_may_be_given_rather_than_guessed() {
+        // A URL that says nothing about which cloud it is: the
+        // operator says, and the operator is right.
+        let config = DriverConfig::from_url_with_provider(
+            "https://db.example.com/mydb",
+            Some(Provider::Neon),
+        )
+        .unwrap();
+        assert_eq!(config.provider, Provider::Neon);
+        assert_eq!(config.dialect, Dialect::Postgres);
+        assert_eq!(config.endpoint, "https://db.example.com/sql");
+
+        // The same URL, read as MySQL, is a different database.
+        let config = DriverConfig::from_url_with_provider(
+            "https://db.example.com/mydb",
+            Some(Provider::Tidb),
+        )
+        .unwrap();
+        assert_eq!(config.dialect, Dialect::Mysql);
+        assert_eq!(config.endpoint, "https://http-db.example.com/v1beta/sql");
+    }
+
+    #[test]
+    fn a_url_that_says_a_provider_and_a_caller_that_says_one_must_agree() {
+        let config = DriverConfig::from_url_with_provider(
+            "libsql://db.turso.io?provider=turso",
+            Some(Provider::Turso),
+        )
+        .unwrap();
+        assert_eq!(config.provider, Provider::Turso);
+
+        let err = DriverConfig::from_url_with_provider(
+            "libsql://db.turso.io?provider=turso",
+            Some(Provider::Neon),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("the URL says"),
+            "the contradiction is said out loud: {err}"
+        );
+    }
+
+    #[test]
+    fn a_provider_may_be_named() {
+        assert_eq!(Provider::from_name("Neon"), Some(Provider::Neon));
+        assert_eq!(Provider::from_name(" turso "), Some(Provider::Turso));
+        assert_eq!(Provider::from_name("libsql"), Some(Provider::Turso));
+        assert_eq!(Provider::from_name("d1"), Some(Provider::D1));
+        assert_eq!(Provider::from_name("tidb"), Some(Provider::Tidb));
+        assert_eq!(
+            Provider::from_name("planetscale"),
+            Some(Provider::PlanetScale)
+        );
+        assert_eq!(Provider::from_name("sqlite"), None);
     }
 
     #[test]

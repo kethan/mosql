@@ -134,6 +134,29 @@ impl Provider {
         }
     }
 
+    /// The provider whose name this is.
+    ///
+    /// A caller that knows which cloud it is talking to — because the
+    /// operator said so — does not have to be guessed at from a URL.
+    /// The names are the ones the providers call themselves, with the
+    /// spellings people use.
+    pub fn from_name(name: &str) -> Option<Provider> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "turso" | "libsql" => Some(Provider::Turso),
+            "d1" | "cloudflare" => Some(Provider::D1),
+            "neon" | "vercel" | "postgres" | "postgresql" | "supabase" => Some(Provider::Neon),
+            "tidb" | "tidbcloud" => Some(Provider::Tidb),
+            "planetscale" | "pscale" | "vitess" => Some(Provider::PlanetScale),
+            _ => None,
+        }
+    }
+
+    /// Every name this provider answers to, for a message that says
+    /// which ones there are.
+    pub fn names() -> [&'static str; 5] {
+        ["turso", "d1", "neon", "tidb", "planetscale"]
+    }
+
     /// The provider's name.
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -268,6 +291,21 @@ impl<T: HttpTransport> AnyServerlessDriver<T> {
     /// Read a URL, work out the provider, and make the driver.
     pub fn from_url(url: &str, transport: T) -> Result<Self, DbError> {
         let config = DriverConfig::from_url(url)?;
+        Ok(AnyServerlessDriver::from_config(config, transport))
+    }
+
+    /// Read a URL with the provider given, and make the driver.
+    ///
+    /// The provider is the caller's to say: a URL names a cloud often
+    /// enough, but not always, and a caller that knows which cloud it is
+    /// talking to should not have to be guessed at. When the URL says a
+    /// provider of its own, the two have to agree.
+    pub fn from_url_with_provider(
+        url: &str,
+        provider: Option<Provider>,
+        transport: T,
+    ) -> Result<Self, DbError> {
+        let config = DriverConfig::from_url_with_provider(url, provider)?;
         Ok(AnyServerlessDriver::from_config(config, transport))
     }
 

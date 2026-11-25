@@ -56,6 +56,23 @@ whose host is neither a TiDB Cloud host nor a PlanetScale host is **refused**,
 with a message that says so — the two are not interchangeable, and guessing
 would send the caller to the wrong place with no warning.
 
+A caller that knows which cloud it is talking to does not have to be
+guessed at either. `DriverConfig::from_url_with_provider` takes the
+provider as given, and then the URL is only the connection string:
+
+```rust
+// A console URL, a proxy, a host that looks like nothing in particular.
+let config = DriverConfig::from_url_with_provider(
+    "https://ep-cool.us-east-2.aws.neon.tech/mydb",
+    Some(Provider::Neon),
+)?;
+assert_eq!(config.endpoint, "https://ep-cool.us-east-2.aws.neon.tech/sql");
+```
+
+A URL that names a provider of its own and a provider the caller names
+have to agree; two instructions that contradict each other are a mistake,
+and the error says which is which.
+
 Neon's endpoint is `https://{host}/sql` unless `?fetch_endpoint=` says
 otherwise, and the whole connection string goes back out in a
 `Neon-Connection-String` header, because Neon is a proxy and the pool behind
