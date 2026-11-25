@@ -891,6 +891,12 @@
   function renderDatabaseTab(panel, app) {
     var config = (app.doc && app.doc.config) || {};
     var database = config.database || {};
+    // The platform does not hand out the app's secrets, so the fields
+    // that hold one are named beside the document. A field that is not
+    // changed is not sent: the platform keeps what it has.
+    var secrets = app.secrets || [];
+    var hasToken = secrets.indexOf("config.database.token") >= 0;
+    var hasUrlSecret = secrets.indexOf("config.database.url") >= 0;
 
     var type = el("select", {}, []);
     [
@@ -922,12 +928,17 @@
     });
     var result = el("div", {});
 
+    // What the fields said when the page was opened. A field that has
+    // not moved is not sent, so a secret the platform holds is not
+    // wiped by a save that did not mean to touch it.
+    var wasUrl = url.value;
+    var wasToken = token.value;
+
     function candidate() {
-      return {
-        type: type.value,
-        url: url.value.trim() || null,
-        token: token.value.trim() || null,
-      };
+      var changes = { type: type.value };
+      if (url.value !== wasUrl) changes.url = url.value.trim() || null;
+      if (token.value !== wasToken) changes.token = token.value.trim() || null;
+      return changes;
     }
 
     function test() {
@@ -972,13 +983,20 @@
           url,
           el("span", {
             class: "hint",
-            text: "A local file needs no URL. A remote engine needs one.",
+            text: hasUrlSecret
+              ? "The credentials in this URL are not shown. Leave it alone to keep them; type a whole URL to replace it."
+              : "A local file needs no URL. A remote engine needs one.",
           }),
         ]),
         el("label", { class: "field" }, [
           el("span", { text: "Token" }),
           token,
-          el("span", { class: "hint", text: "Stored with the app. Keep it secret." }),
+          el("span", {
+            class: "hint",
+            text: hasToken
+              ? "A token is stored with this app. It is not shown. Type here to replace it."
+              : "Stored with the app. Keep it secret.",
+          }),
         ]),
         el("div", { class: "row" }, [
           el("button", {

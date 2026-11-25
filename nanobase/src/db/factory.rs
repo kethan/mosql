@@ -161,8 +161,12 @@ fn default_client(url: &str) -> Arc<dyn HttpClient> {
 /// What "has credentials" means is the provider's own: for libSQL the
 /// user information *is* the token, for D1 it is the account, and for
 /// the SQL engines it is the user name and the password.
+///
+/// A URL with no credentials of its own and a token to go with it gets
+/// the token where the provider expects it. A URL that already has
+/// credentials is left alone: it is a complete connection string.
 #[cfg(feature = "curl")]
-fn with_token(url: &str, token: Option<&str>) -> String {
+pub fn with_token(url: &str, token: Option<&str>) -> String {
     let Some(token) = token.filter(|t| !t.is_empty()) else {
         return url.to_string();
     };

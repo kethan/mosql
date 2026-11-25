@@ -845,6 +845,59 @@ impl AppDoc {
         }
     }
 
+    /// The document as the world sees it: with the secrets taken out.
+    ///
+    /// The same redaction the shareable export uses. An answer that
+    /// carries an app's document must not carry its database password:
+    /// anybody who may read the app list may read every app's
+    /// credentials, and a program with `apps:read` is not the owner.
+    pub fn redacted_value(&self) -> Value {
+        let mut copy = self.clone();
+        copy.redact();
+        copy.redact_urls();
+        copy.to_value()
+    }
+
+    /// The paths of the fields that hold a secret.
+    ///
+    /// The document is handed out without its secrets, and this says
+    /// which fields they were in — so a person editing the document can
+    /// be told "there is a token here" without being told the token.
+    pub fn secret_paths(&self) -> Vec<String> {
+        let mut paths = Vec::new();
+        if self.config.database.token.is_some() {
+            paths.push("config.database.token".to_string());
+        }
+        if has_credentials(self.config.database.url.as_deref()) {
+            paths.push("config.database.url".to_string());
+        }
+        if let Some(db) = &self.config.auth.database {
+            if db.token.is_some() {
+                paths.push("config.auth.database.token".to_string());
+            }
+            if has_credentials(db.url.as_deref()) {
+                paths.push("config.auth.database.url".to_string());
+            }
+        }
+        if self.config.auth.secret.is_some() {
+            paths.push("config.auth.secret".to_string());
+        }
+        for (name, provider) in &self.config.auth.providers {
+            if provider.client_secret.is_some() {
+                paths.push(format!("config.auth.providers.{name}.clientSecret"));
+            }
+        }
+        if let Some(s3) = &self.config.storage.s3 {
+            if s3.access_key.is_some() {
+                paths.push("config.storage.s3.accessKey".to_string());
+            }
+            if s3.secret_key.is_some() {
+                paths.push("config.storage.s3.secretKey".to_string());
+            }
+        }
+        paths
+    }
+
     /// The names of every collection that holds data but is not declared in
     /// `schema`. Legal — the app creates the table on first write — but worth
     /// reporting, because a typo in `schema` silently produces a new table.
@@ -858,6 +911,21 @@ impl AppDoc {
 }
 
 // ---------------------------------------------------------------- reading ---
+
+/// Does this URL carry credentials?
+fn has_credentials(url: Option<&str>) -> bool {
+    let Some(url) = url else {
+        return false;
+    };
+    let Some((_, rest)) = url.split_once("://") else {
+        return false;
+    };
+    let authority = match rest.find(['/', '?']) {
+        Some(index) => &rest[..index],
+        None => rest,
+    };
+    authority.contains('@')
+}
 
 /// A URL with its user name and password taken out.
 ///

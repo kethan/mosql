@@ -302,7 +302,7 @@ impl Api {
                 match req.method.as_str() {
                     "GET" => {
                         principal.require(apikey::SCOPE_APPS_READ, "read the apps")?;
-                        self.show_app(key)
+                        self.show_app(req, key, &principal)
                     }
                     "PUT" => {
                         principal.require(apikey::SCOPE_APPS_WRITE, "change the apps")?;
@@ -899,25 +899,24 @@ impl Api {
             ));
         };
         let body = req.json()?;
-        let config = match body.get("database") {
-            Some(value) if !value.is_null() => DatabaseConfig::from_value(value).map_err(|e| {
-                ApiError::invalid_request(format!("the configuration is not valid: {e}"))
-            })?,
-            _ => {
-                let app = self
-                    .service
-                    .find(key)
-                    .map_err(|e| ApiError::internal(format!("platform: {e}")))?
-                    .ok_or_else(|| ApiError::not_found("NOT_FOUND", "no such app"))?;
-                let value = app
-                    .get("doc")
-                    .and_then(|d| d.get("config"))
-                    .and_then(|c| c.get("database"))
-                    .cloned()
-                    .unwrap_or(Value::Null);
-                DatabaseConfig::from_value(&value).map_err(|e| {
-                    ApiError::invalid_request(format!("the configuration is not valid: {e}"))
-                })?
+        let given = body.get("database").filter(|value| !value.is_null());
+        // The app's own configuration is the starting point: the
+        // password is the platform's, and a client that was handed the
+        // document without its secrets can still test the connection.
+        // The fields the request names win.
+        let stored = self.service.database_config(key).ok();
+        let invalid =
+            |e: String| ApiError::invalid_request(format!("the configuration is not valid: {e}"));
+        let config = match (given, stored) {
+            (Some(value), Some(stored)) => {
+                let mut merged = stored.to_value();
+                crate::service::merge(&mut merged, value);
+                DatabaseConfig::from_value(&merged).map_err(invalid)?
+            }
+            (Some(value), None) => DatabaseConfig::from_value(value).map_err(invalid)?,
+            (None, Some(stored)) => stored,
+            (None, None) => {
+                return Err(ApiError::not_found("NOT_FOUND", "no such app"));
             }
         };
         let mut body = Object::new();
@@ -951,12 +950,37 @@ impl Api {
         }
     }
 
-    fn show_app(&self, key: &str) -> Result<Response, ApiError> {
-        let app = self
-            .service
-            .find(key)
-            .map_err(|e| ApiError::internal(format!("platform: {e}")))?
-            .ok_or_else(|| ApiError::not_found("NOT_FOUND", "no such app"))?;
+    /// One app.
+    ///
+    /// The document comes without its secrets — the database password,
+    /// the token, the storage keys — because anybody who may read the
+    /// app list may read every app's credentials. The owner may ask for
+    /// them with `?includeSecrets=true`: the owner is the platform's own
+    /// root credential. A program with a key may not, whatever it asks
+    /// for.
+    fn show_app(
+        &self,
+        req: &Request,
+        key: &str,
+        principal: &Principal,
+    ) -> Result<Response, ApiError> {
+        let wanted = wants_secrets(req);
+        if wanted && principal.key.is_some() {
+            return Err(ApiError::forbidden(
+                "YOU_ARE_NOT_ALLOWED_TO_ACCESS_THIS",
+                "the secrets of an app are for the owner to see",
+            ));
+        }
+        let app = if wanted {
+            self.service
+                .find_with_secrets(key)
+                .map_err(|e| ApiError::internal(format!("platform: {e}")))?
+        } else {
+            self.service
+                .find(key)
+                .map_err(|e| ApiError::internal(format!("platform: {e}")))?
+        }
+        .ok_or_else(|| ApiError::not_found("NOT_FOUND", "no such app"))?;
         Ok(json(200, &app))
     }
 
@@ -1190,6 +1214,14 @@ fn db_error(e: uflite::error::Error) -> ApiError {
         ),
         status => ApiError::new(status, "DATABASE_ERROR", format!("database: {e}")),
     }
+}
+
+/// Does the request ask for the app's secrets?
+fn wants_secrets(req: &Request) -> bool {
+    matches!(
+        req.query_param("includeSecrets"),
+        Some(value) if value.eq_ignore_ascii_case("true") || value == "1"
+    )
 }
 
 /// A number from the query string.

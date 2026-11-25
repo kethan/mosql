@@ -522,6 +522,21 @@ enum Catalog {
     Serverless(ServerlessStore),
 }
 
+/// The URL the catalog opens, with a separately given token folded in.
+///
+/// A token that was given on its own — `--db-token`, or
+/// `NANOBASE_DB_TOKEN` — goes where the provider expects it: in the
+/// query for libSQL and D1, and in the user information for the SQL
+/// engines. A URL that already has credentials keeps them: it is a
+/// complete connection string.
+#[cfg(feature = "curl")]
+fn catalog_url(url: &str, token: Option<&str>) -> String {
+    if crate::db::provider::is_provider_url(url) {
+        return crate::db::factory::with_token(url, token);
+    }
+    url.to_string()
+}
+
 impl Catalog {
     /// The catalog the command is pointed at.
     ///
@@ -566,8 +581,9 @@ impl Catalog {
         let db: Arc<dyn crate::db::AppDb> = if crate::db::provider::is_provider_url(url) {
             let client: Arc<dyn crate::httpclient::HttpClient> =
                 Arc::new(crate::httpclient::CurlHttpClient);
+            let url = catalog_url(url, token.as_deref());
             Arc::new(
-                crate::db::provider::ProviderDb::new(url, client).map_err(|e| {
+                crate::db::provider::ProviderDb::new(&url, client).map_err(|e| {
                     eprintln!("nanobase: {e}");
                     1
                 })?,
@@ -1640,6 +1656,36 @@ fn print_app(view: &AppView, root: Option<&std::path::Path>) {
     println!("seed rows:  {}", view.seed_rows);
 }
 
+#[cfg(all(test, feature = "curl"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_catalog_token_goes_where_the_provider_expects_it() {
+        // The SQL engines take the token as the password.
+        assert_eq!(
+            catalog_url("postgres://host/mydb", Some("s3cret")),
+            "postgres://:s3cret@host/mydb"
+        );
+        // libSQL takes it in the query.
+        assert_eq!(
+            catalog_url("libsql://db.turso.io", Some("s3cret")),
+            "libsql://db.turso.io?authToken=s3cret"
+        );
+        // A URL that already has credentials keeps them.
+        assert_eq!(
+            catalog_url("postgres://me:pass@host/mydb", Some("s3cret")),
+            "postgres://me:pass@host/mydb"
+        );
+        // And a URL that is not a provider's is left alone: the token
+        // goes in a header there, not in the URL.
+        assert_eq!(
+            catalog_url("http://db.example.com/app", Some("s3cret")),
+            "http://db.example.com/app"
+        );
+    }
+}
+
 fn platform_or_exit(parsed: &Parsed) -> Option<Platform> {
     match Catalog::open(parsed) {
         Ok(catalog) => match catalog.load() {
@@ -2220,7 +2266,14 @@ fn app_export(rest: &[String]) -> u8 {
         return 2;
     };
     let doc = if let Some(client) = api_client(&parsed) {
-        let value = match client.request("GET", &format!("/api/apps/{key}"), None) {
+        // The platform hands the document out without its secrets; the
+        // owner may ask for them, and this is the owner asking.
+        let path = if parsed.has("with-secrets") {
+            format!("/api/apps/{key}?includeSecrets=true")
+        } else {
+            format!("/api/apps/{key}")
+        };
+        let value = match client.request("GET", &path, None) {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("nanobase: {e}");

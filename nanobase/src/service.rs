@@ -686,6 +686,24 @@ impl Service {
         Ok(platform.find_app(key).map(record_value))
     }
 
+    /// An app's own database configuration, with its secrets.
+    ///
+    /// The document the world sees has the password taken out of it, but
+    /// the platform still holds it: this is the platform's own copy,
+    /// and it is what a connection is opened with.
+    pub fn database_config(&self, app: &str) -> Result<crate::config::DatabaseConfig> {
+        let record = self.app_record(app)?;
+        Ok(record.doc.config.database.clone())
+    }
+
+    /// One app, with its secrets.
+    ///
+    /// The owner may see what the platform holds; a program may not.
+    pub fn find_with_secrets(&self, key: &str) -> Result<Option<Value>> {
+        let platform = self.platform()?;
+        Ok(platform.find_app(key).map(record_value_with_secrets))
+    }
+
     /// Create an app. Fires [`Event::Created`].
     pub fn create(&self, doc: AppDoc) -> Result<Value> {
         let ctx = self.context("create", None);
@@ -1196,16 +1214,56 @@ impl Service {
     }
 }
 
+/// An app, as the world sees it.
+///
+/// The document is handed out without its secrets: the database
+/// password, the token, the storage keys. The list of the fields that
+/// hold one is beside it, so an editor can say "there is a token here"
+/// without being told the token.
 fn record_value(record: &AppRecord) -> Value {
     let mut o = Object::new();
     o.set("id", Value::str(record.id.clone()));
     o.set("createdAt", Value::str(record.created_at.clone()));
+    o.set("doc", record.doc.redacted_value());
+    o.set(
+        "secrets",
+        Value::Array(
+            record
+                .doc
+                .secret_paths()
+                .into_iter()
+                .map(Value::str)
+                .collect(),
+        ),
+    );
+    Value::Object(o)
+}
+
+/// An app, with its secrets.
+///
+/// For the owner, who is the platform's own root credential and may see
+/// what the platform holds. A program with a key may not.
+fn record_value_with_secrets(record: &AppRecord) -> Value {
+    let mut o = Object::new();
+    o.set("id", Value::str(record.id.clone()));
+    o.set("createdAt", Value::str(record.created_at.clone()));
     o.set("doc", record.doc.to_value());
+    o.set(
+        "secrets",
+        Value::Array(
+            record
+                .doc
+                .secret_paths()
+                .into_iter()
+                .map(Value::str)
+                .collect(),
+        ),
+    );
     Value::Object(o)
 }
 
 /// Merge `changes` into `target`, one level deep for objects.
-fn merge(target: &mut Value, changes: &Value) {
+pub(crate) fn merge(target: &mut Value, changes: &Value) {
     let (Value::Object(target), Value::Object(changes)) = (&mut *target, changes) else {
         *target = changes.clone();
         return;
