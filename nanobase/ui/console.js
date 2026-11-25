@@ -106,6 +106,7 @@
     route: { name: "apps", key: null, tab: "overview" },
     list: { search: "", page: 1, perPage: 12, total: 0, pages: 1 },
     apps: [],
+    keys: [],
   };
 
   var dom = {};
@@ -218,6 +219,9 @@
       var tab = parts[2] || "overview";
       return { name: "app", key: decodeURIComponent(parts[1]), tab: tab };
     }
+    if (parts[0] === "keys") {
+      return { name: "keys", key: null, tab: "overview" };
+    }
     return { name: "apps", key: null, tab: "overview" };
   }
 
@@ -229,7 +233,257 @@
   function onRouteChanged() {
     state.route = parseRoute();
     closeNav();
+    markNav();
     render();
+  }
+
+  /** Mark the sidebar item for the page we are on. */
+  function markNav() {
+    var wanted = state.route.name === "app" ? "apps" : state.route.name;
+    Array.prototype.forEach.call(
+      document.querySelectorAll(".nav-item[data-route]"),
+      function (item) {
+        item.classList.toggle("active", item.getAttribute("data-route") === wanted);
+      }
+    );
+  }
+
+  // ---------------------------------------------------------------- keys --
+
+  var SCOPES = [
+    ["rows:read", "Read the rows of an app"],
+    ["rows:write", "Write the rows of an app"],
+    ["apps:read", "Read the apps"],
+    ["apps:write", "Create, change and remove apps"],
+    ["admin", "Everything, including making more keys"],
+  ];
+
+  function renderKeys(panel) {
+    panel.appendChild(
+      el("div", { class: "page-head" }, [
+        el("div", {}, [
+          el("h1", { text: "API keys" }),
+          el("p", {
+            text: "A credential a program holds, instead of the owner's password.",
+          }),
+        ]),
+        el("div", { class: "spacer" }),
+        el("button", {
+          class: "button primary",
+          type: "button",
+          on: { click: openCreateKeyDialog },
+        }, [icon(ICONS.plus), "New key"]),
+      ])
+    );
+
+    panel.appendChild(
+      el("div", { class: "section" }, [
+        el("p", {
+          class: "section-note",
+          text:
+            "A key may be limited to one app, limited to what it may do, and " +
+            "made to expire on its own. The key itself is shown once, when it " +
+            "is made.",
+        }),
+        el("div", { id: "key-list" }, [el("p", { class: "muted small", text: "Loading…" })]),
+      ])
+    );
+
+    api("GET", "/api/keys")
+      .then(function (result) {
+        state.keys = result.items || [];
+        drawKeys();
+      })
+      .catch(function (error) {
+        clear(document.getElementById("key-list")).appendChild(
+          el("p", { class: "error", text: error.message })
+        );
+      });
+  }
+
+  function drawKeys() {
+    var box = clear(document.getElementById("key-list"));
+    if (!state.keys.length) {
+      box.appendChild(
+        el("p", {
+          class: "muted small",
+          text: "No keys yet. Make one for the programs that talk to this platform.",
+        })
+      );
+      return;
+    }
+    state.keys.forEach(function (key) {
+      var expired = key.expiresAt && new Date(key.expiresAt) < new Date();
+      box.appendChild(
+        el("div", { class: "section", style: "background:var(--surface-2);padding:14px" }, [
+          el("div", { class: "row" }, [
+            el("strong", { text: key.name }),
+            el("span", { class: "mono small muted", text: key.preview }),
+            el("span", { class: "spacer", style: "flex:1 1 auto" }),
+            key.revoked
+              ? el("span", { class: "tag danger", text: "revoked" })
+              : expired
+              ? el("span", { class: "tag warn", text: "expired" })
+              : el("span", { class: "tag ok", text: "active" }),
+            el("button", {
+              class: "button small ghost",
+              type: "button",
+              title: "Remove",
+              on: { click: function () { removeKey(key); } },
+            }, [icon(ICONS.trash)]),
+          ]),
+          el("p", {
+            class: "mono small muted",
+            text: (key.scopes || []).join("  ") || "no scopes",
+          }),
+          el("p", {
+            class: "small muted",
+            text:
+              "app: " + (key.app || "any") +
+              " · expires: " + (key.expiresAt || "never") +
+              " · last used: " + (key.lastUsedAt || "never"),
+          }),
+        ])
+      );
+    });
+  }
+
+  function removeKey(key) {
+    if (!window.confirm('Remove the key "' + key.name + '"?')) return;
+    api("DELETE", "/api/keys/" + encodeURIComponent(key.id))
+      .then(function () {
+        toast("The key is removed.");
+        renderKeys(clear(dom.panel));
+      })
+      .catch(function (error) { toast(error.message, true); });
+  }
+
+  function openCreateKeyDialog() {
+    var name = el("input", { type: "text", placeholder: "the deploy script" });
+    var app = el("select", {}, [el("option", { value: "", text: "any app" })]);
+    var expires = el("select", {}, [
+      el("option", { value: "30", text: "in 30 days" }),
+      el("option", { value: "7", text: "in 7 days" }),
+      el("option", { value: "1", text: "in a day" }),
+      el("option", { value: "0", text: "never" }),
+    ]);
+    var checks = SCOPES.map(function (scope) {
+      var box = el("input", { type: "checkbox", checked: scope[0] === "rows:read" });
+      return { scope: scope[0], box: box, label: scope[1] };
+    });
+
+    var dialog = el("div", { class: "dialog" }, [
+      el("h2", { text: "New API key" }),
+      el("label", { class: "field" }, [el("span", { text: "Name" }), name]),
+      el("label", { class: "field" }, [el("span", { text: "App" }), app]),
+      el("label", { class: "field" }, [el("span", { text: "Expires" }), expires]),
+      el("div", { class: "field" }, [
+        el("span", { text: "Scopes" }),
+        checks.map(function (entry) {
+          return el("label", { class: "switch" }, [
+            entry.box,
+            el("span", { text: entry.label }),
+          ]);
+        }),
+      ]),
+      el("p", {
+        class: "muted small",
+        text: "The key is shown once, when it is made. Put it in a secret store.",
+      }),
+      el("div", { class: "row" }, [
+        el("button", {
+          class: "button primary",
+          type: "button",
+          text: "Create",
+          on: {
+            click: function () {
+              var scopes = checks
+                .filter(function (entry) { return entry.box.checked; })
+                .map(function (entry) { return entry.scope; });
+              if (!scopes.length) {
+                toast("A key needs at least one scope", true);
+                return;
+              }
+              var days = parseInt(expires.value, 10) || 0;
+              var body = { name: name.value.trim(), scopes: scopes };
+              if (app.value) body.app = app.value;
+              if (days > 0) {
+                body.expiresAt = Math.floor(Date.now() / 1000) + days * 86400;
+              }
+              api("POST", "/api/keys", body)
+                .then(function (result) {
+                  closeDialog();
+                  showSecret(result.secret);
+                  renderKeys(clear(dom.panel));
+                })
+                .catch(function (error) { toast(error.message, true); });
+            },
+          },
+        }),
+        el("button", {
+          class: "button",
+          type: "button",
+          text: "Cancel",
+          on: { click: closeDialog },
+        }),
+      ]),
+    ]);
+
+    var backdrop = el("div", { class: "dialog-backdrop" }, [dialog]);
+    backdrop.addEventListener("click", function (event) {
+      if (event.target === backdrop) closeDialog();
+    });
+    document.body.appendChild(backdrop);
+
+    // The apps the key may be limited to.
+    api("GET", "/api/apps?perPage=200")
+      .then(function (result) {
+        (result.items || []).forEach(function (item) {
+          var label =
+            (item.doc && item.doc.app && item.doc.app.name) || item.id;
+          app.appendChild(el("option", { value: item.id, text: label }));
+        });
+      })
+      .catch(function () { /* the list is a convenience, not a requirement */ });
+  }
+
+  function showSecret(secret) {
+    var field = el("input", { type: "text", value: secret, readonly: true });
+    var backdrop = el("div", { class: "dialog-backdrop" }, [
+      el("div", { class: "dialog" }, [
+        el("h2", { text: "Your new key" }),
+        el("p", {
+          class: "section-note",
+          text: "This is the only time it is shown. Copy it now.",
+        }),
+        field,
+        el("div", { class: "row" }, [
+          el("button", {
+            class: "button primary",
+            type: "button",
+            text: "Copy",
+            on: {
+              click: function () {
+                if (navigator.clipboard) navigator.clipboard.writeText(secret);
+                field.select();
+                toast("Copied.");
+              },
+            },
+          }),
+          el("button", {
+            class: "button",
+            type: "button",
+            text: "Done",
+            on: { click: closeDialog },
+          }),
+        ]),
+      ]),
+    ]);
+    backdrop.addEventListener("click", function (event) {
+      if (event.target === backdrop) closeDialog();
+    });
+    document.body.appendChild(backdrop);
+    field.select();
   }
 
   // ----------------------------------------------------------- app list --
@@ -1184,6 +1438,12 @@
     }
     var panel = clear(dom.panel);
     state.route = parseRoute();
+    markNav();
+
+    if (state.route.name === "keys") {
+      renderKeys(clear(dom.panel));
+      return;
+    }
 
     if (state.route.name === "app") {
       api("GET", "/api/apps/" + encodeURIComponent(state.route.key))

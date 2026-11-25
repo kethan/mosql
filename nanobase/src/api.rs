@@ -33,6 +33,7 @@ use std::sync::Arc;
 
 use mosql::{Object, Value};
 
+use crate::apikey::{self, ApiKey};
 use crate::config::{AppDoc, DatabaseConfig};
 use crate::http::{ApiError, Request, Response};
 use crate::jwt;
@@ -50,11 +51,59 @@ pub const API_PREFIX: &str = "/api";
 /// and says whether it answered.
 pub type DbTester = Arc<dyn Fn(&str, &DatabaseConfig) -> Result<Vec<String>, String> + Send + Sync>;
 
+/// Who is asking.
+///
+/// Two kinds of caller reach the platform: a person, who signed in and
+/// holds a session token, and a program, which was given an API key. The
+/// owner may do everything. An API key may do what its scopes say, and
+/// may only touch the app it was made for.
+#[derive(Debug, Clone)]
+pub struct Principal {
+    /// The owner the credential belongs to.
+    pub user: User,
+    /// The API key, when the credential is one.
+    pub key: Option<ApiKey>,
+}
+
+impl Principal {
+    /// May this caller do this?
+    ///
+    /// The owner may do everything. A key may do what its scopes say:
+    /// `admin` is everything, `*` is everything, and an exact scope is
+    /// that scope and nothing else.
+    pub fn allows(&self, scope: &str) -> bool {
+        match &self.key {
+            None => true,
+            Some(key) => key.allows(scope),
+        }
+    }
+
+    /// The app this caller is limited to, if it is limited to one.
+    pub fn app_limit(&self) -> Option<&str> {
+        self.key.as_ref().and_then(|key| key.app.as_deref())
+    }
+
+    /// Refuse unless this caller may do this.
+    pub fn require(&self, scope: &str, what: &str) -> Result<(), ApiError> {
+        if self.allows(scope) {
+            return Ok(());
+        }
+        Err(ApiError::forbidden(
+            "YOU_ARE_NOT_ALLOWED_TO_ACCESS_THIS",
+            format!("this credential may not {what}"),
+        ))
+    }
+}
+
 /// The platform's API: a service, and the routes over it.
 pub struct Api {
     service: Arc<Service>,
     options: HttpOptions,
     db_tester: Option<DbTester>,
+    /// When the platform was last re-read from the store, so that a key
+    /// which is not known does not make the server read its state on
+    /// every request.
+    reloaded_at: std::sync::atomic::AtomicU64,
 }
 
 impl Api {
@@ -63,6 +112,7 @@ impl Api {
             service,
             options: HttpOptions::default_closed(),
             db_tester: None,
+            reloaded_at: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -78,6 +128,7 @@ impl Api {
             service,
             options,
             db_tester: None,
+            reloaded_at: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -180,38 +231,98 @@ impl Api {
             ["api", "health"] => Ok(health()),
             ["api", "auth", "login"] => self.login(req),
             ["api", "auth", "me"] => {
-                let owner = self.owner(req)?;
+                let principal = self.authenticate(req)?;
                 let mut body = Object::new();
-                body.set("user", owner.to_value());
+                body.set("user", principal.user.to_value());
+                // The credential itself, so a client can tell a person
+                // from a program without decoding a token.
+                body.set(
+                    "credential",
+                    match &principal.key {
+                        Some(key) => {
+                            let mut c = Object::new();
+                            c.set("type", Value::str("apiKey"));
+                            c.set("id", Value::str(key.id.clone()));
+                            c.set("name", Value::str(key.name.clone()));
+                            Value::Object(c)
+                        }
+                        None => {
+                            let mut c = Object::new();
+                            c.set("type", Value::str("session"));
+                            Value::Object(c)
+                        }
+                    },
+                );
                 Ok(json(200, &Value::Object(body)))
             }
             ["api", "events"] => {
-                self.authenticate(req)?;
+                let principal = self.authenticate(req)?;
+                principal.require(apikey::SCOPE_APPS_READ, "read the platform's events")?;
                 Ok(events())
+            }
+            ["api", "keys"] => match req.method.as_str() {
+                "GET" => {
+                    let principal = self.authenticate(req)?;
+                    principal.require(apikey::SCOPE_ADMIN, "manage API keys")?;
+                    self.list_keys()
+                }
+                "POST" => {
+                    let principal = self.authenticate(req)?;
+                    principal.require(apikey::SCOPE_ADMIN, "manage API keys")?;
+                    self.create_key(req)
+                }
+                _ => Err(method_not_allowed("GET, POST")),
+            },
+            ["api", "keys", key] => {
+                let principal = self.authenticate(req)?;
+                principal.require(apikey::SCOPE_ADMIN, "manage API keys")?;
+                match req.method.as_str() {
+                    "GET" => self.show_key(key),
+                    "PATCH" => self.patch_key(req, key),
+                    "DELETE" => self.remove_key(key),
+                    _ => Err(method_not_allowed("GET, PATCH, DELETE")),
+                }
             }
             ["api", "apps"] => match req.method.as_str() {
                 "GET" => {
-                    self.authenticate(req)?;
-                    self.list_apps(req)
+                    let principal = self.authenticate(req)?;
+                    principal.require(apikey::SCOPE_APPS_READ, "read the apps")?;
+                    self.list_apps(req, &principal)
                 }
                 "POST" => {
-                    self.authenticate(req)?;
+                    let principal = self.authenticate(req)?;
+                    principal.require(apikey::SCOPE_APPS_WRITE, "create apps")?;
                     self.create_app(req)
                 }
                 _ => Err(method_not_allowed("GET, POST")),
             },
             ["api", "apps", key] => {
-                self.authenticate(req)?;
+                let principal = self.authenticate(req)?;
+                self.require_app_access(&principal, key)?;
                 match req.method.as_str() {
-                    "GET" => self.show_app(key),
-                    "PUT" => self.update_app(req, key),
-                    "PATCH" => self.patch_app(req, key),
-                    "DELETE" => self.remove_app(req, key),
+                    "GET" => {
+                        principal.require(apikey::SCOPE_APPS_READ, "read the apps")?;
+                        self.show_app(key)
+                    }
+                    "PUT" => {
+                        principal.require(apikey::SCOPE_APPS_WRITE, "change the apps")?;
+                        self.update_app(req, key)
+                    }
+                    "PATCH" => {
+                        principal.require(apikey::SCOPE_APPS_WRITE, "change the apps")?;
+                        self.patch_app(req, key)
+                    }
+                    "DELETE" => {
+                        principal.require(apikey::SCOPE_APPS_WRITE, "remove the apps")?;
+                        self.remove_app(req, key)
+                    }
                     _ => Err(method_not_allowed("GET, PUT, PATCH, DELETE")),
                 }
             }
             ["api", "apps", key, "methods"] => {
-                self.authenticate(req)?;
+                let principal = self.authenticate(req)?;
+                principal.require(apikey::SCOPE_APPS_READ, "read the apps")?;
+                self.require_app_access(&principal, key)?;
                 if req.method != "GET" {
                     return Err(method_not_allowed("GET"));
                 }
@@ -230,7 +341,9 @@ impl Api {
                 Ok(json(200, &Value::Object(body)))
             }
             ["api", "apps", key, "db"] => {
-                self.authenticate(req)?;
+                let principal = self.authenticate(req)?;
+                principal.require(apikey::SCOPE_ROWS_READ, "read rows")?;
+                self.require_app_access(&principal, key)?;
                 if req.method != "GET" {
                     return Err(method_not_allowed("GET"));
                 }
@@ -238,22 +351,42 @@ impl Api {
                 self.collections(key)
             }
             ["api", "apps", key, "db", "test"] => {
-                self.authenticate(req)?;
+                let principal = self.authenticate(req)?;
+                principal.require(apikey::SCOPE_APPS_WRITE, "change the apps")?;
+                self.require_app_access(&principal, key)?;
                 self.test_database(req, key)
             }
             ["api", "apps", key, "db", collection] => {
-                self.authenticate(req)?;
-                self.require_app(key)?;
+                let principal = self.authenticate(req)?;
+                self.require_app_access(&principal, key)?;
                 match req.method.as_str() {
-                    "GET" => self.rows(req, key, collection),
-                    "POST" => self.insert_row(req, key, collection),
-                    "PATCH" => self.update_row(req, key, collection),
-                    "DELETE" => self.remove_rows(req, key, collection),
+                    "GET" => {
+                        principal.require(apikey::SCOPE_ROWS_READ, "read rows")?;
+                        self.require_app(key)?;
+                        self.rows(req, key, collection)
+                    }
+                    "POST" => {
+                        principal.require(apikey::SCOPE_ROWS_WRITE, "write rows")?;
+                        self.require_app(key)?;
+                        self.insert_row(req, key, collection)
+                    }
+                    "PATCH" => {
+                        principal.require(apikey::SCOPE_ROWS_WRITE, "write rows")?;
+                        self.require_app(key)?;
+                        self.update_row(req, key, collection)
+                    }
+                    "DELETE" => {
+                        principal.require(apikey::SCOPE_ROWS_WRITE, "write rows")?;
+                        self.require_app(key)?;
+                        self.remove_rows(req, key, collection)
+                    }
                     _ => Err(method_not_allowed("GET, POST, PATCH, DELETE")),
                 }
             }
             ["api", "apps", key, "methods", name] => {
-                self.authenticate(req)?;
+                let principal = self.authenticate(req)?;
+                principal.require(apikey::SCOPE_APPS_WRITE, "call an app's methods")?;
+                self.require_app_access(&principal, key)?;
                 if req.method != "POST" {
                     return Err(method_not_allowed("POST"));
                 }
@@ -272,15 +405,29 @@ impl Api {
 
     // -------------------------------------------------------------- auth --
 
-    /// The owner the request's bearer token belongs to.
-    fn owner(&self, req: &Request) -> Result<User, ApiError> {
-        let token = req
+    /// Who is asking.
+    ///
+    /// The credential is a bearer token — which may be a session token or
+    /// an API key — or, for a client that would rather not put the key
+    /// in the `Authorization` header, the `X-Nanobase-Key` header.
+    fn principal(&self, req: &Request) -> Result<Principal, ApiError> {
+        let secret = req
             .bearer_token()
+            .or_else(|| req.header("x-nanobase-key"))
             .ok_or_else(ApiError::unauthorized_plain)?;
-        self.authenticate_token(token)
+        self.authenticate_secret(secret)
     }
 
-    /// Check the token and return the owner.
+    /// Check a credential and say who it belongs to.
+    fn authenticate_secret(&self, secret: &str) -> Result<Principal, ApiError> {
+        if apikey::looks_like_a_key(secret) {
+            return self.authenticate_key(secret);
+        }
+        let user = self.authenticate_token(secret)?;
+        Ok(Principal { user, key: None })
+    }
+
+    /// Check a session token and return the owner.
     fn authenticate_token(&self, token: &str) -> Result<User, ApiError> {
         let platform = self
             .service
@@ -301,9 +448,106 @@ impl Api {
             .ok_or_else(|| ApiError::unauthorized("INVALID_TOKEN", "the token is not valid"))
     }
 
-    /// Require a valid token; the value is the owner.
-    fn authenticate(&self, req: &Request) -> Result<User, ApiError> {
-        self.owner(req)
+    /// Check an API key and say what it may do.
+    fn authenticate_key(&self, secret: &str) -> Result<Principal, ApiError> {
+        let platform = self
+            .service
+            .platform()
+            .map_err(|e| ApiError::internal(format!("platform: {e}")))?;
+        let mut found = platform
+            .api_keys
+            .iter()
+            .find(|key| key.verify(secret))
+            .cloned();
+        if found.is_none() && self.may_reload() {
+            // The key may have been made by the command line a moment
+            // ago, in which case the server has not seen it yet.
+            self.service
+                .reload()
+                .map_err(|e| ApiError::internal(format!("platform: {e}")))?;
+            let platform = self
+                .service
+                .platform()
+                .map_err(|e| ApiError::internal(format!("platform: {e}")))?;
+            found = platform
+                .api_keys
+                .iter()
+                .find(|key| key.verify(secret))
+                .cloned();
+        }
+        let key = found
+            .ok_or_else(|| ApiError::unauthorized("INVALID_KEY", "the API key is not valid"))?;
+        if key.revoked {
+            return Err(ApiError::unauthorized(
+                "REVOKED_KEY",
+                "this API key has been revoked",
+            ));
+        }
+        if key.is_expired(now_secs()) {
+            return Err(ApiError::unauthorized(
+                "EXPIRED_KEY",
+                "this API key has expired",
+            ));
+        }
+        let user = platform
+            .owner()
+            .cloned()
+            .ok_or_else(|| ApiError::unauthorized("INVALID_KEY", "the API key is not valid"))?;
+        // Remember that the key was used, so a list can say when. The
+        // write is at most one a minute: a key used a thousand times a
+        // second should not write a thousand times a second.
+        self.service.touch_key(&key.id, now_secs())?;
+        Ok(Principal {
+            user,
+            key: Some(key),
+        })
+    }
+
+    /// Require a valid credential; the value is who is asking.
+    fn authenticate(&self, req: &Request) -> Result<Principal, ApiError> {
+        self.principal(req)
+    }
+
+    /// May the platform's state be read again just now?
+    ///
+    /// A key that is not known is usually a key that is wrong, and a
+    /// wrong key should not make the server read its state on every
+    /// request. One read a second is enough to pick up a key made by the
+    /// command line and slow enough not to be a lever.
+    fn may_reload(&self) -> bool {
+        let now = now_secs().max(0) as u64;
+        let last = self.reloaded_at.load(std::sync::atomic::Ordering::Relaxed);
+        if now.saturating_sub(last) < 1 {
+            return false;
+        }
+        self.reloaded_at
+            .store(now, std::sync::atomic::Ordering::Relaxed);
+        true
+    }
+
+    /// Refuse unless the caller may touch this app.
+    ///
+    /// A key made for one app may not touch another, whatever its
+    /// scopes say.
+    fn require_app_access(&self, principal: &Principal, key: &str) -> Result<(), ApiError> {
+        let Some(limit) = principal.app_limit() else {
+            return Ok(());
+        };
+        let platform = self
+            .service
+            .platform()
+            .map_err(|e| ApiError::internal(format!("platform: {e}")))?;
+        let wanted = platform
+            .find_app(key)
+            .map(|record| record.id.clone())
+            .unwrap_or_else(|| key.to_string());
+        if wanted == limit || key == limit {
+            return Ok(());
+        }
+        Err(ApiError::forbidden(
+            "YOU_ARE_NOT_ALLOWED_TO_ACCESS_THIS",
+            "this API key may only be used with the app it was made for",
+        ))
     }
 
     /// Sign in with an email and a password.
@@ -419,6 +663,114 @@ impl Api {
         Ok(json(200, &Value::Object(body)))
     }
 
+    // -------------------------------------------------------------- keys --
+
+    /// The API keys, as values.
+    fn list_keys(&self) -> Result<Response, ApiError> {
+        let platform = self
+            .service
+            .platform()
+            .map_err(|e| ApiError::internal(format!("platform: {e}")))?;
+        let mut body = Object::new();
+        body.set(
+            "items",
+            Value::Array(platform.api_keys.iter().map(ApiKey::to_value).collect()),
+        );
+        body.set("total", Value::Int(platform.api_keys.len() as i64));
+        Ok(json(200, &Value::Object(body)))
+    }
+
+    /// One API key.
+    fn show_key(&self, key: &str) -> Result<Response, ApiError> {
+        let platform = self
+            .service
+            .platform()
+            .map_err(|e| ApiError::internal(format!("platform: {e}")))?;
+        let record = platform
+            .api_keys
+            .iter()
+            .find(|k| k.id == key)
+            .ok_or_else(|| ApiError::not_found("NOT_FOUND", "no such API key"))?;
+        Ok(json(200, &record.to_value()))
+    }
+
+    /// Make an API key.
+    ///
+    /// The key itself is in the answer and nowhere else: the platform
+    /// keeps a hash of it, so this is the one time it can be read.
+    fn create_key(&self, req: &Request) -> Result<Response, ApiError> {
+        let body = req.json()?;
+        let name = body
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| ApiError::invalid_request("a name is required"))?
+            .to_string();
+        let app = match body.get("app") {
+            Some(Value::Str(app)) if !app.trim().is_empty() => {
+                let app = app.trim().to_string();
+                let platform = self
+                    .service
+                    .platform()
+                    .map_err(|e| ApiError::internal(format!("platform: {e}")))?;
+                let record = platform
+                    .find_app(&app)
+                    .ok_or_else(|| ApiError::not_found("NOT_FOUND", "no such app"))?;
+                Some(record.id.clone())
+            }
+            _ => None,
+        };
+        let scopes: Vec<String> = match body.get("scopes") {
+            Some(Value::Array(list)) => list
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                .filter(|s| !s.is_empty())
+                .collect(),
+            _ => Vec::new(),
+        };
+        if let Some(unknown) = apikey::first_unknown_scope(&scopes) {
+            return Err(ApiError::invalid_request(format!(
+                "there is no scope called {unknown}"
+            )));
+        }
+        if scopes.is_empty() {
+            return Err(ApiError::invalid_request("a key needs at least one scope"));
+        }
+        let expires_at = match body.get("expiresAt") {
+            Some(Value::Int(seconds)) => Some(*seconds),
+            Some(Value::Str(text)) => match text.trim().parse::<i64>() {
+                Ok(seconds) => Some(seconds),
+                Err(_) => {
+                    return Err(ApiError::invalid_request(
+                        "expiresAt must be a number of seconds since the epoch",
+                    ))
+                }
+            },
+            _ => None,
+        };
+        let (record, secret) = self.service.create_key(name, app, scopes, expires_at)?;
+        let mut out = Object::new();
+        out.set("key", record);
+        // The only time the key itself is ever written down.
+        out.set("secret", Value::str(secret));
+        Ok(json(201, &Value::Object(out)))
+    }
+
+    /// Change an API key: its name, its scopes, its expiry, or whether it
+    /// is revoked.
+    fn patch_key(&self, req: &Request, key: &str) -> Result<Response, ApiError> {
+        let body = req.json()?;
+        let updated = self.service.patch_key(key, &body)?;
+        Ok(json(200, &updated))
+    }
+
+    /// Remove an API key.
+    fn remove_key(&self, key: &str) -> Result<Response, ApiError> {
+        let removed = self.service.remove_key(key)?;
+        Ok(json(200, &removed))
+    }
+
     // -------------------------------------------------------------- apps --
 
     /// The apps, filtered and paged.
@@ -428,11 +780,24 @@ impl Api {
     /// number and `perPage` how many apps are on it; `limit` and
     /// `offset` say the same thing the other way round, and are what the
     /// rows routes use.
-    fn list_apps(&self, req: &Request) -> Result<Response, ApiError> {
-        let apps = self
+    fn list_apps(&self, req: &Request, principal: &Principal) -> Result<Response, ApiError> {
+        let mut apps = self
             .service
             .list()
             .map_err(|e| ApiError::internal(format!("platform: {e}")))?;
+        // A key made for one app sees one app. Not an error — the key is
+        // working; it simply cannot see the rest.
+        if let Some(limit) = principal.app_limit() {
+            apps.retain(|app| {
+                app.get("id").and_then(|v| v.as_str()) == Some(limit)
+                    || app
+                        .get("doc")
+                        .and_then(|d| d.get("app"))
+                        .and_then(|a| a.get("name"))
+                        .and_then(|v| v.as_str())
+                        == Some(limit)
+            });
+        }
         let search = req
             .query_param("search")
             .map(|s| s.trim().to_ascii_lowercase())

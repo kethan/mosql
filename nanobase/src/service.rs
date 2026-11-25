@@ -304,9 +304,125 @@ impl Service {
 
     // -------------------------------------------------------- operations --
 
+    /// Re-read the platform from the store.
+    ///
+    /// The command line and a running server share the platform's file,
+    /// so a key made with `nanobase key create` is not in the server's
+    /// memory until the server looks again. This is how it looks again.
+    /// The apps are re-read too, which is the same bargain.
+    pub fn reload(&self) -> Result<()> {
+        let platform = block_on(self.inner.store.load())?;
+        *self.inner.platform.lock().expect("not poisoned") = platform;
+        Ok(())
+    }
+
     /// The platform as it stands.
     pub fn platform(&self) -> Result<Platform> {
         Ok(self.inner.platform.lock().expect("not poisoned").clone())
+    }
+
+    // -------------------------------------------------------------- keys --
+
+    /// Make an API key. Returns the record and the key itself.
+    ///
+    /// The key is shown once. The platform keeps a hash of it, so there
+    /// is no second chance to read it.
+    pub fn create_key(
+        &self,
+        name: String,
+        app: Option<String>,
+        scopes: Vec<String>,
+        expires_at: Option<i64>,
+    ) -> Result<(Value, String)> {
+        let now = crate::platform::now_secs();
+        let mut platform = self.inner.platform.lock().expect("not poisoned");
+        let (record, secret) = crate::apikey::ApiKey::create(&name, app, scopes, expires_at, now);
+        let value = record.to_value();
+        platform.api_keys.push(record);
+        block_on(self.inner.store.save(&platform))?;
+        Ok((value, secret))
+    }
+
+    /// Change an API key.
+    pub fn patch_key(&self, id: &str, changes: &Value) -> Result<Value> {
+        let mut platform = self.inner.platform.lock().expect("not poisoned");
+        let index = platform
+            .api_keys
+            .iter()
+            .position(|key| key.id == id)
+            .ok_or_else(|| Error::not_found("no such API key"))?;
+        {
+            let key = &mut platform.api_keys[index];
+            if let Some(name) = changes.get("name").and_then(|v| v.as_str()) {
+                let name = name.trim();
+                if name.is_empty() {
+                    return Err(Error::bad_request("the name of a key may not be empty"));
+                }
+                key.name = name.to_string();
+            }
+            if let Some(Value::Array(list)) = changes.get("scopes") {
+                let scopes: Vec<String> = list
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if let Some(unknown) = crate::apikey::first_unknown_scope(&scopes) {
+                    return Err(Error::bad_request(format!(
+                        "there is no scope called {unknown}"
+                    )));
+                }
+                if scopes.is_empty() {
+                    return Err(Error::bad_request("a key needs at least one scope"));
+                }
+                key.scopes = scopes;
+            }
+            match changes.get("expiresAt") {
+                Some(Value::Int(seconds)) => key.expires_at = Some(*seconds),
+                Some(Value::Null) => key.expires_at = None,
+                _ => {}
+            }
+            if let Some(Value::Bool(revoked)) = changes.get("revoked") {
+                key.revoked = *revoked;
+            }
+        }
+        let value = platform.api_keys[index].to_value();
+        block_on(self.inner.store.save(&platform))?;
+        Ok(value)
+    }
+
+    /// Remove an API key.
+    pub fn remove_key(&self, id: &str) -> Result<Value> {
+        let mut platform = self.inner.platform.lock().expect("not poisoned");
+        let index = platform
+            .api_keys
+            .iter()
+            .position(|key| key.id == id)
+            .ok_or_else(|| Error::not_found("no such API key"))?;
+        let removed = platform.api_keys.remove(index);
+        block_on(self.inner.store.save(&platform))?;
+        Ok(removed.to_value())
+    }
+
+    /// Remember that a key was used.
+    ///
+    /// The write is at most one a minute: a key used a thousand times a
+    /// second must not write a thousand times a second, and "when was
+    /// this last used" does not need to be exact to the second.
+    pub fn touch_key(&self, id: &str, now: i64) -> Result<()> {
+        let mut platform = self.inner.platform.lock().expect("not poisoned");
+        let Some(key) = platform.api_keys.iter_mut().find(|key| key.id == id) else {
+            return Ok(());
+        };
+        if let Some(last) = key.last_used_at {
+            if now - last < 60 {
+                return Ok(());
+            }
+        }
+        if let Some(key) = platform.api_keys.iter_mut().find(|key| key.id == id) {
+            key.last_used_at = Some(now);
+        }
+        block_on(self.inner.store.save(&platform))?;
+        Ok(())
     }
 
     /// The platform's apps, as values.

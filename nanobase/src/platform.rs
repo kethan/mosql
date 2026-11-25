@@ -24,6 +24,7 @@ use std::pin::Pin;
 use mosql::{to_json, Object, Value};
 use uflite::error::{Error, Result};
 
+use crate::apikey::ApiKey;
 use crate::config::AppDoc;
 use crate::crypto::{b64url_decode, b64url_encode, ct_eq, pbkdf2_sha256, random_bytes, random_id};
 use crate::jwt::Claims;
@@ -197,6 +198,8 @@ pub struct Platform {
     pub jwt_secret: String,
     pub users: Vec<User>,
     pub apps: Vec<AppRecord>,
+    /// The API keys the owner has made.
+    pub api_keys: Vec<ApiKey>,
 }
 
 impl Platform {
@@ -211,6 +214,10 @@ impl Platform {
         o.set(
             "apps",
             Value::Array(self.apps.iter().map(AppRecord::to_value).collect()),
+        );
+        o.set(
+            "apiKeys",
+            Value::Array(self.api_keys.iter().map(ApiKey::to_stored_value).collect()),
         );
         Value::Object(o)
     }
@@ -240,10 +247,19 @@ impl Platform {
                 })?);
             }
         }
+        let mut api_keys = Vec::new();
+        if let Some(Value::Array(list)) = o.get("apiKeys") {
+            for item in list {
+                api_keys.push(ApiKey::from_value(item).ok_or_else(|| {
+                    Error::internal("platform file has an API key that cannot be read")
+                })?);
+            }
+        }
         Ok(Platform {
             jwt_secret,
             users,
             apps,
+            api_keys,
         })
     }
 

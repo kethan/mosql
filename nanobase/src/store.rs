@@ -1,7 +1,8 @@
 //! The platform's own data, in SQLite.
 //!
-//! Three tables: `meta` for the signing key, `users` for accounts, `apps` for
-//! the app list. An app's *configuration* is stored as one JSON document
+//! Four tables: `meta` for the signing key, `users` for accounts, `apps` for
+//! the app list, and `api_keys` for the credentials a program holds. An app's
+//! *configuration* is stored as one JSON document
 //! rather than exploded into columns, because the platform never queries inside
 //! it — it hands the whole document to whoever serves the app. The things that
 //! *are* queried (`id`, `name`, `created_at`) are columns.
@@ -42,6 +43,19 @@ CREATE TABLE IF NOT EXISTS apps (
     name        TEXT NOT NULL UNIQUE COLLATE NOCASE,
     created_at  TEXT NOT NULL,
     document    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    id           TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    hash         TEXT NOT NULL,
+    preview      TEXT NOT NULL,
+    app          TEXT,
+    scopes       TEXT NOT NULL,
+    expires_at   INTEGER,
+    created_at   TEXT NOT NULL,
+    last_used_at INTEGER,
+    revoked      INTEGER NOT NULL DEFAULT 0
 );
 ";
 
@@ -198,6 +212,47 @@ impl SqliteStore {
         }
 
         for row in conn.query(
+            "SELECT id, name, hash, preview, app, scopes, expires_at, created_at,
+                    last_used_at, revoked
+             FROM api_keys ORDER BY created_at, id",
+            &[],
+        )? {
+            let text = |name: &str| -> Result<String> {
+                row.get(name)
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .ok_or_else(|| Error::internal(format!("api_keys.{name} is not text")))
+            };
+            let scopes = text("scopes")?;
+            platform.api_keys.push(crate::apikey::ApiKey {
+                id: text("id")?,
+                name: text("name")?,
+                hash: text("hash")?,
+                preview: text("preview")?,
+                app: row
+                    .get("app")
+                    .and_then(Value::as_str)
+                    .filter(|app| !app.is_empty())
+                    .map(str::to_string),
+                scopes: if scopes.is_empty() {
+                    Vec::new()
+                } else {
+                    scopes.split(',').map(str::to_string).collect()
+                },
+                expires_at: match row.get("expires_at") {
+                    Some(Value::Int(at)) => Some(*at),
+                    _ => None,
+                },
+                created_at: text("created_at")?,
+                last_used_at: match row.get("last_used_at") {
+                    Some(Value::Int(at)) => Some(*at),
+                    _ => None,
+                },
+                revoked: matches!(row.get("revoked"), Some(Value::Int(1))),
+            });
+        }
+
+        for row in conn.query(
             "SELECT id, created_at, document FROM apps ORDER BY name COLLATE NOCASE",
             &[],
         )? {
@@ -237,7 +292,9 @@ impl SqliteStore {
             // it, so replacing each table outright is both simpler and faster
             // than diffing to decide what changed. The transaction is what
             // makes that safe: a crash leaves the previous state intact.
-            conn.execute_batch("DELETE FROM meta; DELETE FROM users; DELETE FROM apps;")?;
+            conn.execute_batch(
+                "DELETE FROM meta; DELETE FROM users; DELETE FROM apps; DELETE FROM api_keys;",
+            )?;
 
             conn.execute(
                 "INSERT INTO meta (key, value) VALUES (?1, ?2)",
@@ -274,6 +331,36 @@ impl SqliteStore {
                     ],
                 )?;
             }
+
+            for key in &platform.api_keys {
+                conn.execute(
+                    "INSERT INTO api_keys
+                     (id, name, hash, preview, app, scopes, expires_at, created_at,
+                      last_used_at, revoked)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    &[
+                        Value::str(key.id.clone()),
+                        Value::str(key.name.clone()),
+                        Value::str(key.hash.clone()),
+                        Value::str(key.preview.clone()),
+                        match &key.app {
+                            Some(app) => Value::str(app.clone()),
+                            None => Value::Null,
+                        },
+                        Value::str(key.scopes.join(",")),
+                        match key.expires_at {
+                            Some(at) => Value::Int(at),
+                            None => Value::Null,
+                        },
+                        Value::str(key.created_at.clone()),
+                        match key.last_used_at {
+                            Some(at) => Value::Int(at),
+                            None => Value::Null,
+                        },
+                        Value::Int(i64::from(key.revoked)),
+                    ],
+                )?;
+            }
             Ok(())
         })
     }
@@ -286,7 +373,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn schema_creates_three_tables() {
+    fn schema_creates_four_tables() {
         let conn = Connection::open_memory().unwrap();
         conn.execute_batch(SCHEMA).unwrap();
         let tables: Vec<String> = conn
@@ -298,7 +385,7 @@ mod tests {
             .iter()
             .filter_map(|r| r.at(0).and_then(Value::as_str).map(str::to_string))
             .collect();
-        assert_eq!(tables, vec!["apps", "meta", "users"]);
+        assert_eq!(tables, vec!["api_keys", "apps", "meta", "users"]);
     }
 
     #[test]

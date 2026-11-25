@@ -78,44 +78,67 @@ In PowerShell:
 $app = "app_7585e98765bed55cd83fce11"
 ```
 
-## 5. Get a token
+## 5. Get an API key
 
-The API needs a bearer token. The owner signs in for one.
+The API needs a credential. A **person** signs in and gets a session
+token; a **program** — this page, a deploy script, a CI job — gets an
+API key instead. A key can be limited to one app, limited to what it may
+do, and made to expire on its own.
 
-**cmd.exe**
-
-```
-curl.exe -s -X POST http://127.0.0.1:8090/api/auth/login -H "Content-Type: application/json" -d "{\"email\":\"owner@example.com\",\"password\":\"correct-horse-battery\"}"
-```
-
-**PowerShell** (use `curl.exe`, not `curl` — in Windows PowerShell 5.1
-`curl` is an alias for `Invoke-WebRequest`, which takes different
-arguments)
-
-```powershell
-curl.exe -s -X POST http://127.0.0.1:8090/api/auth/login -H "Content-Type: application/json" -d '{"email":"owner@example.com","password":"correct-horse-battery"}'
-```
-
-Both answer with the token and the owner:
-
-```json
-{"token":"eyJhbGciOiJIUzI1NiIs…","user":{"id":"…","email":"owner@example.com",…}}
-```
+The key is made on the platform's own state, so the server may be
+running or not:
 
 **cmd.exe**
 
 ```
-set TOKEN=eyJhbGciOiJIUzI1NiIs…
+.\target\release\nanobase.exe key create --name "the todo page" --app %APP% --scopes rows:read,rows:write --expires-in 30d
 ```
 
 **PowerShell**
 
 ```powershell
-$token = "eyJhbGciOiJIUzI1NiIs…"
+.\target\release\nanobase.exe key create --name "the todo page" --app $app --scopes rows:read,rows:write --expires-in 30d
 ```
 
-The token lasts three days. `nanobase login owner@example.com` prints
-another one if you need one.
+The key is printed once, and never again — the platform keeps a hash of
+it, not the key:
+
+```
+nbk_0Kc_J_VqnOREvRVxDEednY1gS9nWSv1-UxW5y9epjyI
+
+This is the only time the key is shown. Put it in your secret store.
+```
+
+**cmd.exe**
+
+```
+set TOKEN=nbk_0Kc_J_VqnOREvRVxDEednY1gS9nWSv1-UxW5y9epjyI
+```
+
+**PowerShell**
+
+```powershell
+$token = "nbk_0Kc_J_VqnOREvRVxDEednY1gS9nWSv1-UxW5y9epjyI"
+```
+
+A key works the same as a token in a request — `Authorization: Bearer
+<key>` — and it can also go in `X-Nanobase-Key`.
+
+To see the keys, and to remove one:
+
+```
+.\target\release\nanobase.exe key list
+.\target\release\nanobase.exe key show key_djf2qK9rsqIK
+.\target\release\nanobase.exe key remove key_djf2qK9rsqIK
+```
+
+A key that may only read cannot write, whatever it is asked to do; a key
+made for one app cannot see another; and a key past its expiry answers
+`401 EXPIRED_KEY` without anybody having to remember to delete it.
+
+> The owner's own session token is still there — `nanobase login
+> owner@example.com` prints one — and it is what the console uses. A
+> front end should hold a key, not the owner's password.
 
 ## 6. The four operations on rows
 
@@ -203,7 +226,7 @@ In the page:
 | --- | --- |
 | API address | `http://127.0.0.1:8090` |
 | App id | the `app_…` from step 4 |
-| Token | the token from step 5 |
+| Token | the API key from step 5 |
 
 Press **Connect**. The list appears. Add a todo, tick it, delete it —
 each one is a request to the app's rows, and each one is visible in
@@ -259,6 +282,25 @@ An origin that is not on the list gets no `Access-Control-Allow-Origin`
 header, and the browser refuses to hand it the answer. That is the
 correct answer, not a missing one.
 
+### API keys
+
+A key is a credential a program holds. It has a name, it may be limited
+to one app, it may be limited to what it may do, and it may expire:
+
+```
+.\target\release\nanobase.exe key create --name "the deploy script" --app todos --scopes rows:read,rows:write --expires-in 30d
+```
+
+| scope | what it allows |
+| --- | --- |
+| `rows:read` | read the rows of an app |
+| `rows:write` | write the rows of an app |
+| `apps:read` | read the apps |
+| `apps:write` | create, change and remove apps |
+| `admin` | everything, including making more keys |
+
+The console has the same thing on its **API keys** page.
+
 ### The rate limit
 
 Off by default. Turn it on:
@@ -286,11 +328,13 @@ not buy a second allowance immediately afterwards.
 
 ## What is still rough
 
-* **The page uses the owner's token.** The app document already has the
-  shape for per-app users (`config.auth.features.emailPassword`), but the
-  platform does not yet serve an app's own sign-in endpoint, so the page
-  asks for a platform token. An app's own users are the next thing to
-  build.
+* **The page uses a platform API key.** The key is limited to the one
+  app and to reading and writing its rows, and it expires on its own —
+  but it is still a *platform* credential, and the platform has one
+  account. The app document already has the shape for per-app users
+  (`config.auth.features.emailPassword`), but the platform does not yet
+  serve an app's own sign-in endpoint, so a front end cannot yet have
+  users of its own. An app's own users are the next thing to build.
 * **The console edits the app document.** The database, auth and access
   tabs write into `config`, which is the same document `nanobase app
   export` writes. Nothing is lost, and nothing is hidden — but a change

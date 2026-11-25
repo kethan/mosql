@@ -22,6 +22,7 @@
 // the network, so those modules are not compiled into it at all.
 #[cfg(feature = "native")]
 pub mod api;
+pub mod apikey;
 #[cfg(feature = "native")]
 pub mod console;
 #[cfg(feature = "native")]
@@ -50,7 +51,8 @@ pub mod store_serverless;
 pub mod wire;
 
 #[cfg(feature = "native")]
-pub use api::Api;
+pub use api::{Api, Principal};
+pub use apikey::ApiKey;
 #[cfg(feature = "curl")]
 pub use client::ApiClient;
 pub use config::{

@@ -47,6 +47,42 @@ do a script can do.
 | **Access** | the rules: permissions, an effect, and an optional condition |
 | **Rows** | the collections an app has and the rows in them |
 
+There is also an **API keys** page in the sidebar: make a key, limit it
+to an app and to what it may do, make it expire, and remove it.
+
+### API keys
+
+A **session token** is a person. An **API key** is a program. The owner
+makes a key for the thing that needs one, and the key can be limited:
+
+| limit | what it does |
+| --- | --- |
+| a **name** | so the key can be found in a list six months later |
+| an **app** | the key may only touch that app, and may only see that app in a list |
+| a **scope** | `rows:read`, `rows:write`, `apps:read`, `apps:write`, `admin` |
+| an **expiry** | the key stops working on its own |
+
+```
+nanobase key create --name "the deploy script" --app todos --scopes rows:read,rows:write --expires-in 30d
+nanobase key list
+nanobase key show key_djf2qK9rsqIK
+nanobase key remove key_djf2qK9rsqIK
+```
+
+The key is shown once, when it is made. The platform keeps a hash of it,
+so there is no second chance to read it — the same bargain as a
+password, except that the hash is a fast SHA-256 rather than a slow
+PBKDF2, because there is nothing to guess about 256 random bits.
+
+A key goes in a request like a token:
+
+```
+curl http://127.0.0.1:8090/api/apps/todos/db/todos -H "Authorization: Bearer nbk_…"
+curl http://127.0.0.1:8090/api/apps/todos/db/todos -H "X-Nanobase-Key: nbk_…"
+```
+
+The console has the same thing on its **API keys** page.
+
 ### Security
 
 Three things a browser needs and forgets, and the platform has all
@@ -143,6 +179,7 @@ a serverless deployment points at.
 | Two editions: full (TCP, local SQLite) and serverless (no TCP, no file) | done — one command line, two binaries |
 | The console: create, search, page, configure and test apps | done — three files inside the binary |
 | Security headers, CORS (platform and per app), rate limit | done |
+| API keys with a scope, an app and an expiry | done — the command line and the console |
 | App database: memory, SQLite, HTTP, TCP | done — 6 tests |
 | Serving an app's rows over the API | done — 8 tests |
 | SQL engines (Postgres, MySQL) | next — needs a driver |

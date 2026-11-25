@@ -108,17 +108,17 @@
           <input id="app" type="text" placeholder="app_…" />
         </label>
         <label>
-          <span>Token</span>
-          <input id="token" type="password" placeholder="the session token" />
+          <span>API key</span>
+          <input id="token" type="password" placeholder="nbk_…" />
         </label>
         <div class="row">
           <button class="primary" id="connect" type="button">Connect</button>
           <button id="forget" type="button">Forget</button>
         </div>
         <p class="hint">
-          The token comes from <code>nanobase login</code> or
-          <code>POST /api/auth/login</code>. It is kept in this browser's
-          local storage.
+          The key comes from <code>nanobase key create</code>. It is
+          limited to one app and to what it may do, and it can be made to
+          expire. It is kept in this browser's local storage.
         </p>
         <p class="status" id="setup-status"></p>
       </div>
@@ -139,9 +139,13 @@
       // A todo list against a Nanobase app.
       //
       // The three settings below are the whole connection: the API's
-      // address, which app's rows to use, and the bearer token. Everything
+      // address, which app's rows to use, and the API key. Everything
       // else is the four operations the app's rows have — list, insert,
       // update and delete.
+      //
+      // The key is a credential for a *program*, not the owner's
+      // password: it may be limited to this one app, limited to reading
+      // and writing rows, and made to expire on its own.
       (function () {
         "use strict";
 
