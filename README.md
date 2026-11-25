@@ -258,6 +258,33 @@ Notes:
 
 Examples mirror the provider docs; install drizzle adapters to run them.
 
+## ☁️ Cloudflare Workers
+
+The Rust stack in this repository also runs as a Cloudflare Worker: the
+authentication engine compiled to WebAssembly, with D1 as the database,
+KV as an optional session cache and R2 as an optional blob store. See
+[`worker/`](worker/README.md).
+
+```sh
+cd worker
+./build.sh                                                  # the module
+wrangler d1 execute mosql-auth --local --file=schema.sql    # the tables
+wrangler dev --var AUTH_SECRET:... --var AUTH_BASE_URL:http://127.0.0.1:8787
+```
+
+```sh
+curl -X POST http://127.0.0.1:8787/api/auth/sign-up/email \
+  -H 'content-type: application/json' \
+  -d '{"email":"ada@example.com","password":"correct-horse-battery","name":"Ada"}'
+```
+
+It is the same engine as the native binary — the same routes, the same
+SQL, the same records — with the native half switched off at compile
+time. The WebAssembly module has no SQLite, no socket, no subprocess, no
+thread and no clock of its own: it asks the host for the clock and the
+randomness, and for nothing else, which `worker/verify.sh` checks by
+reading the module's import section.
+
 ## Husky
 
 - Install: add dev dep `husky` and ensure `"prepare": "husky install"` in `package.json` (already set).
@@ -300,6 +327,7 @@ This approach lets you tailor the library to your use case and keep bundles extr
 ## 📖 Table of Contents
 
 - [Installation](#installation)
+- [Cloudflare Workers](#-cloudflare-workers)
 - [Query Examples](#query-examples)
   - [Basic Queries](#basic-queries)
   - [Array Operators ($in, $nin)](#array-operators-in-nin)

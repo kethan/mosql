@@ -24,6 +24,10 @@ name: Rust
 #              authentication engine (bearer JWT sessions, eight plugins,
 #              36 OAuth providers): fmt, clippy, the unit and integration
 #              tests, and a cap on the release binary's size
+#   worker     worker/verify.sh on Linux — the same engine as a Cloudflare
+#              Worker: fmt, clippy, the protocol tests, and a build of the
+#              WebAssembly module that is checked for asking the host for
+#              nothing but the clock and the randomness
 
 on:
   push:
@@ -34,6 +38,7 @@ on:
       - "schemaless/**"
       - "nanobase/**"
       - "better-auth-core/**"
+      - "worker/**"
       # The JS implementation is the oracle for the parity fixtures, so a change
       # to it can make the Rust port drift even though rust/ is untouched.
       - "src/**"
@@ -49,6 +54,7 @@ on:
       - "schemaless/**"
       - "nanobase/**"
       - "better-auth-core/**"
+      - "worker/**"
       - "src/**"
       - "lite/**"
       - "tiny/**"
@@ -276,6 +282,44 @@ jobs:
       - name: client
         shell: bash
         run: ./better-auth-core/tests/client/run.sh
+
+  worker:
+    # The Worker build of the authentication engine. It compiles the same
+    # engine to WebAssembly with the native half of it switched off, so the
+    # module has no SQLite, no socket, no subprocess, no thread and no
+    # clock of its own. The last stage reads the module's import section
+    # and fails if it asks the host for anything but the clock and the
+    # randomness: a Worker has no other way to get either, and a module
+    # that reached for something else would fail at run time instead.
+    name: worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: worker
+      # One step per stage rather than a single "verify" step: a red X beside
+      # the stage that broke is worth far more than one beside the whole job.
+      - name: fmt
+        shell: bash
+        run: ./worker/verify.sh fmt
+      - name: clippy
+        shell: bash
+        run: ./worker/verify.sh clippy
+      - name: test
+        shell: bash
+        run: ./worker/verify.sh test
+      - name: dependencies
+        shell: bash
+        run: ./worker/verify.sh deps
+      - name: module
+        shell: bash
+        run: ./worker/verify.sh module
 
   # `cargo publish --dry-run` needs the crates.io index, which the sandbox that
   # developed this crate had no access to. CI has it, so this is the gate that
