@@ -90,6 +90,17 @@ pub trait AppDb: Send + Sync {
 
     /// Remove every row matching a filter; returns how many went.
     fn remove(&self, collection: &str, query: &Value) -> Result<u64>;
+
+    /// Whether the database is there.
+    ///
+    /// This is what a connection test asks. The default is to ask for
+    /// the collections, which is a question to a local engine; a
+    /// database that answers over the network is asked directly, so
+    /// that "the connection works" means the database answered and not
+    /// that the platform had nothing to say.
+    fn ping(&self) -> Result<()> {
+        self.collections().map(|_| ())
+    }
 }
 
 /// A collection name reduced to characters that are safe in a table name.

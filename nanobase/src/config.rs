@@ -208,6 +208,19 @@ pub struct DatabaseConfig {
     pub raw_type: String,
     pub url: Option<String>,
     pub token: Option<String>,
+    /// Which cloud the rows are in, when the user says so.
+    ///
+    /// This is the answer to a question a URL cannot always answer. A
+    /// `postgres://` URL names a protocol, not a cloud: Neon, Vercel
+    /// Postgres and Supabase all speak it, and their endpoints and their
+    /// sessions differ. A `mysql://` URL is the same story — TiDB Cloud
+    /// and PlanetScale both speak MySQL over HTTP, and they are not
+    /// interchangeable. So the user may name the cloud, and the name is
+    /// what the platform uses.
+    ///
+    /// With no name here, the cloud is worked out from the URL, as it
+    /// always was.
+    pub provider: Option<DbProvider>,
 }
 
 impl Default for DatabaseConfig {
@@ -217,6 +230,7 @@ impl Default for DatabaseConfig {
             raw_type: "sqlite".to_string(),
             url: None,
             token: None,
+            provider: None,
         }
     }
 }
@@ -270,6 +284,32 @@ impl DatabaseConfig {
                 None => false,
             },
         }
+    }
+
+    /// The engine a URL names, if it names one.
+    ///
+    /// A provider URL says what it is: `libsql://` is libSQL, `d1://` is
+    /// D1, `postgres://` is PostgreSQL, `mysql://` is MySQL. A URL that
+    /// names no engine — an `http://` service, a `tcp://` socket — says
+    /// nothing, and `None` is the answer.
+    pub fn kind_from_url(url: &str) -> Option<DbKind> {
+        let scheme = url.split_once("://")?.0.trim().to_ascii_lowercase();
+        Some(match scheme.as_str() {
+            "libsql" | "turso" => DbKind::Libsql,
+            "d1" | "cloudflare" => DbKind::D1,
+            "postgres" | "postgresql" => DbKind::Postgres,
+            "mysql" | "tidb" | "pscale" | "planetscale" => DbKind::Mysql,
+            _ => return None,
+        })
+    }
+
+    /// The cloud the rows are in, when it is known.
+    ///
+    /// With no provider named, the cloud is worked out from the URL —
+    /// but only when the database is opened, because a URL may be
+    /// changed without the document being re-read.
+    pub fn provider_name(&self) -> Option<&'static str> {
+        self.provider.map(|p| p.as_str())
     }
 
     /// A reachable engine: one that needs a URL.
@@ -357,6 +397,96 @@ impl DbKind {
             "planetscale",
             "d1",
         ]
+    }
+}
+
+/// Which cloud an app's rows are in.
+///
+/// The `type` says the protocol; this says the cloud. They are not the
+/// same thing, and the difference matters: the protocol says how to
+/// speak to the database, and the cloud says where the request goes and
+/// what it must look like when it arrives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DbProvider {
+    /// Turso, over libSQL.
+    Turso,
+    /// Cloudflare D1.
+    D1,
+    /// Neon, or Vercel Postgres.
+    Neon,
+    /// TiDB Cloud Serverless.
+    Tidb,
+    /// PlanetScale, over Vitess.
+    PlanetScale,
+}
+
+impl DbProvider {
+    /// The name as it is written in a document.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DbProvider::Turso => "turso",
+            DbProvider::D1 => "d1",
+            DbProvider::Neon => "neon",
+            DbProvider::Tidb => "tidb",
+            DbProvider::PlanetScale => "planetscale",
+        }
+    }
+
+    /// Read a provider's name.
+    ///
+    /// The names people use are accepted, not only the canonical ones:
+    /// `libsql` is Turso, `cloudflare` is D1, `pscale` is PlanetScale, and
+    /// `postgres` is the protocol Neon speaks.
+    pub fn parse(name: &str) -> Option<DbProvider> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "turso" | "libsql" => Some(DbProvider::Turso),
+            "d1" | "cloudflare" => Some(DbProvider::D1),
+            "neon" | "vercel" | "postgres" | "postgresql" | "supabase" => Some(DbProvider::Neon),
+            "tidb" | "tidbcloud" => Some(DbProvider::Tidb),
+            "planetscale" | "pscale" | "vitess" => Some(DbProvider::PlanetScale),
+            _ => None,
+        }
+    }
+
+    /// Every name a provider answers to, for a message that lists them.
+    pub fn all_names() -> &'static [&'static str] {
+        &["turso", "d1", "neon", "tidb", "planetscale"]
+    }
+
+    /// The protocol this cloud speaks.
+    ///
+    /// This is what the `type` of a document has to agree with: a Turso
+    /// database is libSQL, a Neon database is PostgreSQL, and a TiDB or
+    /// PlanetScale database is MySQL.
+    pub fn kind(self) -> DbKind {
+        match self {
+            DbProvider::Turso => DbKind::Libsql,
+            DbProvider::D1 => DbKind::D1,
+            DbProvider::Neon => DbKind::Postgres,
+            DbProvider::Tidb | DbProvider::PlanetScale => DbKind::Mysql,
+        }
+    }
+
+    /// The same cloud, as the driver knows it.
+    pub fn core(self) -> mosql_core::driver::Provider {
+        match self {
+            DbProvider::Turso => mosql_core::driver::Provider::Turso,
+            DbProvider::D1 => mosql_core::driver::Provider::D1,
+            DbProvider::Neon => mosql_core::driver::Provider::Neon,
+            DbProvider::Tidb => mosql_core::driver::Provider::Tidb,
+            DbProvider::PlanetScale => mosql_core::driver::Provider::PlanetScale,
+        }
+    }
+
+    /// The cloud the driver names, as this platform names it.
+    pub fn from_core(provider: mosql_core::driver::Provider) -> DbProvider {
+        match provider {
+            mosql_core::driver::Provider::Turso => DbProvider::Turso,
+            mosql_core::driver::Provider::D1 => DbProvider::D1,
+            mosql_core::driver::Provider::Neon => DbProvider::Neon,
+            mosql_core::driver::Provider::Tidb => DbProvider::Tidb,
+            mosql_core::driver::Provider::PlanetScale => DbProvider::PlanetScale,
+        }
     }
 }
 
@@ -1377,6 +1507,9 @@ fn provider_to_value(p: &Provider) -> Value {
 fn database_to_value(d: &DatabaseConfig) -> Value {
     let mut o = Object::new();
     o.set("type", Value::str(d.raw_type.clone()));
+    if let Some(provider) = &d.provider {
+        o.set("provider", Value::str(provider.as_str()));
+    }
     if let Some(url) = &d.url {
         o.set("url", Value::str(url.clone()));
     }
@@ -1625,24 +1758,72 @@ fn read_database(
         issues.push(Issue::new(path, "must be an object"));
         return d;
     };
-    match opt_str(o, "type") {
-        Some(t) => match DbKind::parse(t) {
-            Some((kind, _)) => {
-                d.kind = kind;
-                d.raw_type = t.to_string();
-            }
+    // The cloud, when the user names one. It is read before the type,
+    // because a provider says which protocol it speaks: a document that
+    // says `provider: "neon"` and no type means PostgreSQL.
+    let mut provider = None;
+    if let Some(name) = opt_str(o, "provider") {
+        match DbProvider::parse(name) {
+            Some(p) => provider = Some(p),
             None => issues.push(Issue::new(
-                format!("{path}.type"),
+                format!("{path}.provider"),
                 format!(
-                    "unknown database {t:?}; expected one of {}",
-                    DbKind::all_names().join(", ")
+                    "unknown provider {name:?}; expected one of {}",
+                    DbProvider::all_names().join(", ")
                 ),
             )),
+        }
+    }
+    // Whether the type was written down, and whether it was understood:
+    // a provider that disagrees with a type is a problem, but a type
+    // that was not understood is already a problem of its own.
+    let mut type_given = false;
+    let mut type_understood = false;
+    match opt_str(o, "type") {
+        Some(t) => {
+            type_given = true;
+            match DbKind::parse(t) {
+                Some((kind, _)) => {
+                    type_understood = true;
+                    d.kind = kind;
+                    d.raw_type = t.to_string();
+                }
+                None => issues.push(Issue::new(
+                    format!("{path}.type"),
+                    format!(
+                        "unknown database {t:?}; expected one of {}",
+                        DbKind::all_names().join(", ")
+                    ),
+                )),
+            }
+        }
+        None => match provider {
+            Some(p) => {
+                d.kind = p.kind();
+                d.raw_type = p.kind().as_str().to_string();
+            }
+            None => issues.push(Issue::new(format!("{path}.type"), "is required")),
         },
-        None => issues.push(Issue::new(format!("{path}.type"), "is required")),
     }
     d.url = opt_str(o, "url").map(str::to_string);
     d.token = opt_str(o, "token").map(str::to_string);
+    d.provider = provider;
+    // The two have to agree. A Turso database is libSQL, a Neon database
+    // is PostgreSQL, and a document that says `type: "postgres"` and
+    // `provider: "turso"` is asking for two different databases at once.
+    if let Some(p) = d.provider {
+        if type_given && type_understood && p.kind() != d.kind {
+            issues.push(Issue::new(
+                format!("{path}.provider"),
+                format!(
+                    "the {} provider speaks {}, but the type says {}",
+                    p.as_str(),
+                    p.kind().as_str(),
+                    d.raw_type
+                ),
+            ));
+        }
+    }
     d
 }
 

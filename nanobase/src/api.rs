@@ -18,11 +18,18 @@
 //! * `DELETE /api/apps/{id}` — remove it.
 //! * `GET    /api/apps/{id}/methods` — the custom methods.
 //! * `POST   /api/apps/{id}/methods/{name}` — call one.
+//! * `GET    /api/apps/{id}/keys` — an app's API keys.
+//! * `POST   /api/apps/{id}/keys` — make one.
+//! * `GET    /api/apps/{id}/keys/{id}` — one key.
+//! * `PATCH  /api/apps/{id}/keys/{id}` — change what it may do.
+//! * `DELETE /api/apps/{id}/keys/{id}` — remove it.
+//! * `POST   /api/apps/{id}/clone` — copy the app.
 //! * `GET    /api/apps/{id}/db` — the collections an app has.
 //! * `GET    /api/apps/{id}/db/{collection}` — the rows of a collection.
 //! * `POST   /api/apps/{id}/db/{collection}` — put a row in.
 //! * `PATCH  /api/apps/{id}/db/{collection}` — change the rows that match.
 //! * `DELETE /api/apps/{id}/db/{collection}` — take the rows that match out.
+//! * `POST   /api/apps/{id}/db/test` — try a database configuration.
 //! * `GET    /api/events` — the events a change fires.
 //!
 //! Every app operation goes through the service, so a change made over HTTP
@@ -1057,6 +1064,18 @@ impl Api {
             })?,
             None => crate::clone::CloneData::Omit,
         };
+        // The cloud, when the request names one. A name that is not a
+        // cloud is refused here rather than at the database: the
+        // request is the wrong shape, and the answer says so.
+        let provider = match body.get("provider").and_then(|v| v.as_str()) {
+            Some(name) => Some(crate::config::DbProvider::parse(name).ok_or_else(|| {
+                ApiError::invalid_request(format!(
+                    "unknown provider {name:?}; expected one of {}",
+                    crate::config::DbProvider::all_names().join(", ")
+                ))
+            })?),
+            None => None,
+        };
         let request = crate::clone::CloneRequest {
             name: name.to_string(),
             data,
@@ -1068,6 +1087,7 @@ impl Api {
                 .get("token")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
+            provider,
         };
         let summary = self
             .service

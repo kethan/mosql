@@ -29,10 +29,10 @@ The in-memory engine — CHECK find=2831 groups=2 city=London
 | `rust/` — **mosql** | the query builder and the in-memory engine, ported from the JavaScript `umosql`. `#![no_std]` + `alloc`, a hand-written regex and float routines, no libm, no dependency | 289 builder fixtures + 153 memory fixtures, byte-for-byte against the JavaScript |
 | `uflite/` | the service layer: databases, tables, ACL evaluation, storage (local files and an S3 trait) | 105 |
 | `schemaless/` | schema-less SQL collections, and the client that talks to them | 33 |
-| `nanobase/` | the platform: app documents, secrets, an owner account, a platform store, a service layer with events and hooks, an HTTP API, a web console, security middleware, and the command line | 290 (full) · 112 (serverless) |
+| `nanobase/` | the platform: app documents, secrets, an owner account, a platform store, a service layer with events and hooks, an HTTP API, a web console, security middleware, and the command line | 377 (full) · 163 (serverless) |
 | `better-auth-core/` | a Better Auth-compatible authentication server: bearer JWT sessions, eight plugins, every social provider, OpenID Connect with verified ID tokens | 172, plus the official client **22/22** |
 | `worker/` | the same engine as a Cloudflare Worker: Rust compiled to WebAssembly, D1 as the database, KV and R2 as optional adapters | 12, plus the end-to-end Wrangler run |
-| `mosql-core/` | the serverless drivers: Turso, Cloudflare D1, Neon, TiDB Cloud and PlanetScale, from one connection URL. No crates.io dependency, no global state, and it builds for WebAssembly | 83 |
+| `mosql-core/` | the serverless drivers: Turso, Cloudflare D1, Neon, TiDB Cloud and PlanetScale, from one connection URL — or from a cloud the caller names. No crates.io dependency, no global state, and it builds for WebAssembly | 89 |
 
 The JavaScript implementation is untouched and remains the oracle for
 parity.
@@ -45,13 +45,13 @@ each one is allowed to reach for.
 
 | | **full** — `nanobase` | **serverless** — `nanobase-serverless` |
 | --- | --- | --- |
-| Release size | 2,199,184 bytes (2.10 MiB) | 996,112 bytes (973 KiB) — **45 % of the full one** |
+| Release size | 2,224,144 bytes (2.12 MiB) | 1,008,408 bytes (985 KiB) — **45 % of the full one** |
 | Peak RSS at `--version` | 10,148 KiB | 10,184 KiB |
 | Platform state | one local SQLite file (`--data`) | a serverless database (`--db-url`) |
 | Listener | `nanobase serve`, `nanobase db serve` | **none** — no TCP code in the binary |
 | Local database | SQLite, vendored and compiled in | **none** |
 | Build | `cargo build --release` | `cargo build --release --no-default-features --features serverless` |
-| Tests | 364 | 150 (a second, separate suite) |
+| Tests | 377 | 163 (a second, separate suite) |
 
 The split is enforced by Cargo features, not by convention:
 
@@ -143,6 +143,62 @@ copied one at a time, and a copy that fails half way is undone: the
 rows it wrote are removed and the clone is removed from the platform,
 so the person who asked for it gets an error and no app rather than an
 app that is quietly incomplete.
+
+### Naming the cloud, instead of reading it out of the URL
+
+A URL says a protocol more often than it says a cloud, and there are
+deployments where only the operator knows which cloud it is.
+
+* `postgres://` names **PostgreSQL**. Neon, Vercel Postgres and
+  Supabase all speak it — and their endpoints, their sessions and their
+  errors are different. A `postgres://` URL whose host is a gateway or a
+  proxy says nothing at all.
+* `mysql://` names **MySQL**. TiDB Cloud and PlanetScale both speak it
+  over HTTP, and they are not interchangeable: the endpoint, the session
+  and the error are all different. A MySQL host that is neither is
+  *refused* rather than guessed at, because a guess sends the request
+  to the wrong place with no warning.
+
+So the user may now **name the cloud**, and the name is what the
+platform uses:
+
+```json
+"config": { "database": { "type": "postgres", "provider": "neon",
+                          "url": "https://ep-cool.us-east-2.aws.neon.tech/mydb",
+                          "token": "…" } }
+```
+
+* **In the document** — `config.database.provider`, and
+  `config.auth.database.provider` beside it. The names are `turso`,
+  `d1`, `neon`, `tidb` and `planetscale`, with the spellings people use
+  (`libsql`, `cloudflare`, `pscale`, `tidbcloud`, `vercel`, `supabase`)
+  accepted as well.
+* **On the command line** — `--provider NAME` for an app's database
+  (`app new`, `app clone`), and `--db-provider NAME` (or
+  `NANOBASE_DB_PROVIDER`) for the platform's own state.
+* **In the console** — a dropdown beside the engine, which says
+  *Automatic — read from the URL* until it is changed.
+
+The rules around it are short, and each one is a decision rather than a
+guess:
+
+* A named cloud **says which engine it is**: a Neon database is
+  PostgreSQL, so a document that names the cloud and no engine is
+  complete. A document that names both and disagrees — `type:
+  "postgres"` with `provider: "turso"` — is refused, with both names in
+  the message.
+* A named cloud **wins over the URL's shape**: `https://…` is a console
+  URL, not a driver's URL, and the driver needs only the host. The
+  request then goes where the cloud says, over HTTPS, because a
+  provider's endpoint is always HTTPS.
+* The cloud also decides **where the credential goes** — the query for
+  libSQL and D1, the password for the SQL engines — whatever the URL's
+  scheme says.
+* A URL that names a cloud of its own (`?provider=tidb`) and a cloud
+  the configuration names have to **agree**; two instructions that
+  contradict each other are a mistake, and the error says so.
+
+With no name, nothing changes: the URL is read as it always was.
 
 ### The console and the platform's security
 
@@ -442,7 +498,169 @@ join them. It now writes into **one buffer**:
 
 ---
 
-## 2. Speed — Rust against JavaScript and Go
+## 2. Every feature: what is here, what is missing, what is planned
+
+One table per area, one row per feature, and the state of each:
+
+* **here** — it works, and it is tested.
+* **partial** — it works, with a limit the row names.
+* **missing** — it is not built, and nothing says it will be.
+* **planned** — it is on the list; "Pending work" says more.
+* **open** — it is a decision nobody has made yet.
+* **out** — deliberately not built, and the row says why.
+
+### Apps, and the documents that describe them
+
+| feature | state | what it is |
+| --- | --- | --- |
+| Create an app | **here** | `nanobase app new`, `POST /api/apps`, or `nanobase app import` for a whole document |
+| The app document | **here** | One JSON document: the name and type, the schema (collections and columns), the seed rows, and the config — database, storage, auth, ACL, CORS, email |
+| Check a document | **here** | `nanobase validate` — every problem in the file at once, each with the path of the field it is in |
+| Read an app | **here** | `app show`, `GET /api/apps/{id}` — by id or by name, and the answer carries the app's human-readable name |
+| Change an app | **here** | `PUT` replaces the document, `PATCH` changes part of it, and a change that does not touch a secret does not wipe it |
+| Export an app | **here** | Redacted by default; `--with-secrets`, or `?includeSecrets=true` for the owner |
+| Rename an app | **here** | |
+| Remove an app | **here** | The app's id has to be confirmed, and its keys go with it |
+| Clone an app | **partial** | The configuration and the schema are copied; the rows are omitted, copied or shared — on purpose. A clone of a serverless app has no database until one is named, and a copy that fails is rolled back. The clone keeps the source's signing secret and provider credentials: whether a clone that does not share the source's database should have a secret of its own is **open** |
+| An app's own users signing in | **planned** | The document has the shape — `config.auth.features.emailPassword` and the OAuth providers — and the console writes it, but the platform serves only the owner's token |
+| Versioned schema migrations | **missing** | A document is a whole schema at once; there is no path from one schema to the next |
+| Scheduled jobs | **missing** | Nothing happens without a request |
+| Webhooks on a change | **missing** | The events fire in the process; they are not sent anywhere |
+| Several rows in one request | **missing** | A row at a time; a bulk write is a loop |
+
+### Rows, and the rules that decide who sees them
+
+| feature | state | what it is |
+| --- | --- | --- |
+| Rows in every engine | **here** | The same operations in a local file, in memory, in Turso, in D1, in Neon, in TiDB, in PlanetScale, in a service over HTTP and over a socket |
+| Filters | **here** | `mosql`'s matcher: comparisons, `like`, `in`, `exists`, and the logical operators |
+| Paging | **here** | `page`, `perPage`, `offset`, `limit` |
+| An app's own rules | **here** | Per-collection rules — `{"permissions": ["*:todos:list"], "check": {…}}` — with `{{user}}` and `{{role}}` filled in from the caller; the owner and the admins are not filtered, and a list is filtered row by row |
+| A row's owner | **partial** | Ownership is a rule the app writes, not a column the platform keeps |
+| Sorting | **missing** | The rows come back in the engine's order; there is no `sort` |
+| Relations between collections | **missing** | A column is a value, not a link; there is no `expand` |
+| A field's own rules | **missing** | The rules are per collection, not per field |
+
+### Identity, and who may do what
+
+| feature | state | what it is |
+| --- | --- | --- |
+| The owner's account | **here** | `nanobase init`, `nanobase login`, `POST /api/auth/login`, `GET /api/auth/me` — PBKDF2 hashing, a signed session token |
+| A program instead of a person | **here** | An API key: a token with scopes, an app, an expiry and a preview |
+| Two kinds of caller | **here** | A person holds a session token; a program holds a key. The owner may do everything; a key may only touch its own app |
+| Secrets in answers and exports | **here** | Redacted, with the list of the paths that hold one; the owner may ask for them with `?includeSecrets=true`, and a key may not |
+| Secrets from the environment | **here** | `SECRET_DATA_DB_URL` and the rest fill a document in on import |
+| CORS | **here** | A platform policy and a per-app policy: the origins, the credentials and the preflight's lifetime |
+| A rate limit | **here** | Per client, per window |
+| The console's security headers | **here** | A content policy, a frame policy and the rest of the browser's answers |
+| More than one owner | **missing** | The owner is the only person; the admins are keys, not people |
+| A key that a person may use | **missing** | Every key is a program |
+| Two-factor authentication | **missing** | |
+
+### API keys
+
+| feature | state | what it is |
+| --- | --- | --- |
+| A key belongs to an app | **here** | The key lives in the app's own database, and the platform keeps a directory that says which app it is for — without the secret |
+| Scopes | **here** | `rows:read`, `rows:write`, `apps:read`, `apps:write`, `admin` |
+| An expiry | **here** | `--expires-in 30d` |
+| A key's own version | **here** | Changing what a key may do is one write; the set of keys is a separate version, and neither moves the other |
+| A key's preview | **here** | The first few characters, so a key can be recognised in a list |
+| Two keys with the same preview | **here** | Both work: every candidate is checked in its own app's database |
+| Keys from an older platform | **here** | Read, cloned and bound; a migration that fails leaves the old keys where they were, and the work can be done again |
+| The secret shown a second time | **missing** | It is shown once, at creation; the platform keeps a hash |
+| Key rotation without a gap | **missing** | Two keys may live at once, but nothing schedules the swap |
+
+### The console
+
+| feature | state | what it is |
+| --- | --- | --- |
+| The app list | **here** | With a search, and paging |
+| An app's tabs | **here** | Overview, database, auth, CORS, rules and rows |
+| The database editor | **here** | The engine, the cloud, the URL and the token — and a connection test before anything is saved, which asks the database itself, so an unreachable cloud fails the test |
+| Naming the cloud | **here** | A dropdown beside the engine: automatic, or turso, d1, neon, tidb or planetscale |
+| Key management | **here** | Make a key, see its preview, change what it may do, remove it |
+| Secrets | **partial** | The console never sees a secret; it says which fields hold one and leaves them alone unless they are typed |
+| Editing the schema | **missing** | The document is the schema; the console shows it and does not change it |
+| Signing in as an app's user | **planned** | With the app's own sign-in |
+| Uploading a file | **missing** | The storage is configured; nothing serves or receives a file |
+
+### The command line
+
+| feature | state | what it is |
+| --- | --- | --- |
+| Every app operation | **here** | The same code path as the API: one implementation, two front doors |
+| The remote mode | **here** | `--url` and `--token` make the command a client of a running platform |
+| The key commands | **here** | App-first: `nanobase key list <app>`, and the app is named the way a person would name it |
+| The platform's own state | **here** | A local file, or a serverless database — `--db-url`, `--db-token`, `--db-provider` |
+| Two editions, one command line | **here** | The full binary and the serverless one; the split is enforced by Cargo features |
+| A shell completion | **missing** | |
+| An interactive shell | **missing** | |
+
+### Storage, and files
+
+| feature | state | what it is |
+| --- | --- | --- |
+| The storage configuration | **partial** | Local and S3 are stored and checked — the bucket, the region, the keys, the path style — but the platform serves no file and receives no upload |
+| A signed URL for a file | **missing** | |
+
+### Events, hooks and extensions
+
+| feature | state | what it is |
+| --- | --- | --- |
+| Events | **here** | `created`, `updated`, `patched`, `removed` — the same whether the change came from the command line, the API or the console |
+| Hooks | **here** | Before, after and on error |
+| Custom methods | **here** | `POST /api/apps/{id}/methods/{name}` — the platform calls a function the host registers |
+| A plugin system | **missing** | The hooks and the custom methods are the extension points |
+| Outbound webhooks | **missing** | |
+
+### Databases, and the drivers behind them
+
+| feature | state | what it is |
+| --- | --- | --- |
+| The engines | **here** | `sqlite`, `memory`, `libsql`/Turso, `d1`, `postgres`, `mysql`, a service over `http://`, a socket over `tcp://` |
+| Naming the cloud | **here** | `provider` in the document, `--provider` on the command line, a dropdown in the console: turso, d1, neon, tidb, planetscale |
+| A credential beside the URL | **here** | A token on its own, folded into the URL where the provider expects it — the query for libSQL and D1, the password for the SQL engines |
+| The platform's own state in a serverless database | **here** | `--db-url`, with `--db-provider` when the URL cannot say |
+| The same app in every engine | **here** | One contract, one set of rows, and a test for each engine |
+| A plain PostgreSQL or MySQL over TCP | **missing** | A socket speaks this platform's protocol, not PostgreSQL's wire protocol: the drivers speak the databases' own HTTP APIs |
+| Connection pooling | **partial** | A handle is kept while an app's settings do not change; a serverless database still opens a connection per request |
+| A replica or a failover | **missing** | The URL is one endpoint |
+| A migration between engines | **missing** | The rows are copied by a clone; the schema and the data move together, and there is no engine-to-engine migration |
+
+### The serverless drivers (`mosql-core`)
+
+| feature | state | what it is |
+| --- | --- | --- |
+| The five clouds | **here** | Turso, Cloudflare D1, Neon, TiDB Cloud and PlanetScale |
+| The three dialects | **here** | SQLite, PostgreSQL and MySQL, with the parameters written the way each dialect wants them |
+| A named cloud | **here** | `?provider=` in the URL, or `DriverConfig::from_url_with_provider` when the caller knows |
+| A refusal rather than a guess | **here** | A MySQL host that is neither TiDB nor PlanetScale is refused, with the message that says how to say which one it is |
+| The transports | **here** | `curl` for a native build, the host's `fetch` for a Worker |
+| No crates.io dependency | **here** | The JSON, the parser and the writer are this repository's own; the crate builds for WebAssembly |
+| A `ureq` transport | **out** | The feature exists and is off: it is the one dependency that needs a registry, and `transport-curl` covers the same ground |
+
+### The authentication engine (`better-auth-core`)
+
+| feature | state | what it is |
+| --- | --- | --- |
+| The plugins | **here** | Bearer JWT sessions, eight plugins, every social provider, OpenID Connect with verified ID tokens |
+| The official client | **here** | `better-auth@1.7.27` drives the release binary over HTTP: 22/22 |
+| Generic OAuth's transform callbacks, refresh parameters and discovery-derived logout | **out** | The README says why for each; the headers a provider asks for are there |
+| A `reqwest` client | **out** | The same reason as the `ureq` transport: the one dependency that needs a registry |
+
+### The Worker edition (`worker/`)
+
+| feature | state | what it is |
+| --- | --- | --- |
+| The module | **here** | Two imports: the clock and the randomness, and the build fails if it asks for anything else |
+| D1 as the source of truth | **here** | |
+| KV and R2 | **here** | Optional adapters |
+| The end-to-end run | **here** | Wrangler, the protocol, the schema |
+
+---
+
+## 3. Speed — Rust against JavaScript and Go
 
 ### The SQL builder
 
@@ -489,7 +707,7 @@ of the call, not by the query builder, and the gap is 291 ns.
 
 ---
 
-## 3. Memory
+## 4. Memory
 
 The peak resident set size — the most the process held at once.
 
@@ -517,11 +735,12 @@ full edition only, and they are what the full edition grew by.
 
 ---
 
-## 4. Pending work
+## 5. Pending work
 
 | item | state | why |
 | --- | --- | --- |
 | **A clone's own signing secret** | **open** | The clone's document is the source's document, so the clone keeps the source's signing secret, its provider credentials and its storage keys — and a session token for the source works on the clone. The database token *is* treated differently (a clone that does not share the database does not inherit it). Whether a clone that does not share the source's database should get a secret of its own is a question about what a clone is for; it is not answered here, and nothing about it is silent: `STATUS.md` says what happens today. |
+| **A clone that fails half way** | **partial** | A copy that fails is undone: the rows it wrote are removed and the clone is removed from the platform. A *crash* in the middle is not: the rollback is not a transaction across the two stores, so a clone can survive a crash and be left half made. |
 | **An app's own sign-in endpoint** | **next** | The app document has the shape for it (`config.auth.features.emailPassword`) and the console writes it, but the platform still serves only the owner's token. A front end has to borrow the owner's token today. |
 | The JavaScript runtime adapters (`src/drivers.js`, `src/client.js`, `src/schemaless.js`) | not ported, **by decision** | I/O glue that would pull in async + TLS + socket crates and break the zero-dependency goal. |
 | `uflite`'s `auth.js` and `sql-adapter-factory.js` | not ported | The same I/O glue; the authentication engine is `better-auth-core` instead. |
@@ -534,14 +753,14 @@ full edition only, and they are what the full edition grew by.
 
 ---
 
-## 5. How it is checked
+## 6. How it is checked
 
 | crate | gate |
 | --- | --- |
 | `mosql` | `rust/verify.sh` — fmt, clippy, the tests, **289 builder fixtures and 153 memory fixtures regenerated** against the JavaScript, a `no_std` build and a publish dry-run |
 | `uflite` | `uflite/verify.sh` |
 | `schemaless` | `schemaless/verify.sh` |
-| `nanobase` | `nanobase/verify.sh` — fmt, clippy, the tests, **a `serverless` stage that compiles and tests the second edition**, no external dependencies, a publish dry-run, and a size budget that measures **both** binaries and fails if the serverless one is not smaller. **365 tests**: `nanobase/tests/console.rs` covers the console, the security headers, the CORS rules, the rate limit, the search and paging, and the database connection test; `nanobase/tests/acl.rs` covers an app's own rules; `nanobase/tests/apikeys.rs` covers the keys and the migration; `nanobase/tests/redaction.rs` covers the app's secrets; `nanobase/tests/keydirectory.rs` covers the key directory, its versions and the preview collisions; `nanobase/tests/engines.rs` covers the same app in every engine, and a clone whose copy fails |
+| `nanobase` | `nanobase/verify.sh` — fmt, clippy, the tests, **a `serverless` stage that compiles and tests the second edition**, no external dependencies, a publish dry-run, and a size budget that measures **both** binaries and fails if the serverless one is not smaller. **377 tests**: `nanobase/tests/console.rs` covers the console, the security headers, the CORS rules, the rate limit, the search and paging, and the database connection test; `nanobase/tests/acl.rs` covers an app's own rules; `nanobase/tests/apikeys.rs` covers the keys and the migration; `nanobase/tests/redaction.rs` covers the app's secrets; `nanobase/tests/keydirectory.rs` covers the key directory, its versions and the preview collisions; `nanobase/tests/engines.rs` covers the same app in every engine, and a clone whose copy fails; `nanobase/tests/providers.rs` covers naming the cloud — in a document, in a clone, and in the engine that opens the database |
 | `better-auth-core` | `better-auth-core/verify.sh` — plus the official `better-auth@1.7.27` client driving the release binary over HTTP: 22/22 |
 | `worker` | `worker/verify.sh` and `worker/test.sh` — fmt, clippy, the protocol tests, the schema test, the end-to-end Wrangler run, and a check on the module's import section |
 | `mosql-core` | `mosql-core/verify.sh` — fmt, clippy, the tests, a dependency check that refuses a registry dependency, a **wasm32 build with the standard library switched off**, and a stage that compiles every optional transport |

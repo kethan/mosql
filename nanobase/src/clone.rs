@@ -34,7 +34,7 @@
 
 use uflite::error::{Error, Result};
 
-use crate::config::{AppDoc, DatabaseConfig, DbKind};
+use crate::config::{AppDoc, DatabaseConfig, DbKind, DbProvider};
 use crate::db::AppDb;
 use crate::platform::AppRecord;
 
@@ -91,6 +91,13 @@ pub struct CloneRequest {
     /// database: it is the password of the source's database, and
     /// handing it to another service would leak it.
     pub token: Option<String>,
+    /// Which cloud that database is in, when the operator says so.
+    ///
+    /// A URL says a protocol more often than it says a cloud, and there
+    /// are databases a URL cannot describe: a gateway in front of a
+    /// Neon database, a proxy, a host that looks like nothing in
+    /// particular. The name is what settles it.
+    pub provider: Option<DbProvider>,
 }
 
 impl CloneRequest {
@@ -102,6 +109,7 @@ impl CloneRequest {
             data: CloneData::Omit,
             database: None,
             token: None,
+            provider: None,
         }
     }
 
@@ -114,6 +122,12 @@ impl CloneRequest {
     /// The same clone, with a database of its own.
     pub fn with_database(mut self, url: impl Into<String>) -> CloneRequest {
         self.database = Some(url.into());
+        self
+    }
+
+    /// The same clone, with the cloud its database is in named.
+    pub fn with_provider(mut self, provider: DbProvider) -> CloneRequest {
+        self.provider = Some(provider);
         self
     }
 }
@@ -233,12 +247,23 @@ fn destination(
     why: Option<&str>,
 ) -> Result<DatabaseConfig> {
     match &request.database {
-        Some(url) => Ok(DatabaseConfig {
-            kind: source.kind,
-            raw_type: source.raw_type.clone(),
-            url: Some(url.clone()),
-            token: request.token.clone(),
-        }),
+        Some(url) => {
+            // The engine follows the cloud when one is named, and the
+            // URL when it names one: a document that says `postgres`
+            // and gives a `libsql://` URL would send the rows to a
+            // PostgreSQL driver that cannot reach a Turso database.
+            let kind = match request.provider {
+                Some(p) => p.kind(),
+                None => DatabaseConfig::kind_from_url(url).unwrap_or(source.kind),
+            };
+            Ok(DatabaseConfig {
+                kind,
+                raw_type: kind.as_str().to_string(),
+                url: Some(url.clone()),
+                token: request.token.clone(),
+                provider: request.provider,
+            })
+        }
         None if source.is_embedded() => {
             // An embedded engine gives every app its own rows: the file
             // is named after the app, so a new app is a new file.
@@ -253,6 +278,7 @@ fn destination(
                 raw_type: DbKind::None.as_str().to_string(),
                 url: None,
                 token: None,
+                provider: None,
             }),
         },
     }
@@ -315,6 +341,7 @@ mod tests {
             raw_type: "sqlite".to_string(),
             url: None,
             token: None,
+            provider: None,
         }
     }
 
@@ -324,6 +351,7 @@ mod tests {
             raw_type: "libsql".to_string(),
             url: Some("libsql://db.turso.io".to_string()),
             token: Some("secret".to_string()),
+            provider: None,
         }
     }
 

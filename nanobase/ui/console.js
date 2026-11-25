@@ -629,7 +629,12 @@
         ]),
       ]),
       el("div", { class: "row" }, [
-        el("span", { class: "tag accent", text: database.type || "sqlite" }),
+        el("span", {
+          class: "tag accent",
+          text: database.provider
+            ? (database.type || "sqlite") + " \u00b7 " + database.provider
+            : database.type || "sqlite",
+        }),
         auth.features && auth.features.emailPassword
           ? el("span", { class: "tag ok", text: "auth on" })
           : el("span", { class: "tag", text: "no auth" }),
@@ -916,6 +921,40 @@
       );
     });
 
+    // Which cloud the rows are in. Left alone, the platform reads it
+    // out of the URL — a URL says a protocol more often than it says a
+    // cloud. Named here, the name is what the platform uses: a Neon
+    // database behind a console URL, a TiDB Cloud behind a proxy, a
+    // MySQL host that is neither TiDB nor PlanetScale.
+    var clouds = [
+      ["", "Automatic \u2014 read from the URL"],
+      ["turso", "Turso \u2014 libSQL over HTTP"],
+      ["d1", "Cloudflare D1"],
+      ["neon", "Neon \u2014 PostgreSQL over HTTP"],
+      ["tidb", "TiDB Cloud \u2014 MySQL over HTTP"],
+      ["planetscale", "PlanetScale \u2014 MySQL over HTTP"],
+    ];
+    // The engine each cloud speaks, so that the two never disagree.
+    var engineOf = {
+      turso: "libsql",
+      d1: "d1",
+      neon: "postgres",
+      tidb: "mysql",
+      planetscale: "mysql",
+    };
+    var provider = el("select", {}, []);
+    clouds.forEach(function (pair) {
+      provider.appendChild(
+        el("option", {
+          value: pair[0],
+          text: pair[1],
+          attrs: {
+            selected: (database.provider || "") === pair[0] ? "selected" : null,
+          },
+        })
+      );
+    });
+
     var url = el("input", {
       type: "text",
       value: database.url || "",
@@ -933,11 +972,22 @@
     // wiped by a save that did not mean to touch it.
     var wasUrl = url.value;
     var wasToken = token.value;
+    var wasProvider = provider.value;
+
+    // Choosing a cloud chooses the engine it speaks, so that the two
+    // never say different things about the same database.
+    provider.addEventListener("change", function () {
+      var engine = engineOf[provider.value];
+      if (engine) type.value = engine;
+    });
 
     function candidate() {
       var changes = { type: type.value };
       if (url.value !== wasUrl) changes.url = url.value.trim() || null;
       if (token.value !== wasToken) changes.token = token.value.trim() || null;
+      if (provider.value !== wasProvider) {
+        changes.provider = provider.value || null;
+      }
       return changes;
     }
 
@@ -978,6 +1028,15 @@
           text: "Where this app's rows live. Test the connection before you save it.",
         }),
         el("label", { class: "field" }, [el("span", { text: "Engine" }), type]),
+        el("label", { class: "field" }, [
+          el("span", { text: "Cloud" }),
+          provider,
+          el("span", {
+            class: "hint",
+            text:
+              "Which cloud the rows are in. Leave it on automatic and the platform reads it from the URL; name it when the URL cannot say \u2014 a console URL, a proxy, or a MySQL host that is neither TiDB nor PlanetScale.",
+          }),
+        ]),
         el("label", { class: "field" }, [
           el("span", { text: "URL" }),
           url,

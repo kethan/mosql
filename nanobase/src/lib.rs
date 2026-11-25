@@ -65,7 +65,7 @@ pub use client::ApiClient;
 pub use clone::{CloneData, ClonePlan, CloneRequest};
 pub use config::{
     AclConfig, AppConfig, AppDoc, AppMeta, AppType, AuthConfig, CollectionDef, ColumnDef,
-    ColumnType, ConfigError, CorsConfig, Data, DatabaseConfig, DbKind, Features, Issue,
+    ColumnType, ConfigError, CorsConfig, Data, DatabaseConfig, DbKind, DbProvider, Features, Issue,
     LocalStorage, Meta, Provider, RedisConfig, S3Storage, Schema, Secrets, StorageConfig,
     StorageKind,
 };

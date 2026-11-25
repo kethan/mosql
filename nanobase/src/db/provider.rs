@@ -122,12 +122,26 @@ impl ProviderDb<BlockingTransport> {
     /// `postgres://`, `mysql://`. The credentials are in the URL too, or
     /// in the client's own hands.
     pub fn new(url: &str, client: Arc<dyn HttpClient>) -> Result<Self> {
-        let config = DriverConfig::from_url(url)
+        Self::new_with_provider(url, None, client)
+    }
+
+    /// Open the database at `url`, in the cloud the caller names.
+    ///
+    /// With no cloud named, the URL says which one it is. With one
+    /// named, the name is what counts: the URL is then only the
+    /// connection string, and the dialect, the endpoint and the
+    /// credential all follow the cloud. A URL that names a cloud of its
+    /// own — `?provider=tidb` — has to agree with it.
+    pub fn new_with_provider(
+        url: &str,
+        provider: Option<crate::config::DbProvider>,
+        client: Arc<dyn HttpClient>,
+    ) -> Result<Self> {
+        let config = DriverConfig::from_url_with_provider(url, provider.map(|p| p.core()))
             .map_err(|e| Error::internal(format!("the database URL is not usable: {e}")))?;
         let provider = config.provider.as_str();
         let dialect = config.dialect;
-        let driver = AnyServerlessDriver::from_url(url, BlockingTransport::new(client))
-            .map_err(|e| Error::internal(format!("the database URL is not usable: {e}")))?;
+        let driver = AnyServerlessDriver::from_config(config, BlockingTransport::new(client));
         Ok(ProviderDb {
             driver,
             dialect,
@@ -309,6 +323,16 @@ impl<T: HttpTransport> AppDb for ProviderDb<T> {
         }
         out.sort();
         Ok(out)
+    }
+
+    /// Ask the database whether it is there.
+    ///
+    /// The collections are what the platform knows about, and a
+    /// database that will not say what it holds is not a failure — so
+    /// asking for them is not a question to the database at all. This
+    /// is: one statement, and its failure is the failure.
+    fn ping(&self) -> Result<()> {
+        self.run("SELECT 1").map(|_| ())
     }
 
     fn rows(&self, collection: &str) -> Result<Vec<Row>> {

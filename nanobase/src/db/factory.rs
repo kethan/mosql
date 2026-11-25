@@ -37,7 +37,7 @@ use std::sync::Arc;
 
 use uflite::error::{Error, Result};
 
-use crate::config::{DatabaseConfig, DbKind};
+use crate::config::{DatabaseConfig, DbKind, DbProvider};
 #[cfg(feature = "curl")]
 use crate::db::http::HttpDb;
 use crate::db::memory::MemoryDb;
@@ -126,14 +126,21 @@ fn open_inner(config: &DatabaseConfig, path: &Path, client: MaybeClient) -> Resu
                     .ok_or_else(|| {
                         Error::internal(format!("the {} engine needs a url", config.kind.as_str()))
                     })?;
-                if is_provider_url(url) {
-                    let client = client.unwrap_or_else(|| default_client(url));
-                    let db = ProviderDb::new(&with_token(url, config.token.as_deref()), client)?;
+                // A provider named in the configuration is the
+                // provider: the URL is then only the connection string,
+                // and the dialect, the endpoint and the credential all
+                // follow the name. Without one, the URL says which
+                // provider it is.
+                let provider = config.provider;
+                if provider.is_some() || is_provider_url(url) {
+                    let client = client.unwrap_or_else(|| default_client(url, provider));
+                    let url = with_token_for(url, config.token.as_deref(), provider);
+                    let db = ProviderDb::new_with_provider(&url, provider, client)?;
                     return Ok(Arc::new(db));
                 }
                 // Anything else on the web is a service that speaks this
                 // platform's own app-database protocol.
-                let client = client.unwrap_or_else(|| default_client(url));
+                let client = client.unwrap_or_else(|| default_client(url, None));
                 let mut db = HttpDb::new(url, client);
                 if let Some(token) = &config.token {
                     db = db.with_token(token.clone());
@@ -167,8 +174,10 @@ fn needs_tls(url: &str) -> bool {
 /// `https://` needs TLS, and the TLS this build has is `curl`'s.
 /// `http://` is a plain socket, and the plain socket client is enough.
 #[cfg(feature = "curl")]
-fn default_client(url: &str) -> Arc<dyn HttpClient> {
-    if needs_tls(url) {
+fn default_client(url: &str, provider: Option<DbProvider>) -> Arc<dyn HttpClient> {
+    // A provider's endpoint is always HTTPS, whatever the URL that
+    // named it said: the request goes to the database, not to the URL.
+    if provider.is_some() || needs_tls(url) {
         Arc::new(crate::httpclient::CurlHttpClient)
     } else {
         #[cfg(feature = "native")]
@@ -200,6 +209,18 @@ fn default_client(url: &str) -> Arc<dyn HttpClient> {
 /// credentials is left alone: it is a complete connection string.
 #[cfg(feature = "curl")]
 pub fn with_token(url: &str, token: Option<&str>) -> String {
+    with_token_for(url, token, None)
+}
+
+/// The URL with the token folded in, for a cloud that is known.
+///
+/// Where the token goes is the cloud's business, not the scheme's: a
+/// Turso database takes its token in the query whether the URL says
+/// `libsql://` or `https://`, and a SQL database takes it as the
+/// password whether the URL says `postgres://` or `https://`. So a
+/// named cloud decides the shape, and without one the scheme does.
+#[cfg(feature = "curl")]
+pub fn with_token_for(url: &str, token: Option<&str>, provider: Option<DbProvider>) -> String {
     let Some(token) = token.filter(|t| !t.is_empty()) else {
         return url.to_string();
     };
@@ -217,9 +238,29 @@ pub fn with_token(url: &str, token: Option<&str>) -> String {
         Some((userinfo, hostport)) => (Some(userinfo), hostport),
         None => (None, authority),
     };
-    match scheme.as_str() {
-        // libSQL: the token is the user information, or `?authToken=`.
-        "libsql" | "turso" => {
+    // Which shape the token takes. A named cloud decides it; without
+    // one, the scheme does.
+    #[derive(Clone, Copy)]
+    enum Shape {
+        /// libSQL: the token is the user information, or `?authToken=`.
+        Query,
+        /// D1: `account:token` in the user information, or `?api_token=`.
+        D1Query,
+        /// The SQL engines: the token is the password.
+        Password,
+    }
+    let shape = match provider {
+        Some(DbProvider::Turso) => Shape::Query,
+        Some(DbProvider::D1) => Shape::D1Query,
+        Some(_) => Shape::Password,
+        None => match scheme.as_str() {
+            "libsql" | "turso" => Shape::Query,
+            "d1" | "cloudflare" => Shape::D1Query,
+            _ => Shape::Password,
+        },
+    };
+    match shape {
+        Shape::Query => {
             if userinfo.is_some() || after.contains("authToken=") {
                 return url.to_string();
             }
@@ -228,7 +269,7 @@ pub fn with_token(url: &str, token: Option<&str>) -> String {
         }
         // D1: `account:token` in the user information, or `?api_token=`.
         // A user information with only an account still needs the token.
-        "d1" | "cloudflare" => {
+        Shape::D1Query => {
             let has_token = userinfo.map(|u| u.contains(':')).unwrap_or(false);
             if has_token || after.contains("api_token=") || after.contains("token=") {
                 return url.to_string();
@@ -238,7 +279,7 @@ pub fn with_token(url: &str, token: Option<&str>) -> String {
         }
         // The SQL engines: the token is the password, and the port stays
         // where it was.
-        _ => {
+        Shape::Password => {
             let has_password = userinfo.map(|u| u.contains(':')).unwrap_or(false);
             if has_password {
                 return url.to_string();

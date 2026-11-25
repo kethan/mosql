@@ -74,7 +74,8 @@ USAGE:
     );
     text.push_str(
         r#"APPS:
-    nanobase app new <name>                                   create an empty app
+    nanobase app new <name> [--database URL] [--provider NAME] create an empty app
+                                     [--database-token TOKEN]
     nanobase app import <file>                                create an app from a document
     nanobase app list                                         id, name, engine
     nanobase app show <id|name>                               everything about one app
@@ -83,6 +84,7 @@ USAGE:
     nanobase app clone <id|name> <new-name> [--copy-data]      copy config and schema
                                      [--share-database]         the rows, or the database itself
                                      [--database URL]           the clone's own database
+                                     [--provider NAME]          the cloud that database is in
     nanobase app remove <id|name> --confirm <id>
     nanobase app rows <id|name> <collection> [--filter JSON] [--limit N]
     nanobase app insert <id|name> <collection> --json ROW
@@ -105,11 +107,18 @@ USAGE:
     NANOBASE_DB_URL   used when --db-url is absent
     --db-token TOKEN  the bearer token for that database
     NANOBASE_DB_TOKEN used when --db-token is absent
+    --db-provider NAME  the cloud that database is in
+    NANOBASE_DB_PROVIDER  used when --db-provider is absent
 
     The URL says which database: postgres:// and mysql:// name the
     database itself, and http:// names a service that holds one. With
     --db-url the platform's own state lives there and the local file is
     not used.
+
+    A URL says a protocol more often than it says a cloud. --db-provider
+    names the cloud when the URL cannot: turso, d1, neon, tidb or
+    planetscale. The same name may be given for an app's own database,
+    as --provider.
 
 "#,
     );
@@ -337,6 +346,10 @@ fn db_tester(_parsed: &Parsed, catalog: &Catalog) -> crate::api::DbTester {
             // database would live if the configuration were saved.
             let path = root.join("apps").join(app_key);
             let db = crate::db::factory::open(config, &path).map_err(|e| e.to_string())?;
+            // The database is asked whether it is there, and its answer
+            // is the answer: a database that cannot be reached is not a
+            // connection that works.
+            db.ping().map_err(|e| e.to_string())?;
             db.collections().map_err(|e| e.to_string())
         },
     )
@@ -531,9 +544,13 @@ enum Catalog {
 /// engines. A URL that already has credentials keeps them: it is a
 /// complete connection string.
 #[cfg(feature = "curl")]
-fn catalog_url(url: &str, token: Option<&str>) -> String {
-    if crate::db::provider::is_provider_url(url) {
-        return crate::db::factory::with_token(url, token);
+fn catalog_url(
+    url: &str,
+    token: Option<&str>,
+    provider: Option<crate::config::DbProvider>,
+) -> String {
+    if provider.is_some() || crate::db::provider::is_provider_url(url) {
+        return crate::db::factory::with_token_for(url, token, provider);
     }
     url.to_string()
 }
@@ -579,24 +596,51 @@ impl Catalog {
             .get("db-token")
             .map(str::to_string)
             .or_else(|| std::env::var("NANOBASE_DB_TOKEN").ok());
-        let db: Arc<dyn crate::db::AppDb> = if crate::db::provider::is_provider_url(url) {
-            let client: Arc<dyn crate::httpclient::HttpClient> =
-                Arc::new(crate::httpclient::CurlHttpClient);
-            let url = catalog_url(url, token.as_deref());
-            Arc::new(
-                crate::db::provider::ProviderDb::new(&url, client).map_err(|e| {
-                    eprintln!("nanobase: {e}");
-                    1
-                })?,
-            )
-        } else {
-            let mut db =
-                crate::db::http::HttpDb::new(url, Arc::new(crate::httpclient::CurlHttpClient));
-            if let Some(token) = token.clone() {
-                db = db.with_token(token);
-            }
-            Arc::new(db)
+        // Which cloud the platform's own state is in. With no name, the
+        // URL says it, as it always did.
+        let provider = match parsed
+            .get("db-provider")
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                std::env::var("NANOBASE_DB_PROVIDER")
+                    .ok()
+                    .map(|p| p.trim().to_string())
+                    .filter(|p| !p.is_empty())
+            }) {
+            Some(name) => match crate::config::DbProvider::parse(&name) {
+                Some(p) => Some(p),
+                None => {
+                    eprintln!(
+                        "nanobase: unknown provider {name:?}; expected one of {}",
+                        crate::config::DbProvider::all_names().join(", ")
+                    );
+                    return Err(2);
+                }
+            },
+            None => None,
         };
+        let db: Arc<dyn crate::db::AppDb> =
+            if provider.is_some() || crate::db::provider::is_provider_url(url) {
+                let client: Arc<dyn crate::httpclient::HttpClient> =
+                    Arc::new(crate::httpclient::CurlHttpClient);
+                let url = catalog_url(url, token.as_deref(), provider);
+                Arc::new(
+                    crate::db::provider::ProviderDb::new_with_provider(&url, provider, client)
+                        .map_err(|e| {
+                            eprintln!("nanobase: {e}");
+                            1
+                        })?,
+                )
+            } else {
+                let mut db =
+                    crate::db::http::HttpDb::new(url, Arc::new(crate::httpclient::CurlHttpClient));
+                if let Some(token) = token.clone() {
+                    db = db.with_token(token);
+                }
+                Arc::new(db)
+            };
         Ok(Catalog::Serverless(ServerlessStore::new(db, url)))
     }
 
@@ -675,7 +719,14 @@ fn load_platform(store: &SqliteStore) -> Result<Platform, u8> {
 fn cmd_init(rest: &[String]) -> u8 {
     let parsed = parse_args(
         rest,
-        &["email", "password", "data", "db-url", "db-token"],
+        &[
+            "email",
+            "password",
+            "data",
+            "db-url",
+            "db-provider",
+            "db-token",
+        ],
         &[],
     );
     if let Some(e) = parsed.error {
@@ -760,7 +811,11 @@ fn cmd_init(rest: &[String]) -> u8 {
 }
 
 fn cmd_login(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["password", "data", "db-url", "db-token"], &[]);
+    let parsed = parse_args(
+        rest,
+        &["password", "data", "db-url", "db-provider", "db-token"],
+        &[],
+    );
     if let Some(e) = parsed.error {
         eprintln!("nanobase login: {e}");
         return 2;
@@ -818,7 +873,11 @@ fn cmd_login(rest: &[String]) -> u8 {
 }
 
 fn cmd_me(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["token", "data", "db-url", "db-token"], &[]);
+    let parsed = parse_args(
+        rest,
+        &["token", "data", "db-url", "db-provider", "db-token"],
+        &[],
+    );
     if let Some(e) = parsed.error {
         eprintln!("nanobase me: {e}");
         return 2;
@@ -854,7 +913,7 @@ fn cmd_me(rest: &[String]) -> u8 {
 }
 
 fn cmd_status(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["data", "db-url", "db-token"], &[]);
+    let parsed = parse_args(rest, &["data", "db-url", "db-provider", "db-token"], &[]);
     if let Some(e) = parsed.error {
         eprintln!("nanobase status: {e}");
         return 2;
@@ -935,6 +994,7 @@ fn cmd_key(rest: &[String]) -> u8 {
             "url",
             "token",
             "db-url",
+            "db-provider",
             "db-token",
         ],
         &[],
@@ -1404,7 +1464,10 @@ fn cmd_validate(rest: &[String]) -> u8 {
         doc.app.name,
         doc.app.app_type.as_str()
     );
-    println!("  database  {}", doc.config.database.raw_type);
+    match doc.config.database.provider_name() {
+        Some(cloud) => println!("  database  {} ({})", doc.config.database.raw_type, cloud),
+        None => println!("  database  {}", doc.config.database.raw_type),
+    }
     println!("  storage   {}", doc.config.storage.kind.as_str());
     println!(
         "  auth      {}",
@@ -1613,6 +1676,17 @@ struct AppView {
     doc: AppDoc,
 }
 
+/// The engine an app's rows are in, and the cloud when it names one.
+///
+/// `postgres (neon)` says both: the protocol the rows speak, and the
+/// cloud they are in.
+fn database_line(doc: &AppDoc) -> String {
+    match doc.config.database.provider_name() {
+        Some(cloud) => format!("{} ({cloud})", doc.config.database.raw_type),
+        None => doc.config.database.raw_type.clone(),
+    }
+}
+
 impl AppView {
     /// A view of an app in the local database.
     fn of(record: &crate::platform::AppRecord) -> AppView {
@@ -1623,11 +1697,12 @@ impl AppView {
             .map(|(name, def)| (name.clone(), def.columns.len()))
             .collect();
         let seed_rows = doc.data.values().map(Vec::len).sum();
+        let database = database_line(&doc);
         AppView {
             id: record.id.clone(),
             name: doc.app.name.clone(),
             app_type: doc.app.app_type.as_str().to_string(),
-            database: doc.config.database.raw_type.clone(),
+            database,
             storage: doc.config.storage.kind.as_str().to_string(),
             auth: doc.config.auth.is_enabled(),
             acl: doc.config.acl.enabled,
@@ -1653,11 +1728,12 @@ impl AppView {
             .map(|(name, def)| (name.clone(), def.columns.len()))
             .collect();
         let seed_rows = doc.data.values().map(Vec::len).sum();
+        let database = database_line(&doc);
         Some(AppView {
             id,
             name: doc.app.name.clone(),
             app_type: doc.app.app_type.as_str().to_string(),
-            database: doc.config.database.raw_type.clone(),
+            database,
             storage: doc.config.storage.kind.as_str().to_string(),
             auth: doc.config.auth.is_enabled(),
             acl: doc.config.acl.enabled,
@@ -1697,24 +1773,47 @@ mod tests {
     fn a_catalog_token_goes_where_the_provider_expects_it() {
         // The SQL engines take the token as the password.
         assert_eq!(
-            catalog_url("postgres://host/mydb", Some("s3cret")),
+            catalog_url("postgres://host/mydb", Some("s3cret"), None),
             "postgres://:s3cret@host/mydb"
         );
         // libSQL takes it in the query.
         assert_eq!(
-            catalog_url("libsql://db.turso.io", Some("s3cret")),
+            catalog_url("libsql://db.turso.io", Some("s3cret"), None),
             "libsql://db.turso.io?authToken=s3cret"
         );
         // A URL that already has credentials keeps them.
         assert_eq!(
-            catalog_url("postgres://me:pass@host/mydb", Some("s3cret")),
+            catalog_url("postgres://me:pass@host/mydb", Some("s3cret"), None),
             "postgres://me:pass@host/mydb"
         );
         // And a URL that is not a provider's is left alone: the token
         // goes in a header there, not in the URL.
         assert_eq!(
-            catalog_url("http://db.example.com/app", Some("s3cret")),
+            catalog_url("http://db.example.com/app", Some("s3cret"), None),
             "http://db.example.com/app"
+        );
+    }
+
+    #[test]
+    fn a_named_cloud_says_where_the_token_goes() {
+        // The cloud decides, not the scheme: a Turso database behind an
+        // `https://` URL still takes its token in the query, and a Neon
+        // one still takes it as the password.
+        assert_eq!(
+            catalog_url(
+                "https://db.turso.io",
+                Some("s3cret"),
+                Some(crate::config::DbProvider::Turso)
+            ),
+            "https://db.turso.io?authToken=s3cret"
+        );
+        assert_eq!(
+            catalog_url(
+                "https://ep-cool.aws.neon.tech/mydb",
+                Some("s3cret"),
+                Some(crate::config::DbProvider::Neon)
+            ),
+            "https://:s3cret@ep-cool.aws.neon.tech/mydb"
         );
     }
 }
@@ -1751,8 +1850,79 @@ fn save_or_exit(parsed: &Parsed, platform: &Platform) -> Option<()> {
     }
 }
 
+/// The database an app is to have, from the command line.
+///
+/// `--provider` says which cloud it is — turso, d1, neon, tidb or
+/// planetscale — and `--database` says where it is. With a cloud named,
+/// the engine follows the cloud: a Neon database is PostgreSQL, a TiDB
+/// one is MySQL, and the URL is only the connection string.
+///
+/// Without a cloud named, the URL says what it can: a `libsql://` URL is
+/// libSQL, a `postgres://` URL is PostgreSQL. A URL that says nothing —
+/// an `http://` service, a host that looks like nothing in particular —
+/// is refused, because there is no safe guess to make about it.
+fn database_from_options(parsed: &Parsed) -> Result<Option<crate::config::DatabaseConfig>, String> {
+    let url = parsed
+        .get("database")
+        .map(str::trim)
+        .filter(|u| !u.is_empty());
+    let provider = match parsed
+        .get("provider")
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
+        Some(name) => Some(crate::config::DbProvider::parse(name).ok_or_else(|| {
+            format!(
+                "unknown provider {name:?}; expected one of {}",
+                crate::config::DbProvider::all_names().join(", ")
+            )
+        })?),
+        None => None,
+    };
+    if url.is_none() && provider.is_none() {
+        return Ok(None);
+    }
+    let Some(url) = url else {
+        return Err("--provider needs a --database URL to go with it".to_string());
+    };
+    let kind = match provider {
+        Some(p) => p.kind(),
+        None => crate::config::DatabaseConfig::kind_from_url(url).ok_or_else(|| {
+            format!(
+                "the URL {url:?} names no engine; say which cloud it is with --provider {}, or use a provider URL (libsql://, d1://, postgres://, mysql://)",
+                crate::config::DbProvider::all_names().join("|")
+            )
+        })?,
+    };
+    Ok(Some(crate::config::DatabaseConfig {
+        kind,
+        raw_type: kind.as_str().to_string(),
+        url: Some(url.to_string()),
+        token: parsed
+            .get("database-token")
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string),
+        provider,
+    }))
+}
+
 fn app_new(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["data", "url", "token", "db-url", "db-token"], &[]);
+    let parsed = parse_args(
+        rest,
+        &[
+            "data",
+            "url",
+            "token",
+            "database",
+            "database-token",
+            "provider",
+            "db-url",
+            "db-token",
+            "db-provider",
+        ],
+        &[],
+    );
     if let Some(e) = parsed.error {
         eprintln!("nanobase app new: {e}");
         return 2;
@@ -1766,10 +1936,29 @@ fn app_new(rest: &[String]) -> u8 {
         eprintln!("nanobase app new: app name {problem}");
         return 1;
     }
+    // The database, when the command names one.
+    let database = match database_from_options(&parsed) {
+        Ok(database) => database,
+        Err(e) => {
+            eprintln!("nanobase app new: {e}");
+            return 2;
+        }
+    };
     if let Some(client) = api_client(&parsed) {
         // The platform makes the app; the command only asks and prints.
         let mut body = mosql::Object::new();
         body.set("name", Value::str(name.clone()));
+        if let Some(database) = &database {
+            // A full document, so the platform sees the cloud as well
+            // as the engine and the URL.
+            let mut app = mosql::Object::new();
+            app.set("name", Value::str(name.clone()));
+            app.set("type", Value::str("remote"));
+            body.set("app", Value::Object(app));
+            let mut config = mosql::Object::new();
+            config.set("database", database.to_value());
+            body.set("config", Value::Object(config));
+        }
         let value = match client.request("POST", "/api/apps", Some(&Value::Object(body))) {
             Ok(v) => v,
             Err(e) => {
@@ -1795,7 +1984,16 @@ fn app_new(rest: &[String]) -> u8 {
         eprintln!("nanobase: this platform has no owner yet; run `nanobase init` first.");
         return 1;
     }
-    let doc = AppDoc::empty(name);
+    let mut doc = AppDoc::empty(name);
+    if let Some(database) = database {
+        doc.config.database = database;
+        // The rows live in someone else's database, so the app is a
+        // remote one.
+        doc.app.app_type = crate::config::AppType::Remote;
+    }
+    // What the app's rows are in, said before the document is moved.
+    let engine = doc.config.database.raw_type.clone();
+    let cloud = doc.config.database.provider_name().map(str::to_string);
     let record = match service.create(doc) {
         Ok(r) => r,
         Err(e) => {
@@ -1829,12 +2027,19 @@ fn app_new(rest: &[String]) -> u8 {
     if let Some(root) = root {
         println!("  data:      {}", root.join("apps").join(&id).display());
     }
-    println!("  database:  sqlite (default — edit the document to change it)");
+    match cloud {
+        Some(cloud) => println!("  database:  {engine} ({cloud})"),
+        None => println!("  database:  {engine} (default — edit the document to change it)"),
+    }
     0
 }
 
 fn app_import(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["data", "url", "token", "db-url", "db-token"], &[]);
+    let parsed = parse_args(
+        rest,
+        &["data", "url", "token", "db-url", "db-provider", "db-token"],
+        &[],
+    );
     if let Some(e) = parsed.error {
         eprintln!("nanobase app import: {e}");
         return 2;
@@ -1917,7 +2122,15 @@ fn app_rows(rest: &[String]) -> u8 {
     let parsed = parse_args(
         rest,
         &[
-            "data", "url", "token", "filter", "limit", "offset", "db-url", "db-token",
+            "data",
+            "url",
+            "token",
+            "filter",
+            "limit",
+            "offset",
+            "db-url",
+            "db-provider",
+            "db-token",
         ],
         &[],
     );
@@ -1985,7 +2198,15 @@ fn app_rows(rest: &[String]) -> u8 {
 fn app_insert(rest: &[String]) -> u8 {
     let parsed = parse_args(
         rest,
-        &["data", "url", "token", "json", "db-url", "db-token"],
+        &[
+            "data",
+            "url",
+            "token",
+            "json",
+            "db-url",
+            "db-provider",
+            "db-token",
+        ],
         &[],
     );
     if let Some(e) = parsed.error {
@@ -2042,7 +2263,14 @@ fn app_update(rest: &[String]) -> u8 {
     let parsed = parse_args(
         rest,
         &[
-            "data", "url", "token", "filter", "json", "db-url", "db-token",
+            "data",
+            "url",
+            "token",
+            "filter",
+            "json",
+            "db-url",
+            "db-provider",
+            "db-token",
         ],
         &[],
     );
@@ -2107,7 +2335,15 @@ fn app_update(rest: &[String]) -> u8 {
 fn app_delete_rows(rest: &[String]) -> u8 {
     let parsed = parse_args(
         rest,
-        &["data", "url", "token", "filter", "db-url", "db-token"],
+        &[
+            "data",
+            "url",
+            "token",
+            "filter",
+            "db-url",
+            "db-provider",
+            "db-token",
+        ],
         &[],
     );
     if let Some(e) = parsed.error {
@@ -2193,7 +2429,11 @@ fn offset_of(parsed: &Parsed) -> Option<u64> {
 }
 
 fn app_list(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["data", "url", "token", "db-url", "db-token"], &[]);
+    let parsed = parse_args(
+        rest,
+        &["data", "url", "token", "db-url", "db-provider", "db-token"],
+        &[],
+    );
     if let Some(e) = parsed.error {
         eprintln!("nanobase app list: {e}");
         return 2;
@@ -2240,7 +2480,11 @@ fn app_list(rest: &[String]) -> u8 {
 }
 
 fn app_show(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["data", "url", "token", "db-url", "db-token"], &[]);
+    let parsed = parse_args(
+        rest,
+        &["data", "url", "token", "db-url", "db-provider", "db-token"],
+        &[],
+    );
     if let Some(e) = parsed.error {
         eprintln!("nanobase app show: {e}");
         return 2;
@@ -2287,7 +2531,15 @@ fn app_export(rest: &[String]) -> u8 {
     // password in it is not a document anybody else should have.
     let parsed = parse_args(
         rest,
-        &["out", "data", "url", "token", "db-url", "db-token"],
+        &[
+            "out",
+            "data",
+            "url",
+            "token",
+            "db-url",
+            "db-provider",
+            "db-token",
+        ],
         &["with-secrets"],
     );
     if let Some(e) = parsed.error {
@@ -2340,7 +2592,11 @@ fn app_export(rest: &[String]) -> u8 {
 }
 
 fn app_rename(rest: &[String]) -> u8 {
-    let parsed = parse_args(rest, &["data", "url", "token", "db-url", "db-token"], &[]);
+    let parsed = parse_args(
+        rest,
+        &["data", "url", "token", "db-url", "db-provider", "db-token"],
+        &[],
+    );
     if let Some(e) = parsed.error {
         eprintln!("nanobase app rename: {e}");
         return 2;
@@ -2399,9 +2655,11 @@ fn app_clone(rest: &[String]) -> u8 {
             "url",
             "token",
             "db-url",
+            "db-provider",
             "db-token",
             "database",
             "database-token",
+            "provider",
         ],
         &["copy-data", "share-database"],
     );
@@ -2427,11 +2685,30 @@ fn app_clone(rest: &[String]) -> u8 {
     } else {
         crate::clone::CloneData::Omit
     };
+    // Which cloud the clone's own database is in, when the command says.
+    let provider = match parsed
+        .get("provider")
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
+        Some(name) => match crate::config::DbProvider::parse(name) {
+            Some(p) => Some(p),
+            None => {
+                eprintln!(
+                    "nanobase app clone: unknown provider {name:?}; expected one of {}",
+                    crate::config::DbProvider::all_names().join(", ")
+                );
+                return 2;
+            }
+        },
+        None => None,
+    };
     let request = crate::clone::CloneRequest {
         name: new_name.clone(),
         data,
         database: parsed.get("database").map(str::to_string),
         token: parsed.get("database-token").map(str::to_string),
+        provider,
     };
     if let Some(client) = api_client(&parsed) {
         let mut body = mosql::Object::new();
@@ -2442,6 +2719,9 @@ fn app_clone(rest: &[String]) -> u8 {
         }
         if let Some(token) = request.token.as_deref() {
             body.set("token", Value::str(token));
+        }
+        if let Some(provider) = request.provider {
+            body.set("provider", Value::str(provider.as_str()));
         }
         let value = match client.request(
             "POST",
@@ -2508,7 +2788,15 @@ fn print_clone_summary(summary: &Value) {
 fn app_remove(rest: &[String]) -> u8 {
     let parsed = parse_args(
         rest,
-        &["confirm", "data", "url", "token", "db-url", "db-token"],
+        &[
+            "confirm",
+            "data",
+            "url",
+            "token",
+            "db-url",
+            "db-provider",
+            "db-token",
+        ],
         &[],
     );
     if let Some(e) = parsed.error {

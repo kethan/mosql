@@ -616,6 +616,7 @@ fn an_empty_app_can_be_shaped_by_hand() {
         raw_type: "neon".to_string(),
         url: Some("postgres://neon".to_string()),
         token: None,
+        provider: None,
     };
     doc.config.acl.enabled = true;
     doc.config

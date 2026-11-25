@@ -380,3 +380,48 @@ fn copying_the_rows_of_a_serverless_app_needs_a_destination() {
         "the clone is refused rather than pointed at the source: {err}"
     );
 }
+
+#[test]
+fn a_connection_test_asks_the_database() {
+    // The collections are what the platform knows about, so asking for
+    // them is not a question to the database at all. A ping is: one
+    // statement, and the answer is the database's.
+    let (db, transport) = neon(TWO_ROWS);
+    db.ping().unwrap();
+    assert!(
+        transport
+            .statements()
+            .iter()
+            .any(|statement| statement.contains("SELECT 1")),
+        "the database was asked: {:?}",
+        transport.statements()
+    );
+}
+
+#[test]
+fn a_database_that_cannot_be_reached_fails_the_test() {
+    /// A transport that answers nothing.
+    struct Broken;
+
+    impl HttpTransport for Broken {
+        async fn post_json(
+            &self,
+            _url: &str,
+            _headers: &[(&str, &str)],
+            _body: String,
+        ) -> Result<(u16, String), DbError> {
+            Err(DbError::new("the database did not answer"))
+        }
+    }
+
+    let driver = AnyServerlessDriver::from_url(
+        "postgres://user:pass@ep-cool.us-east-2.aws.neon.tech/mydb",
+        Arc::new(Broken),
+    )
+    .unwrap();
+    let db = ProviderDb::with_driver(driver, "neon");
+    assert!(
+        db.ping().is_err(),
+        "a database that cannot be reached is not a connection that works"
+    );
+}

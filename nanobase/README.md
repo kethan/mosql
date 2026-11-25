@@ -187,7 +187,8 @@ a serverless deployment points at.
 | API keys with a scope, an app and an expiry | done — the command line and the console |
 | App database: memory, SQLite, HTTP, TCP | done — 6 tests |
 | Serving an app's rows over the API | done — 8 tests |
-| SQL engines (Postgres, MySQL) | next — needs a driver |
+| SQL engines (Postgres, MySQL) | done — the drivers speak Neon, TiDB Cloud and PlanetScale over HTTP |
+| Naming the cloud instead of reading it out of the URL | done — `provider` in the document, `--provider` on the command line, a dropdown in the console |
 
 ## What an app document is
 
@@ -411,7 +412,31 @@ that serves an app does not change when the engine does.
 | `memory` | in the process, and gone when it stops |
 | `sqlite` | a local file, one table per collection |
 | `libsql`, `d1` | a serverless database behind an HTTP API |
-| `postgres`, `mysql` | not built into this binary yet — they need a driver |
+| `postgres`, `mysql` | Neon, TiDB Cloud and PlanetScale, in their own APIs over HTTPS |
+
+### Naming the cloud
+
+A URL says a protocol more often than it says a cloud. `postgres://`
+names PostgreSQL — and Neon, Vercel Postgres and Supabase all speak it,
+in different ways. `mysql://` names MySQL — and TiDB Cloud and
+PlanetScale both speak it over HTTP, and they are not interchangeable.
+
+So the cloud may be named, and the name is what the platform uses:
+
+```json
+"database": { "type": "postgres", "provider": "neon",
+              "url": "https://ep-cool.us-east-2.aws.neon.tech/mydb",
+              "token": "…" }
+```
+
+The names are `turso`, `d1`, `neon`, `tidb` and `planetscale`, with the
+spellings people use (`libsql`, `cloudflare`, `pscale`, `tidbcloud`,
+`vercel`, `supabase`) accepted as well. A named cloud says which engine
+it is, so `type` may be left out; a `type` that disagrees with the cloud
+is refused, with both names in the message. The same name may be given
+on the command line — `--provider NAME` for an app's database,
+`--db-provider NAME` for the platform's own — and in the console, where
+it is a dropdown beside the engine.
 
 `AppDb` is the seam: the operations an app needs, and nothing else. The
 filters are documents, not SQL — `{"done": false}` finds the rows that are
