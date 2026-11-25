@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Nanobase Console</title>
+    <link rel="stylesheet" href="/console.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f46e5'/%3E%3Cpath d='M9 22V10h3.2l3.8 7 3.8-7H23v12h-2.6v-7.6L16.8 21h-1.6l-3.6-6.6V22z' fill='white'/%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <!--
+      The console is one page. Everything below is a shell: the header, the
+      sidebar and the panel the JavaScript draws into. The pages themselves
+      are built by console.js, so there is one place that knows what a page
+      looks like rather than one per page.
+    -->
+    <div id="app" class="app" hidden>
+      <header class="topbar">
+        <button
+          id="menu-toggle"
+          class="icon-button"
+          type="button"
+          aria-label="Menu"
+          aria-expanded="false"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 7h16M4 12h16M4 17h16" />
+          </svg>
+        </button>
+
+        <a class="brand" href="#apps">
+          <span class="brand-mark" aria-hidden="true">N</span>
+          <span class="brand-name">Nanobase</span>
+        </a>
+
+        <form id="global-search" class="search" role="search">
+          <svg viewBox="0 0 24 24" aria-hidden="true" class="search-icon">
+            <circle cx="11" cy="11" r="6" />
+            <path d="M15.5 15.5 20 20" />
+          </svg>
+          <input
+            id="search-input"
+            type="search"
+            name="search"
+            placeholder="Search apps"
+            aria-label="Search apps"
+            autocomplete="off"
+          />
+        </form>
+
+        <div class="topbar-right">
+          <span id="who" class="who" aria-live="polite"></span>
+          <button id="logout" class="button ghost small" type="button">Sign out</button>
+        </div>
+      </header>
+
+      <nav id="sidebar" class="sidebar" aria-label="Sections">
+        <a class="nav-item" href="#apps" data-route="apps">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3" y="3" width="7" height="7" rx="2" />
+            <rect x="14" y="3" width="7" height="7" rx="2" />
+            <rect x="3" y="14" width="7" height="7" rx="2" />
+            <rect x="14" y="14" width="7" height="7" rx="2" />
+          </svg>
+          <span>Apps</span>
+        </a>
+        <a class="nav-item" href="#keys" data-route="keys">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="8" cy="12" r="4" />
+            <path d="M12 12h9M18 12v3M15 12v2" />
+          </svg>
+          <span>API keys</span>
+        </a>
+        <button id="new-app" class="nav-item action" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          <span>New app</span>
+        </button>
+        <div class="sidebar-foot">
+          <p class="muted small" id="version"></p>
+        </div>
+      </nav>
+
+      <main id="panel" class="panel" tabindex="-1"></main>
+      <div id="scrim" class="scrim" hidden></div>
+    </div>
+
+    <!-- The sign-in page, shown until there is a token. -->
+    <div id="login" class="login" hidden>
+      <form id="login-form" class="card login-card">
+        <div class="brand-mark big" aria-hidden="true">N</div>
+        <h1>Nanobase</h1>
+        <p class="muted">Sign in to the platform.</p>
+
+        <label class="field">
+          <span>Email</span>
+          <input id="login-email" type="email" autocomplete="username" required />
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input
+            id="login-password"
+            type="password"
+            autocomplete="current-password"
+            required
+          />
+        </label>
+
+        <p id="login-error" class="error" role="alert" hidden></p>
+        <button id="login-submit" class="button primary" type="submit">Sign in</button>
+      </form>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+    <script src="/console.js"></script>
+  </body>
+</html>

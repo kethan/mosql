@@ -1,0 +1,18 @@
+[package]
+name = "mosql-schemaless"
+version = "0.1.0"
+edition = "2021"
+description = "Schema-less SQL collections on top of the mosql query builder: tables are created from the first document and migrated on write, over any driver that implements one executor trait."
+license = "ISC"
+repository = "https://github.com/kethan/mosql"
+readme = "README.md"
+keywords = ["database", "schemaless", "sqlite", "postgres", "mysql"]
+categories = ["database"]
+include = ["src/**", "tests/**", "README.md", "LICENSE*"]
+
+[dependencies]
+mosql = { version = "0.1", path = "../rust" }
+uflite = { version = "0.1", path = "../uflite" }
+
+[lib]
+doctest = false

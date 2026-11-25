@@ -1,0 +1,90 @@
+[package]
+name = "nanobase"
+version = "0.1.0"
+edition = "2021"
+description = "PocketBase-style backend platform: apps, auth, storage and permissions on your own database."
+license = "ISC"
+repository = "https://github.com/kethan/mosql"
+readme = "README.md"
+keywords = ["backend", "baas", "database", "sqlite", "serverless"]
+categories = ["database", "web-programming::http-server"]
+# Keep compiled artifacts out of the tarball, as in the other crates.
+# `vendor/` and `build.rs` are needed to compile SQLite from source, so they
+# have to be in the tarball.
+include = [
+  "src/**",
+  "tests/**",
+  "ui/**",
+  "vendor/**",
+  "build.rs",
+  "README.md",
+  "LICENSE*",
+]
+
+[lib]
+doctest = false
+name = "nanobase"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nanobase"
+path = "src/main.rs"
+required-features = ["native", "sqlite"]
+
+# The other half: the same command line, with no listener and no local
+# file. The platform's own state lives in a serverless database.
+[[bin]]
+name = "nanobase-serverless"
+path = "src/bin/serverless.rs"
+required-features = ["serverless"]
+
+# Three switches, because the crate has three faces. The default one is
+# the binary that runs on a server: a local SQLite database, a TCP
+# listener, a `curl` transport. The second is the serverless one: no
+# listener, no local file, and the platform's state in a serverless
+# database. The third is the Worker face, where the platform provides the
+# database, the network and the clock, and the crate must not reach for an
+# operating system at all.
+[features]
+default = ["sqlite", "native"]
+# The vendored SQLite engine and the local database that uses it.
+sqlite = []
+# The outbound HTTPS transport. It shells out to `curl`, which every
+# server has, because there is no TLS in this build otherwise. Both the
+# server build and the serverless build need it: a serverless database is
+# reached over the network.
+curl = []
+# Everything that needs an operating system: the TCP server, the `std::net`
+# transport, and the file-backed platform store.
+native = ["curl"]
+# The client-only build: no listener, no local file, and the platform's
+# state in a serverless database.
+serverless = ["curl"]
+
+# The only dependencies are the three sibling crates, and every one of them
+# has no dependencies of its own. SQLite is not a crate dependency:
+# `build.rs` compiles it from the vendored amalgamation so its optional
+# features can be omitted at the preprocessor level and nothing is
+# downloaded at build time.
+# All three are path dependencies for development and version requirements
+# for publishing: `cargo publish` refuses a dependency with no version,
+# because the published crate has to resolve it from the registry.
+[dependencies]
+mosql = { version = "0.1", path = "../rust" }
+uflite = { version = "0.1", path = "../uflite" }
+# The serverless database drivers: libSQL, D1, PostgreSQL and MySQL over
+# HTTP, each in its own protocol. The app database speaks to them
+# directly, so an app's rows can live in one of those without a database
+# service in front of them.
+mosql-core = { version = "0.1", path = "../mosql-core" }
+
+[dev-dependencies]
+# The tests drive the serverless drivers through a mock transport, so a
+# wire protocol can be checked without a network.
+mosql-core = { version = "0.1", path = "../mosql-core" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

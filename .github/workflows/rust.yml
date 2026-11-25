@@ -1,0 +1,383 @@
+name: Rust
+
+# The Rust port lives in rust/ and is verified against the JavaScript
+# implementation as its oracle: every operator is replayed through the same
+# fixtures the JS package uses, and the SQL must match byte for byte.
+#
+#   verify     rust/verify.sh on Linux, macOS and Windows (fmt, clippy, feature
+#              matrix, no_std, wasm32, parity tests, fixture drift, packaging)
+#   no-std     links a real bare-metal binary against the crate
+#   bridges    builds the wasm modules and the Node addon, replays the corpus
+#              through both ABIs
+#   publishable  cargo publish --dry-run against the live crates.io index
+#   uflite     uflite/verify.sh on Linux, macOS and Windows — the service layer
+#              (db, table, acl, storage) ported on top of the crate: fmt,
+#              clippy, the ported uflite specs, publish dry-run
+#   schemaless schemaless/verify.sh on the same matrix — the schema-less SQL
+#              collection port (schemaless.js + client.js): fmt, clippy,
+#              the DDL tests, publish dry-run
+#   nanobase   nanobase/verify.sh on the same matrix — the platform crate
+#              (app documents, secrets, import/export): fmt, clippy, the
+#              validation tests, publish dry-run, and a cap on the release
+#              binary's size
+#   auth       better-auth-core/verify.sh on the same matrix — the
+#              authentication engine (bearer JWT sessions, eight plugins,
+#              36 OAuth providers): fmt, clippy, the unit and integration
+#              tests, and a cap on the release binary's size
+#   worker     worker/verify.sh on Linux — the same engine as a Cloudflare
+#              Worker: fmt, clippy, the protocol tests, and a build of the
+#              WebAssembly module that is checked for asking the host for
+#              nothing but the clock and the randomness
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "rust/**"
+      - "uflite/**"
+      - "schemaless/**"
+      - "nanobase/**"
+      - "better-auth-core/**"
+      - "worker/**"
+      - "mosql-core/**"
+      # The JS implementation is the oracle for the parity fixtures, so a change
+      # to it can make the Rust port drift even though rust/ is untouched.
+      - "src/**"
+      - "lite/**"
+      - "tiny/**"
+      - ".github/workflows/rust.yml"
+      - ".gitattributes"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "rust/**"
+      - "uflite/**"
+      - "schemaless/**"
+      - "nanobase/**"
+      - "better-auth-core/**"
+      - "worker/**"
+      - "mosql-core/**"
+      - "src/**"
+      - "lite/**"
+      - "tiny/**"
+      - ".github/workflows/rust.yml"
+      - ".gitattributes"
+  workflow_dispatch:
+
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+
+      - name: Cache build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Set up Node
+        # Only used to regenerate the fixture corpora and prove there is no
+        # drift between the Rust port and the JavaScript oracle.
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Verify
+        shell: bash
+        run: ./rust/verify.sh
+
+  no-std:
+    # `mosql` is `#![no_std]` + `alloc`, so a consumer must supply the
+    # allocator and panic handler. rust/no_std-check does exactly that and calls
+    # into the crate — if a hidden `std` dependency ever appears, this stops
+    # linking. verify.sh skips this step locally when the target is absent.
+    name: no_std (thumbv7em)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Build the bare-metal consumer
+        working-directory: rust
+        run: cargo build --manifest-path no_std-check/Cargo.toml --target thumbv7em-none-eabihf --release
+
+  bridges:
+    name: wasm + addon bridges
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: wasm modules — build and replay the corpus
+        working-directory: rust
+        run: |
+          ./build-wasm.sh
+          node wasm/test.mjs
+      - name: Node addon — build and replay the corpus
+        working-directory: rust
+        run: |
+          ./build-node.sh
+          node node/test.mjs
+
+  uflite:
+    # The service layer depends on the mosql crate by path, so a change to
+    # rust/ can break it even though uflite/ is untouched. Local storage has
+    # platform-specific paths and open flags, hence the full OS matrix.
+    name: uflite (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: uflite
+      - name: Verify
+        shell: bash
+        run: ./uflite/verify.sh
+
+  schemaless:
+    # Depends on both the mosql crate and uflite by path, so a change to either
+    # can break it. The DDL tests assert generated SQL, which is why the matrix
+    # matters: identifier quoting and type names differ per dialect.
+    name: schemaless (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: schemaless
+      - name: Verify
+        shell: bash
+        run: ./schemaless/verify.sh
+
+  nanobase:
+    # Depends on the mosql crate and uflite by path, so a change to either can
+    # break it. Also the job that measures the release binary: the platform is
+    # meant to ship as one small file, and that is a property of the build, not
+    # of the source.
+    name: nanobase (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: nanobase
+      # One step per stage rather than a single "verify" step: a red X beside
+      # the stage that broke is worth far more than one beside the whole job,
+      # and these jobs are written where Actions logs cannot be read at all.
+      - name: fmt
+        shell: bash
+        run: ./nanobase/verify.sh fmt
+      - name: clippy
+        shell: bash
+        run: ./nanobase/verify.sh clippy
+      - name: test
+        shell: bash
+        run: ./nanobase/verify.sh test
+      - name: serverless edition
+        shell: bash
+        run: ./nanobase/verify.sh serverless
+      - name: dependencies
+        shell: bash
+        run: ./nanobase/verify.sh deps
+      - name: size
+        shell: bash
+        run: ./nanobase/verify.sh size
+      - name: publish dry-run
+        shell: bash
+        run: ./nanobase/verify.sh publish
+
+  auth:
+    # The authentication engine depends on the mosql crate, uflite and
+    # nanobase by path, so a change to any of them can break it even though
+    # better-auth-core/ is untouched. The integration suites drive the real
+    # route table, which is why the matrix matters.
+    name: auth (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: better-auth-core
+      # One step per stage rather than a single "verify" step: a red X beside
+      # the stage that broke is worth far more than one beside the whole job.
+      - name: fmt
+        shell: bash
+        run: ./better-auth-core/verify.sh fmt
+      - name: clippy
+        shell: bash
+        run: ./better-auth-core/verify.sh clippy
+      - name: test
+        shell: bash
+        run: ./better-auth-core/verify.sh test
+      - name: dependencies
+        shell: bash
+        run: ./better-auth-core/verify.sh deps
+      - name: size
+        shell: bash
+        run: ./better-auth-core/verify.sh size
+      # The published Better Auth client against the release binary. It
+      # needs the npm registry, so it is a step of its own: a failure here
+      # is about the wire contract, not about the Rust.
+      - name: client
+        shell: bash
+        run: ./better-auth-core/tests/client/run.sh
+
+  worker:
+    # The Worker build of the authentication engine. It compiles the same
+    # engine to WebAssembly with the native half of it switched off, so the
+    # module has no SQLite, no socket, no subprocess, no thread and no
+    # clock of its own. The last stage reads the module's import section
+    # and fails if it asks the host for anything but the clock and the
+    # randomness: a Worker has no other way to get either, and a module
+    # that reached for something else would fail at run time instead.
+    name: worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: worker
+      # One step per stage rather than a single "verify" step: a red X beside
+      # the stage that broke is worth far more than one beside the whole job.
+      - name: fmt
+        shell: bash
+        run: ./worker/verify.sh fmt
+      - name: clippy
+        shell: bash
+        run: ./worker/verify.sh clippy
+      - name: test
+        shell: bash
+        run: ./worker/verify.sh test
+      - name: dependencies
+        shell: bash
+        run: ./worker/verify.sh deps
+      - name: module
+        shell: bash
+        run: ./worker/verify.sh module
+
+  mosql-core:
+    # The serverless drivers: Turso, Cloudflare D1, Neon, TiDB Cloud and
+    # PlanetScale, from one connection URL. The crate has no registry
+    # dependency at all, so the whole graph is the repository's own JSON
+    # model — and the WebAssembly build is the one a Cloudflare Worker
+    # runs.
+    name: mosql-core
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mosql-core
+      # One step per stage rather than a single "verify" step: a red X beside
+      # the stage that broke is worth far more than one beside the whole job.
+      - name: fmt
+        shell: bash
+        run: ./mosql-core/verify.sh fmt
+      - name: clippy
+        shell: bash
+        run: ./mosql-core/verify.sh clippy
+      - name: test
+        shell: bash
+        run: ./mosql-core/verify.sh test
+      - name: dependencies
+        shell: bash
+        run: ./mosql-core/verify.sh deps
+      - name: wasm32
+        shell: bash
+        run: ./mosql-core/verify.sh wasm
+      - name: features
+        shell: bash
+        run: ./mosql-core/verify.sh features
+
+  # `cargo publish --dry-run` needs the crates.io index, which the sandbox that
+  # developed this crate had no access to. CI has it, so this is the gate that
+  # proves the manifest is actually publishable.
+  publishable:
+    name: publishable
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: cargo publish --dry-run
+        working-directory: rust
+        run: cargo publish --dry-run

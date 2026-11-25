@@ -24,3 +24,7 @@ dist-ssr
 *.sw?
 .env
 coverage
+
+# The benchmark's Go binaries: `bench/run.py` builds them on every run, so
+# they are outputs, not sources.
+bench/bin/
